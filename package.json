@@ -1,0 +1,21 @@
+{
+  "name": "attendance-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node src/erp/seed.js",
+    "test": "node --test",
+    "db:up": "docker compose up -d --wait db",
+    "db:down": "docker compose down",
+    "migrate": "node -e \"import('dotenv/config').then(async()=>{const d=await import('./src/db.js');await d.migrate();await d.pool.end();console.log('schema applied')})\""
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "pg": "^8.23.0"
+  }
+}
