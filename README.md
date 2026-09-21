@@ -9,6 +9,38 @@ documented placeholder.
 
 ---
 
+## Local development with the mock ERP
+
+The real university ERP is not available yet, so `mock-erp/` stands in for it. It is a separate
+service with its **own database** (`erp_mock`), exactly as the real ERP would be, and the API talks
+to it over HTTP through `src/integrations/erp/`. Nothing in the API knows the ERP is a mock: to go
+live, change `ERP_BASE_URL`, `ERP_STAFF_LOOKUP_PATH`, `ERP_AUTH_SCHEME`, `ERP_API_KEY` (and adjust
+`erp.mapper.ts` if the payload differs).
+
+```bash
+cp .env.example .env               # then fill in secrets; ERP block below is for the mock
+npm run db:up                      # Postgres in Docker (docker-compose.yml)
+npm run db:migrate                 # creates the tables in db/migrations/ (the API never does this itself)
+
+cd mock-erp && cp .env.example .env && npm install && npm start   # http://localhost:4100 (creates + seeds erp_mock)
+cd .. && npm run dev                                               # http://localhost:4000
+```
+
+`.env` values that point the API at the mock ERP (the key must equal `ERP_API_KEY` in `mock-erp/.env`):
+
+```ini
+ERP_BASE_URL=http://localhost:4100/api/erp
+ERP_STAFF_LOOKUP_PATH=/staff/{staffNumber}
+ERP_AUTH_SCHEME=api-key
+ERP_API_KEY=<same key as mock-erp/.env>
+```
+
+Sample staff for trying each outcome: `STF/0001` Peter Kamami (ERP holds an email, so the email must
+match `peter.kamami@uni.ac.ke`), `STF/0002`-`0004` active, `STF/0005` left (rejected as inactive),
+`STF/0006` suspended (rejected), any other number is rejected as not found. Students are in the same
+service (`/api/erp/students/...`) for the student flow. Both are viewable and editable through the
+ERP admin page in `ATTENDANCE_fronted`.
+
 ## Stack
 
 | Concern | Choice | Why |

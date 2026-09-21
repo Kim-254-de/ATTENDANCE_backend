@@ -1,0 +1,22 @@
+{
+  "name": "mock-erp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stand-in for the university ERP (students + staff) until real ERP access exists",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node src/seed.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "pg": "^8.13.1"
+  }
+}

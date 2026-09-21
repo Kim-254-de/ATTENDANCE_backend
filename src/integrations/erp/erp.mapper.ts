@@ -82,7 +82,7 @@ function unwrap(body: unknown): ErpStaffPayload | null {
   if ('data' in value && value.data) return value.data as ErpStaffPayload;
   if ('result' in value && value.result) return value.result as ErpStaffPayload;
   if ('staff' in value && value.staff) return value.staff as ErpStaffPayload;
-  return value as ErpStaffPayload;
+  return value;
 }
 
 const first = <T>(...values: Array<T | null | undefined>): T | null => {
@@ -102,6 +102,8 @@ const INACTIVE_STATUSES = new Set([
   'deceased',
   'dismissed',
   'exited',
+  'left',
+  'discontinued',
 ]);
 
 function deriveIsActive(payload: ErpStaffPayload): boolean {

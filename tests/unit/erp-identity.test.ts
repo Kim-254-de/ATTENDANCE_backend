@@ -135,6 +135,19 @@ describe('toStaffRecord', () => {
     expect(mapped?.isActive).toBe(false);
   });
 
+  it.each(['left', 'suspended', 'discontinued'])('treats status "%s" as no longer serving', (status) => {
+    const record = toStaffRecord({ staffNumber: 'STF/0005', fullName: 'Samuel Kiptoo', status }, 'STF/0005');
+    expect(record?.isActive).toBe(false);
+  });
+
+  it('maps the mock ERP payload (bare record, title kept separate from the name)', () => {
+    const record = toStaffRecord(
+      { staffNumber: 'STF/0001', fullName: 'Peter Kamami', email: 'peter.kamami@uni.ac.ke', department: 'Computer Science', faculty: 'School of Computing', title: 'Dr.', status: 'active' },
+      'STF/0001',
+    );
+    expect(record).toMatchObject({ fullName: 'Peter Kamami', isActive: true, department: 'Computer Science', faculty: 'School of Computing', title: 'Dr.' });
+  });
+
   it('treats a missing status as active', () => {
     const mapped = toStaffRecord({ name: 'Jane Wanjiru' }, 'KSU/LEC/020');
     expect(mapped?.isActive).toBe(true);
