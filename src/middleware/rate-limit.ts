@@ -18,9 +18,10 @@ import type { ErrorEnvelope } from '../common/http/index.js';
 function buildLimiter(max: number, windowMs: number, message: string) {
   return rateLimit({
     windowMs,
-    // 0 disables limiting, which keeps tests deterministic without having to
-    // change the middleware chain.
-    limit: isTest ? 0 : max,
+    limit: max,
+    // Tests skip limiting so they stay deterministic. (In express-rate-limit v7 a limit of 0
+    // does NOT disable the limiter - it rejects every request - hence `skip`.)
+    skip: () => isTest,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     handler: (req: Request, res: Response) => {

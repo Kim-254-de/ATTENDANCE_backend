@@ -9,6 +9,25 @@ documented placeholder.
 
 ---
 
+## Lecturer sign-in
+
+`POST /api/v1/auth/login` `{ "identifier": "<staff number or email>", "password": "..." }` (ported from Albert's
+prototype, `origin/Albert`), plus `GET /auth/me`, `POST /auth/refresh`, `POST /auth/logout`.
+
+| Result | Status | Notes |
+|---|---|---|
+| Signed in | 200 | httpOnly cookies `sa_access` (15m) and `sa_refresh` (7d, path `/api/v1/auth`); body is the lecturer |
+| Wrong password **or** unknown account | 401 `INVALID_CREDENTIALS` | identical answer and comparable timing, so accounts cannot be enumerated |
+| Correct password, account not ACTIVE | 403 `ACCOUNT_NOT_ACTIVE` | says why: unverified email / awaiting approval / suspended / deactivated. Only shown after a correct password |
+| Too many failures | 429 `ACCOUNT_LOCKED` | `LOGIN_MAX_FAILED_ATTEMPTS` (5) wrong passwords lock the account for `LOGIN_LOCKOUT_MINUTES` (15); checked before the password. There is also a per-IP limiter |
+
+Sessions live in `auth_sessions`. Every request re-checks the session and account status, so **sign-out, suspension
+and detected token theft take effect immediately**. Refresh tokens rotate on every use; presenting an already-rotated one
+revokes the whole session. Native clients may send `Authorization: Bearer <access token>` instead of cookies.
+
+There is no administrator approval endpoint yet. Locally, after the lecturer has confirmed their email (the link is
+printed in the API log in development), run `npm run dev:approve -- STF/0004` to activate them.
+
 ## Local development with the mock ERP
 
 The real university ERP is not available yet, so `mock-erp/` stands in for it. It is a separate
@@ -38,8 +57,8 @@ ERP_API_KEY=<same key as mock-erp/.env>
 Sample staff for trying each outcome: `STF/0001` Peter Kamami (ERP holds an email, so the email must
 match `peter.kamami@uni.ac.ke`), `STF/0002`-`0004` active, `STF/0005` left (rejected as inactive),
 `STF/0006` suspended (rejected), any other number is rejected as not found. Students are in the same
-service (`/api/erp/students/...`) for the student flow. Both are viewable and editable through the
-ERP admin page in `ATTENDANCE_fronted`.
+service (`/api/erp/students/...`) for the student flow. Both are viewable and editable in the browser at
+`http://localhost:4100/` (the mock ERP serves its own admin page; it asks for `ERP_API_KEY`).
 
 ## Stack
 

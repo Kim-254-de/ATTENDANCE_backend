@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../common/utils/async-handler.js';
 import { validate } from '../../middleware/validate.js';
-import { registrationLimiter } from '../../middleware/rate-limit.js';
+import { loginLimiter, registrationLimiter } from '../../middleware/rate-limit.js';
+import { requireAuth } from '../../middleware/authenticate.js';
 import * as authController from './auth.controller.js';
-import { emailVerificationSchema, lecturerRegistrationSchema } from './auth.schema.js';
+import { emailVerificationSchema, lecturerRegistrationSchema, loginSchema } from './auth.schema.js';
 
 export const authRouter: Router = Router();
 
@@ -33,3 +34,22 @@ authRouter.post(
   validate({ body: emailVerificationSchema }),
   asyncHandler(authController.verifyEmail),
 );
+
+/**
+ * Sign-in with a staff number or email plus password.
+ *
+ * 200 - signed in; httpOnly session cookies are set and the lecturer is returned
+ * 401 - wrong credentials (same answer for an unknown account)
+ * 403 - correct password but the account is pending / suspended / deactivated
+ * 429 - too many attempts (per-IP limiter) or the account is temporarily locked
+ */
+authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
+
+/** The signed-in lecturer, or 401. The portal calls this on load to restore the session. */
+authRouter.get('/me', asyncHandler(requireAuth('LECTURER')), authController.me);
+
+/** Rotates the refresh token and issues a new access token. */
+authRouter.post('/refresh', loginLimiter, asyncHandler(authController.refresh));
+
+/** Ends the session server-side and clears the cookies. Always 204. */
+authRouter.post('/logout', asyncHandler(authController.logout));

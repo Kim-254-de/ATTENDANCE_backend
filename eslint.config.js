@@ -2,7 +2,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'mock-erp/**', 'db/**', '*.config.js', 'vitest.config.ts'] },
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'mock-erp/**', 'db/**', 'scripts/**', '*.config.js', 'vitest.config.ts'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

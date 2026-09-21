@@ -81,6 +81,11 @@ const envSchema = z
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
     REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+
+    // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
+    /** Consecutive wrong passwords before the account is temporarily locked. */
+    LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
+    LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   })
   // Credentials must actually be present for whichever ERP auth scheme is chosen,
   // otherwise every lookup would fail at runtime with a 401 that looks like an

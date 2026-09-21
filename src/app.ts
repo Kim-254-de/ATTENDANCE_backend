@@ -2,6 +2,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import { pinoHttp } from 'pino-http';
 import { env, isProduction } from './config/env.js';
 import { logger } from './config/logger.js';
@@ -51,6 +52,7 @@ export function createApp(): Express {
   // only widen the memory-exhaustion surface.
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: false, limit: '100kb' }));
+  app.use(cookieParser());
 
   app.use(
     pinoHttp({

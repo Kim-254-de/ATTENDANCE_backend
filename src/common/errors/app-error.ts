@@ -21,6 +21,10 @@ export const ErrorCode = {
   ERP_UNAVAILABLE: 'ERP_UNAVAILABLE',
   ACCOUNT_ALREADY_EXISTS: 'ACCOUNT_ALREADY_EXISTS',
   ACCOUNT_NOT_ACTIVE: 'ACCOUNT_NOT_ACTIVE',
+
+  // Sign-in
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

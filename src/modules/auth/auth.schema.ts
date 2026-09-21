@@ -99,3 +99,17 @@ export const emailVerificationSchema = z
   .strict();
 
 export type EmailVerificationInput = z.infer<typeof emailVerificationSchema>;
+
+/**
+ * Sign-in accepts a staff number OR an email in one field (README section 3.1). No password
+ * policy is applied here: policy is for choosing a password, and enforcing it at sign-in would
+ * only reveal the rules to someone guessing.
+ */
+export const loginSchema = z
+  .object({
+    identifier: z.string().trim().min(1, 'Enter your staff number or email.').max(255),
+    password: z.string().min(1, 'Enter your password.').max(128),
+  })
+  .strict();
+
+export type LoginInput = z.infer<typeof loginSchema>;

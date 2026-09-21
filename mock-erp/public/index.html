@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mock ERP Admin</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Mock University ERP</h1>
+    <button id="lock" hidden>Lock</button>
+  </header>
+
+  <section id="gate" class="panel narrow" hidden>
+    <h2>Enter ERP API key</h2>
+    <form id="gateForm">
+      <input id="keyInput" type="password" placeholder="ERP_API_KEY from backend .env" required autofocus />
+      <p id="gateErr" class="error"></p>
+      <button>Unlock</button>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <nav>
+      <button data-tab="students" class="tab active">Students</button>
+      <button data-tab="staff" class="tab">Lecturers</button>
+    </nav>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search by number or name…" />
+      <select id="statusFilter"></select>
+      <button id="addBtn" class="primary">+ Add</button>
+    </div>
+    <p id="count" class="muted"></p>
+    <p id="listErr" class="error"></p>
+    <div class="tablewrap"><table id="table"></table></div>
+  </main>
+
+  <dialog id="dlg">
+    <form id="form" method="dialog">
+      <h2 id="dlgTitle"></h2>
+      <div id="fields"></div>
+      <p id="formErr" class="error"></p>
+      <div class="actions">
+        <button type="button" id="cancel">Cancel</button>
+        <button class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
