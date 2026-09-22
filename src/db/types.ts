@@ -37,6 +37,17 @@ export const ErpVerificationOutcome = {
 export type ErpVerificationOutcome =
   (typeof ErpVerificationOutcome)[keyof typeof ErpVerificationOutcome];
 
+/** Lifecycle of a class meeting. Only an OPEN session issues or accepts codes. */
+export const AttendanceSessionStatus = {
+  OPEN: 'OPEN',
+  /** Temporarily not accepting scans; codes resume on OPEN. */
+  PAUSED: 'PAUSED',
+  /** Terminal — a closed session is never reopened. */
+  CLOSED: 'CLOSED',
+} as const;
+export type AttendanceSessionStatus =
+  (typeof AttendanceSessionStatus)[keyof typeof AttendanceSessionStatus];
+
 export const AuditAction = {
   LECTURER_REGISTRATION_SUBMITTED: 'LECTURER_REGISTRATION_SUBMITTED',
   LECTURER_REGISTRATION_REVOKED: 'LECTURER_REGISTRATION_REVOKED',
@@ -49,6 +60,11 @@ export const AuditAction = {
   LOGIN_FAILED: 'LOGIN_FAILED',
   LOGOUT: 'LOGOUT',
   SESSION_REFRESH_REUSE_DETECTED: 'SESSION_REFRESH_REUSE_DETECTED',
+  ATTENDANCE_SESSION_OPENED: 'ATTENDANCE_SESSION_OPENED',
+  ATTENDANCE_SESSION_STATUS_CHANGED: 'ATTENDANCE_SESSION_STATUS_CHANGED',
+  ATTENDANCE_SESSION_CLOSED: 'ATTENDANCE_SESSION_CLOSED',
+  ATTENDANCE_SCAN_ACCEPTED: 'ATTENDANCE_SCAN_ACCEPTED',
+  ATTENDANCE_SCAN_REJECTED: 'ATTENDANCE_SCAN_REJECTED',
   PASSWORD_RESET_REQUESTED: 'PASSWORD_RESET_REQUESTED',
   PASSWORD_RESET_COMPLETED: 'PASSWORD_RESET_COMPLETED',
 } as const;

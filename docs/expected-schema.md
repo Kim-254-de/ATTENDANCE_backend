@@ -112,11 +112,79 @@ Useful but not load-bearing: indexes on `users(role, status)`,
 
 ---
 
+## Tables the session / QR module touches
+
+Not yet created. Requested by the session module — see
+[`src/modules/session/README.md`](../src/modules/session/README.md).
+
+### `units`
+
+One row per unit, ever. `COSC 100` exists here exactly once; the rotating QR
+codes never add rows anywhere.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(32)` | **UNIQUE** — e.g. `COSC 100` |
+| `name` | `varchar(200)` | Nullable |
+| `lecturer_user_id` | `uuid` | FK -> `users(id)`. Who may open sessions for it |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `attendance_sessions`
+
+**One row per class meeting** — not per QR code. A two-hour class writes one
+row here and nothing else, however many times the code rotates.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key. The stable id embedded in every code |
+| `unit_id` | `uuid` | FK -> `units(id)` |
+| `lecturer_user_id` | `uuid` | FK -> `users(id)`. Only this lecturer may view the code |
+| `qr_secret` | `text` | **32-byte base64url HMAC key. Never leaves the server** |
+| `status` | text | `OPEN` / `PAUSED` / `CLOSED` (CHECK constraint) |
+| `title` | `varchar(160)` null | e.g. "Week 3 - Lecture" |
+| `opens_at` | `timestamptz` | Scans before this are refused |
+| `closes_at` | `timestamptz` | Scans after this are refused even if status is OPEN |
+| `rotation_seconds` | `integer` | Per-session override of `QR_ROTATION_SECONDS` |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+`qr_secret` is credential material. It should never be selected into a
+response, logged, or exposed through any admin screen — anyone holding it can
+mint valid codes for that session.
+
+### `unit_allocations`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | FK -> `units(id)` |
+| `student_user_id` | `uuid` | FK -> `users(id)` |
+| `status` | text | `ACTIVE` / `DROPPED`. Only `ACTIVE` may check in |
+| | | **UNIQUE (unit_id, student_user_id)** |
+
+### `attendance_records`
+
+Written by the attendance module, read here to reject a second check-in.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `session_id` | `uuid` | FK -> `attendance_sessions(id)` |
+| `student_user_id` | `uuid` | FK -> `users(id)` |
+| `recorded_at` | `timestamptz` | |
+| | | **UNIQUE (session_id, student_user_id)** -- load-bearing |
+
+The `UNIQUE (session_id, student_user_id)` index is not cosmetic. The service
+checks for an existing record before writing, but that check cannot be atomic
+on its own: two simultaneous scans would both pass it. The unique violation is
+what actually stops a double record.
+
+---
+
 ## Tables later modules will need
 
 Not queried yet — listed so the database owner can plan: `student_profiles`,
-`password_reset_tokens`, `units`, `unit_allocations`, `attendance_sessions`,
-`attendance_records`.
+`password_reset_tokens`.
 
 ---
 

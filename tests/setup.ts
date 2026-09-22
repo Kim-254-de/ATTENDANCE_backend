@@ -9,3 +9,5 @@ process.env.JWT_REFRESH_SECRET ??= 'test-refresh-secret-that-is-long-enough-0987
 process.env.ERP_BASE_URL ??= 'https://erp.test.local/api';
 process.env.ERP_AUTH_SCHEME ??= 'none';
 process.env.ERP_CACHE_TTL_SECONDS ??= '0';
+process.env.QR_ROTATION_SECONDS ??= '60';
+process.env.QR_ACCEPT_PREVIOUS_WINDOWS ??= '1';

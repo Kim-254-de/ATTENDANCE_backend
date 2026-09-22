@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authRouter } from './modules/auth/index.js';
+import { sessionRouter } from './modules/session/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -9,10 +10,10 @@ import { authRouter } from './modules/auth/index.js';
  *   /lecturers   - profile management          (lecturer module)
  *   /students    - student registration        (student module)
  *   /units       - units and allocations       (unit module)
- *   /sessions    - attendance sessions and QR  (session module)
  *   /attendance  - check-in and records        (attendance module)
  *   /reports     - summaries and exports       (reporting module)
  */
 export const apiRouter: Router = Router();
 
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/sessions', sessionRouter);

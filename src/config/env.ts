@@ -84,6 +84,17 @@ const envSchema = z
 
     // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
     /** Consecutive wrong passwords before the account is temporarily locked. */
+    // --- Attendance QR codes ---
+    // How often the projected code changes. Shorter is safer but leaves less
+    // room for a slow scan; 60s is the balance the spec asks for.
+    QR_ROTATION_SECONDS: z.coerce.number().int().min(15).max(600).default(60),
+    // Earlier windows still accepted, to cover the gap between a student
+    // opening the camera and the scan reaching the server. Each extra window
+    // is another rotation period in which a shared screenshot still works.
+    QR_ACCEPT_PREVIOUS_WINDOWS: z.coerce.number().int().min(0).max(5).default(1),
+    // Pixel width of a rendered PNG. Large enough to scan from the back row.
+    QR_IMAGE_SIZE: z.coerce.number().int().min(128).max(2048).default(512),
+
     LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   })
