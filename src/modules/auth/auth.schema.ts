@@ -113,3 +113,42 @@ export const loginSchema = z
   .strict();
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * Requesting a reset link. Only the address is needed — deliberately not the
+ * staff number, so the form cannot be used to test whether a staff number is
+ * registered.
+ */
+export const forgotPasswordSchema = z
+  .object({
+    email: z
+      .string()
+      .trim()
+      .min(5)
+      .max(255)
+      .email('Enter a valid email address.')
+      .transform((value) => value.toLowerCase()),
+  })
+  .strict();
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+/** Completing a reset with the token from the emailed link. */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().trim().min(16, 'This reset link is not valid.').max(256),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.password !== value.confirmPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmPassword'],
+        message: 'Passwords do not match.',
+      });
+    }
+  });
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

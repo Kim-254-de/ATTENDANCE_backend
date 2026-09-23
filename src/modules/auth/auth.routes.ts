@@ -1,10 +1,16 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../common/utils/async-handler.js';
 import { validate } from '../../middleware/validate.js';
-import { loginLimiter, registrationLimiter } from '../../middleware/rate-limit.js';
+import { loginLimiter, passwordResetLimiter, registrationLimiter } from '../../middleware/rate-limit.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import * as authController from './auth.controller.js';
-import { emailVerificationSchema, lecturerRegistrationSchema, loginSchema } from './auth.schema.js';
+import {
+  emailVerificationSchema,
+  forgotPasswordSchema,
+  lecturerRegistrationSchema,
+  loginSchema,
+  resetPasswordSchema,
+} from './auth.schema.js';
 
 export const authRouter: Router = Router();
 
@@ -53,3 +59,38 @@ authRouter.post('/refresh', loginLimiter, asyncHandler(authController.refresh));
 
 /** Ends the session server-side and clears the cookies. Always 204. */
 authRouter.post('/logout', asyncHandler(authController.logout));
+
+/**
+ * Requests a password reset link (README section 4.1).
+ *
+ * Always 200, with identical wording whether or not the address has an
+ * account: a different answer for a real address would make this endpoint a
+ * directory of everyone at the institution.
+ *
+ * 200 - request accepted (says nothing about whether an account exists)
+ * 400 - not a valid email address
+ * 429 - too many requests from this device
+ */
+authRouter.post(
+  '/forgot-password',
+  passwordResetLimiter,
+  validate({ body: forgotPasswordSchema }),
+  asyncHandler(authController.forgotPassword),
+);
+
+/**
+ * Completes the reset using the token from the emailed link.
+ *
+ * On success every session is revoked, so an attacker who prompted the reset
+ * is signed out too.
+ *
+ * 200 - password changed; all sessions revoked
+ * 400 - link invalid, expired, already used, or the password was rejected
+ * 429 - too many attempts
+ */
+authRouter.post(
+  '/reset-password',
+  passwordResetLimiter,
+  validate({ body: resetPasswordSchema }),
+  asyncHandler(authController.resetPassword),
+);

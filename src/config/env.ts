@@ -54,6 +54,10 @@ const envSchema = z
 
     EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(24),
 
+    // Much shorter than email verification: a reset link is a live key to the
+    // account, so its useful life is measured in minutes, not days.
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+
     // --- Registration policy ---
     LECTURER_REQUIRES_ADMIN_APPROVAL: booleanish.default('true'),
 
@@ -81,6 +85,9 @@ const envSchema = z
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
     REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+    // Tighter than sign-in: each request sends an email, so an open endpoint is
+    // a way to flood someone's inbox from a stranger's browser.
+    PASSWORD_RESET_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
 
     // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
     /** Consecutive wrong passwords before the account is temporarily locked. */
