@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authRouter } from './modules/auth/index.js';
 import { sessionRouter } from './modules/session/index.js';
+import { lecturerRouter } from './modules/lecturer/lecturer.routes.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -17,3 +18,4 @@ export const apiRouter: Router = Router();
 
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/sessions', sessionRouter);
+apiRouter.use('/lecturers', lecturerRouter);
