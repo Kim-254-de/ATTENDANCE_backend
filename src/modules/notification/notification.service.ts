@@ -45,6 +45,66 @@ export async function sendEmailVerification(message: EmailVerificationMessage): 
   });
 }
 
+export interface PasswordResetMessage {
+  to: string;
+  fullName: string;
+  /** Plaintext token. Only ever leaves the system inside this email. */
+  token: string;
+  expiresInMinutes: number;
+}
+
+export async function sendPasswordReset(message: PasswordResetMessage): Promise<void> {
+  await deliver({
+    to: message.to,
+    subject: 'Reset your Smart Attendance password',
+    text: [
+      `Hello ${message.fullName},`,
+      '',
+      'We received a request to reset the password on your Smart Attendance account.',
+      '',
+      'Choose a new password here:',
+      buildResetUrl(message.token),
+      '',
+      `This link expires in ${message.expiresInMinutes} minutes and can only be used once.`,
+      '',
+      'If you did not request this, you can ignore this message - your password has',
+      'not changed, and nobody can use the link without access to this mailbox.',
+    ].join('\n'),
+  });
+}
+
+export interface PasswordChangedMessage {
+  to: string;
+  fullName: string;
+}
+
+/**
+ * Sent after a successful reset. This is how an account holder learns that
+ * somebody else reset their password, so it goes out even though the user who
+ * performed the reset already knows.
+ */
+export async function sendPasswordChanged(message: PasswordChangedMessage): Promise<void> {
+  await deliver({
+    to: message.to,
+    subject: 'Your Smart Attendance password was changed',
+    text: [
+      `Hello ${message.fullName},`,
+      '',
+      'Your password has just been changed and you have been signed out on every device.',
+      '',
+      'If this was you, nothing further is needed.',
+      '',
+      'If it was NOT you, contact the ICT office immediately - somebody else has',
+      'access to this mailbox or to your account.',
+    ].join('\n'),
+  });
+}
+
+function buildResetUrl(token: string): string {
+  const base = env.APP_PUBLIC_URL;
+  return `${base.replace(/\/+$/, '')}/reset-password?token=${encodeURIComponent(token)}`;
+}
+
 function buildVerificationUrl(token: string): string {
   const base = env.APP_PUBLIC_URL;
   return `${base.replace(/\/+$/, '')}/verify-email?token=${encodeURIComponent(token)}`;

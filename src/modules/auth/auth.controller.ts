@@ -4,7 +4,14 @@ import * as loginService from './auth.login.service.js';
 import * as sessions from './auth.session.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as authService from './auth.service.js';
-import type { EmailVerificationInput, LecturerRegistrationInput, LoginInput } from './auth.schema.js';
+import * as passwordService from './auth.password.service.js';
+import type {
+  EmailVerificationInput,
+  ForgotPasswordInput,
+  LecturerRegistrationInput,
+  LoginInput,
+  ResetPasswordInput,
+} from './auth.schema.js';
 
 /**
  * Controllers translate HTTP to service calls and back. No business rules
@@ -80,4 +87,27 @@ export async function logout(req: Request, res: Response): Promise<void> {
   );
   sessions.clearAuthCookies(res);
   res.status(204).end();
+}
+
+/**
+ * POST /api/v1/auth/forgot-password
+ *
+ * Always 200 with the same body, whether or not the address has an account.
+ * Anything else would turn this into an account directory.
+ */
+export async function forgotPassword(req: Request, res: Response): Promise<void> {
+  const input = req.body as ForgotPasswordInput;
+  const result = await passwordService.requestPasswordReset(input, contextFrom(req));
+  sendSuccess(res, result);
+}
+
+/** POST /api/v1/auth/reset-password */
+export async function resetPassword(req: Request, res: Response): Promise<void> {
+  const input = req.body as ResetPasswordInput;
+  const result = await passwordService.resetPassword(input, contextFrom(req));
+
+  // Every session was revoked, so any cookies this browser still holds are
+  // dead. Clearing them avoids a confusing "signed in but unauthorised" state.
+  sessions.clearAuthCookies(res);
+  sendSuccess(res, result);
 }

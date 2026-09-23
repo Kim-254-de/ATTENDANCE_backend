@@ -52,3 +52,14 @@ export const loginLimiter = buildLimiter(
   env.RATE_LIMIT_WINDOW_MS,
   'Too many sign-in attempts. Please wait before trying again.',
 );
+
+/**
+ * Password reset requests. Tighter than sign-in because each accepted request
+ * sends an email: without this, the endpoint is a way to flood a colleague's
+ * inbox from any browser.
+ */
+export const passwordResetLimiter = buildLimiter(
+  env.PASSWORD_RESET_RATE_LIMIT_MAX,
+  env.RATE_LIMIT_WINDOW_MS,
+  'Too many password reset requests. Please wait before trying again.',
+);

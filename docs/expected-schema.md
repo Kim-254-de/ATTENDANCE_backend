@@ -72,6 +72,26 @@ is itself proof of verification.
 | `consumed_at` | `timestamptz` null | The `IS NULL` guard makes consumption atomic |
 | `created_at` | `timestamptz` | |
 
+### `password_reset_tokens`
+
+Created by `db/migrations/004_password_reset_tokens.sql`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | FK -> `users(id)` ON DELETE CASCADE |
+| `token_hash` | `varchar(64)` | **UNIQUE** - SHA-256 hex. The plaintext lives only in the email |
+| `expires_at` | `timestamptz` | Minutes, not days - the link is a live key to the account |
+| `consumed_at` | `timestamptz` null | The `IS NULL` guard makes consumption atomic |
+| `invalidated_at` | `timestamptz` null | Set when a newer request supersedes this link |
+| `requested_ip` | `varchar(64)` null | Who asked, for abuse investigation |
+| `created_at` | `timestamptz` | |
+
+Two separate "dead" columns on purpose: `consumed_at` means the link was used,
+`invalidated_at` means it was replaced. Keeping them apart is what lets an
+administrator tell "somebody used your reset link" from "you requested a second
+one" when a dispute comes up.
+
 ### `audit_logs`
 
 Append-only. A revoked registration writes here even though no user row is
@@ -183,8 +203,7 @@ what actually stops a double record.
 
 ## Tables later modules will need
 
-Not queried yet — listed so the database owner can plan: `student_profiles`,
-`password_reset_tokens`.
+Not queried yet — listed so the database owner can plan: `student_profiles`.
 
 ---
 
