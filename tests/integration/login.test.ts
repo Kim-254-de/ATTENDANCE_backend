@@ -172,6 +172,29 @@ describe('session lifecycle', () => {
     expect(body(me).data?.staffNumber).toBe(l.staff);
   });
 
+  it('GET /lecturers/profile returns the active registration details', async () => {
+    const l = await makeLecturer('ACTIVE');
+    await pool.query(`UPDATE lecturer_profiles SET faculty = 'Science', phone = '+254700000000' WHERE user_id = $1`, [l.id]);
+    const agent = request.agent(app);
+
+    expect((await agent.get('/api/v1/lecturers/profile')).status).toBe(401);
+    await agent.post('/api/v1/auth/login').send({ identifier: l.staff, password: PASSWORD }).expect(200);
+
+    const profile = await agent.get('/api/v1/lecturers/profile');
+    expect(profile.status).toBe(200);
+    expect(body(profile).data).toMatchObject({
+      id: l.id,
+      role: 'lecturer',
+      fullName: 'Test Lecturer',
+      email: l.email,
+      staffNumber: l.staff,
+      department: 'Computer Science',
+      faculty: 'Science',
+      phone: '+254700000000',
+    });
+    expect(body(profile).data).not.toHaveProperty('passwordHash');
+  });
+
   it('rejects a tampered or foreign token', async () => {
     const res = await request(app).get('/api/v1/auth/me').set('Authorization', 'Bearer not.a.jwt');
     expect(res.status).toBe(401);
