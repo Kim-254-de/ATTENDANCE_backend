@@ -7,3 +7,6 @@ export const lecturerRouter: Router = Router();
 
 /** Profile data for the signed-in, successfully registered lecturer. */
 lecturerRouter.get('/profile', asyncHandler(requireAuth('LECTURER')), asyncHandler(lecturerController.profile));
+
+/** Real teaching summary: units taught, total students, avg. attendance, sessions held. */
+lecturerRouter.get('/overview', asyncHandler(requireAuth('LECTURER')), asyncHandler(lecturerController.overview));

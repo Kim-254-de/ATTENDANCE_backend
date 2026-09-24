@@ -24,12 +24,24 @@ export const unitCodeSchema = z
       ),
   );
 
+const timeOfDaySchema = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour HH:MM, e.g. 09:00.');
+
 export const createUnitSchema = z
   .object({
     code: unitCodeSchema,
     name: z.string().trim().min(2, 'Enter the unit name.').max(200),
+    /** The unit's issued weekly meeting slot. 0=Sunday..6=Saturday, matches JS Date#getDay(). */
+    dayOfWeek: z.number().int().min(0).max(6),
+    startTime: timeOfDaySchema,
+    endTime: timeOfDaySchema,
   })
-  .strict();
+  .strict()
+  .refine((value) => value.endTime > value.startTime, {
+    message: 'End time must be after start time.',
+    path: ['endTime'],
+  });
 export type CreateUnitInput = z.infer<typeof createUnitSchema>;
 
 export const unitIdParamSchema = z.object({ unitId: uuid }).strict();

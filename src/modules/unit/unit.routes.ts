@@ -17,6 +17,9 @@ export const unitRouter: Router = Router();
 /** The units the signed-in lecturer teaches, with how many students are on each. */
 unitRouter.get('/', requireAuth('LECTURER'), asyncHandler(unitController.listUnits));
 
+/** The unit ActivateClass may open a session for right now, per the lecturer's issued timetable. */
+unitRouter.get('/current', requireAuth('LECTURER'), asyncHandler(unitController.getCurrentUnit));
+
 /** A lecturer adds a unit they teach. */
 unitRouter.post(
   '/',

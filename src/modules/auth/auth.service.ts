@@ -3,14 +3,15 @@ import type { AccountStatus } from '../../db/types.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { AppError, ErrorCode } from '../../common/errors/index.js';
-import { hashPassword } from '../../common/utils/password.js';
+import { hashPassword, verifyPassword } from '../../common/utils/password.js';
 import { expiresInHours, generateToken, hashToken } from '../../common/utils/tokens.js';
 import { erpClient } from '../../integrations/erp/index.js';
 import type { ErpLookupResult, ErpProvider } from '../../integrations/erp/index.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
 import * as authRepository from './auth.repository.js';
-import type { LecturerRegistrationInput } from './auth.schema.js';
+import { revokeOtherSessions, toLecturerPublic, type LecturerPublic } from './auth.session.repository.js';
+import type { AvatarInput, ChangePasswordInput, LecturerRegistrationInput, UpdateProfileInput } from './auth.schema.js';
 
 /**
  * Lecturer registration.
@@ -201,6 +202,127 @@ export async function registerLecturer(
     nextStep: 'VERIFY_EMAIL',
     createdAt: created.createdAt,
   };
+}
+
+/**
+ * Updates the editable half of a lecturer's profile. Name and email are
+ * deliberately untouched here — see updateProfileSchema.
+ */
+export async function updateProfile(
+  userId: string,
+  input: UpdateProfileInput,
+  context: RegistrationContext,
+): Promise<LecturerPublic> {
+  const updated = await authRepository.updateLecturerProfile(userId, {
+    title: input.title?.trim() || null,
+    department: input.department,
+  });
+  if (!updated) throw AppError.notFound('Lecturer profile not found.');
+
+  await auditService.record({
+    action: 'LECTURER_PROFILE_UPDATED',
+    outcome: 'SUCCESS',
+    userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { title: updated.title, department: updated.department },
+  });
+
+  return toLecturerPublic(updated);
+}
+
+/**
+ * Changes a password from inside the app. Signs out every other device —
+ * proof of the current password stands in for the reset flow's emailed
+ * token, so unlike that flow (which trusts nothing and revokes everything)
+ * this one keeps the session making the change alive.
+ */
+export async function changePassword(
+  userId: string,
+  sessionId: string,
+  input: ChangePasswordInput,
+  context: RegistrationContext,
+): Promise<{ message: string }> {
+  const holder = await authRepository.findPasswordHolder(userId);
+  if (!holder) throw AppError.notFound('Account not found.');
+
+  const audit = {
+    userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+  };
+
+  if (!(await verifyPassword(input.currentPassword, holder.passwordHash))) {
+    await auditService.record({
+      ...audit,
+      action: 'PASSWORD_CHANGED',
+      outcome: 'FAILURE',
+      reason: 'current password did not match',
+    });
+    throw AppError.badRequest('Your current password is incorrect.');
+  }
+
+  if (await verifyPassword(input.newPassword, holder.passwordHash)) {
+    throw AppError.badRequest('Your new password must be different from your current password.');
+  }
+
+  const newHash = await hashPassword(input.newPassword);
+  await authRepository.updatePassword(userId, newHash);
+  await revokeOtherSessions(userId, sessionId, 'password_changed');
+
+  await auditService.record({
+    ...audit,
+    action: 'PASSWORD_CHANGED',
+    outcome: 'SUCCESS',
+    reason: 'other sessions revoked',
+  });
+  logger.info({ userId }, 'password changed; other sessions revoked');
+
+  void notificationService
+    .sendPasswordChanged({ to: holder.email, fullName: holder.fullName })
+    .catch((error: unknown) => {
+      logger.error({ err: error, userId }, 'password change notice failed to send');
+    });
+
+  return { message: 'Your password has been changed. You have been signed out on every other device.' };
+}
+
+/** Sets or replaces the profile photo. Kept out of LecturerPublic — see app.ts's route-specific body limit. */
+export async function setAvatar(
+  userId: string,
+  input: AvatarInput,
+  context: RegistrationContext,
+): Promise<{ avatarUrl: string | null }> {
+  await authRepository.setAvatarUrl(userId, input.avatarDataUrl);
+  await auditService.record({
+    action: 'AVATAR_UPDATED',
+    outcome: 'SUCCESS',
+    userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { removed: false },
+  });
+  return { avatarUrl: input.avatarDataUrl };
+}
+
+export async function removeAvatar(
+  userId: string,
+  context: RegistrationContext,
+): Promise<{ avatarUrl: string | null }> {
+  await authRepository.setAvatarUrl(userId, null);
+  await auditService.record({
+    action: 'AVATAR_UPDATED',
+    outcome: 'SUCCESS',
+    userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { removed: true },
+  });
+  return { avatarUrl: null };
 }
 
 /**

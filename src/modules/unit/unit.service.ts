@@ -29,6 +29,7 @@ export interface UnitDto {
   studentCount: number;
   pendingCount: number;
   createdAt: string;
+  schedule: UnitSummary['schedule'];
 }
 
 const toUnitDto = (unit: UnitSummary): UnitDto => ({
@@ -49,6 +50,14 @@ export async function listUnits(lecturerUserId: string): Promise<UnitDto[]> {
   return (await unitRepository.findUnitsForLecturer(lecturerUserId)).map(toUnitDto);
 }
 
+/** The unit ActivateClass may open a session for right now, or null if nothing is scheduled. */
+export async function getCurrentUnit(lecturerUserId: string): Promise<UnitDto | null> {
+  const now = new Date();
+  const timeOfDay = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const unit = await unitRepository.findCurrentUnitForLecturer(lecturerUserId, now.getDay(), timeOfDay);
+  return unit ? toUnitDto(unit) : null;
+}
+
 /** A lecturer adds a unit they teach. Until units come from the ERP, this is how units exist at all. */
 export async function createUnit(
   input: CreateUnitInput,
@@ -57,7 +66,11 @@ export async function createUnit(
 ): Promise<UnitDto> {
   let unitId: string;
   try {
-    unitId = await unitRepository.createUnit(input.code, input.name, lecturerUserId);
+    unitId = await unitRepository.createUnit(input.code, input.name, lecturerUserId, {
+      dayOfWeek: input.dayOfWeek,
+      startTime: input.startTime,
+      endTime: input.endTime,
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
       const existing = await unitRepository.findUnitByCode(input.code);

@@ -101,6 +101,20 @@ export const emailVerificationSchema = z
 export type EmailVerificationInput = z.infer<typeof emailVerificationSchema>;
 
 /**
+ * Editing a profile. Deliberately excludes full name and email: those are the
+ * exact fields the ERP identity check verified at registration, and letting
+ * them change here with no re-verification would undermine that guarantee.
+ */
+export const updateProfileSchema = z
+  .object({
+    title: z.string().trim().max(32).optional(),
+    department: z.string().trim().min(2, 'Enter your department.').max(160),
+  })
+  .strict();
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+/**
  * Sign-in accepts a staff number OR an email in one field (README section 3.1). No password
  * policy is applied here: policy is for choosing a password, and enforcing it at sign-in would
  * only reveal the rules to someone guessing.
@@ -152,3 +166,43 @@ export const resetPasswordSchema = z
   });
 
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+/**
+ * Changing a password from inside the app (as opposed to the emailed-token
+ * reset flow above). Proof of the CURRENT password stands in for the emailed
+ * token's proof of inbox access.
+ */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password.').max(128),
+    newPassword: passwordSchema,
+    confirmNewPassword: z.string(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.newPassword !== value.confirmNewPassword) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmNewPassword'],
+        message: 'Passwords do not match.',
+      });
+    }
+  });
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+/**
+ * A profile photo, sent as a data URL. The body-size limit on this route (see
+ * app.ts) is the primary guard against abuse; this length cap is a second,
+ * independent one at the validation layer.
+ */
+export const avatarSchema = z
+  .object({
+    avatarDataUrl: z
+      .string()
+      .regex(/^data:image\/(png|jpe?g|webp);base64,/, 'Not a supported image format.')
+      .max(300_000, 'That image is too large.'),
+  })
+  .strict();
+
+export type AvatarInput = z.infer<typeof avatarSchema>;

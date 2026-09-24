@@ -2,6 +2,7 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { auditService } from '../audit/index.js';
+import { findUnitSchedule } from '../unit/index.js';
 import * as sessionRepository from './session.repository.js';
 import type { SessionForQr } from './session.repository.js';
 import {
@@ -70,13 +71,16 @@ export async function createSession(
     throw AppError.forbidden('You are not assigned to teach this unit.');
   }
 
+  const opensAt = input.opensAt ?? new Date();
+  const closesAt = await resolveClosesAt(input.unitId, opensAt, input.closesAt);
+
   const session = await sessionRepository.createSession({
     unitId: input.unitId,
     lecturerUserId,
     secret: generateSessionSecret(),
     title: input.title ?? null,
-    opensAt: input.opensAt ?? new Date(),
-    closesAt: input.closesAt,
+    opensAt,
+    closesAt,
     rotationSeconds: input.rotationSeconds ?? env.QR_ROTATION_SECONDS,
   });
 
@@ -92,6 +96,55 @@ export async function createSession(
 
   logger.info({ sessionId: session.id, unitCode: session.unitCode }, 'attendance session opened');
   return toSummary(session);
+}
+
+/**
+ * A class may only be activated inside its issued timetable slot — this is
+ * the server-side enforcement of "the activate button is only active within
+ * the time allocated on the timetable" (the frontend's own gating is just a
+ * convenience; this is what actually stops it). `closesAt` is derived from
+ * the slot's end time rather than trusted from the client, so a session can
+ * never outlive its scheduled window.
+ *
+ * A unit with no issued slot (legacy data, before schedules existed) falls
+ * back to the client-supplied `closesAt` — there is no window to derive one from.
+ */
+async function resolveClosesAt(
+  unitId: string,
+  opensAt: Date,
+  clientClosesAt: Date | undefined,
+): Promise<Date> {
+  const schedule = await findUnitSchedule(unitId);
+  if (!schedule) {
+    if (!clientClosesAt) {
+      throw AppError.badRequest('This unit has no issued schedule; closesAt is required.');
+    }
+    return clientClosesAt;
+  }
+
+  if (opensAt.getDay() !== schedule.dayOfWeek) {
+    throw AppError.forbidden(
+      `This class is not scheduled for today (window: ${schedule.startTime}–${schedule.endTime}).`,
+    );
+  }
+
+  const slotStart = atTimeOfDay(opensAt, schedule.startTime);
+  const slotEnd = atTimeOfDay(opensAt, schedule.endTime);
+  if (opensAt < slotStart || opensAt > slotEnd) {
+    throw AppError.forbidden(
+      `You can only activate this class during its scheduled time (${schedule.startTime}–${schedule.endTime}).`,
+    );
+  }
+
+  return slotEnd;
+}
+
+/** `date`'s calendar day, at the given "HH:MM" time. */
+function atTimeOfDay(date: Date, hhmm: string): Date {
+  const [hh, mm] = hhmm.split(':');
+  const result = new Date(date);
+  result.setHours(Number(hh), Number(mm), 0, 0);
+  return result;
 }
 
 export interface CurrentQr {

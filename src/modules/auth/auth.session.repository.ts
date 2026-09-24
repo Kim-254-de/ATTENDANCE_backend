@@ -12,6 +12,7 @@ export interface LecturerPublic {
   staffNumber: string;
   title: string;
   department: string;
+  status: AccountStatus;
 }
 
 export interface LoginCandidate {
@@ -42,6 +43,7 @@ interface LoginRow {
 
 export const toLecturerPublic = (c: {
   id: string; fullName: string; email: string; staffNumber: string; title: string | null; department: string | null;
+  status: AccountStatus;
 }): LecturerPublic => ({
   id: c.id,
   role: 'lecturer',
@@ -50,6 +52,7 @@ export const toLecturerPublic = (c: {
   staffNumber: c.staffNumber,
   title: c.title ?? '',
   department: c.department ?? '',
+  status: c.status,
 });
 
 /** `identifier` is already normalised: lower-cased email, or upper-cased staff number. */
@@ -177,6 +180,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
         ? toLecturerPublic({
             id: row.user_id, fullName: row.full_name, email: row.email,
             staffNumber: row.staff_number, title: row.title, department: row.department,
+            status: row.status,
           })
         : null,
   };
@@ -197,5 +201,24 @@ export async function revokeSession(sessionId: string, reason: string): Promise<
   await query(
     `UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = $2 WHERE id = $1 AND revoked_at IS NULL`,
     [sessionId, reason],
+  );
+}
+
+/**
+ * For change-password: signs out every other device but not the session
+ * making the change. Unlike the emailed-token reset flow (which has no
+ * session to trust and revokes all of them), this one already has proof —
+ * the caller just presented the current password.
+ */
+export async function revokeOtherSessions(
+  userId: string,
+  exceptSessionId: string,
+  reason: string,
+): Promise<void> {
+  await query(
+    `UPDATE auth_sessions
+        SET revoked_at = NOW(), revoked_reason = $3
+      WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+    [userId, exceptSessionId, reason],
   );
 }

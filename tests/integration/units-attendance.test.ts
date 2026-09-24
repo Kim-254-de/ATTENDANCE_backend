@@ -96,8 +96,15 @@ const api = (auth: string) => ({
   patch: (path: string, data?: object) => request(app).patch(`/api/v1${path}`).set('Authorization', auth).send(data),
 });
 
+/**
+ * Every unit needs an issued slot now, and session.service.ts only allows
+ * activating a class inside it. Spanning today's whole day keeps tests free
+ * to run at any time of day without tripping that gate.
+ */
+const SCHEDULE = { dayOfWeek: new Date().getDay(), startTime: '00:00', endTime: '23:59' };
+
 async function makeUnit(lecturer: { auth: string }, code = `TEST ${uniq()}`) {
-  const res = await api(lecturer.auth).post('/units', { code, name: 'Testing Unit' });
+  const res = await api(lecturer.auth).post('/units', { code, name: 'Testing Unit', ...SCHEDULE });
   expect(res.status).toBe(201);
   return body<{ id: string; code: string }>(res).data;
 }
@@ -105,7 +112,7 @@ async function makeUnit(lecturer: { auth: string }, code = `TEST ${uniq()}`) {
 describe('units', () => {
   it('lets a lecturer add a unit, normalising the code, and lists it with counts', async () => {
     const lecturer = await makeUser('LECTURER');
-    const res = await api(lecturer.auth).post('/units', { code: '  cosc   100 ', name: 'Intro to Computing' });
+    const res = await api(lecturer.auth).post('/units', { code: '  cosc   100 ', name: 'Intro to Computing', ...SCHEDULE });
     expect(res.status).toBe(201);
     expect(body(res).data).toMatchObject({ code: 'COSC 100', name: 'Intro to Computing', studentCount: 0, pendingCount: 0 });
 
@@ -118,18 +125,18 @@ describe('units', () => {
     const b = await makeUser('LECTURER');
     await makeUnit(a, 'DUPE 1');
 
-    const again = await api(a.auth).post('/units', { code: 'dupe 1', name: 'Again' });
+    const again = await api(a.auth).post('/units', { code: 'dupe 1', name: 'Again', ...SCHEDULE });
     expect(again.status).toBe(409);
     expect(body(again).error?.message).toMatch(/already added/);
 
-    const other = await api(b.auth).post('/units', { code: 'DUPE 1', name: 'Mine' });
+    const other = await api(b.auth).post('/units', { code: 'DUPE 1', name: 'Mine', ...SCHEDULE });
     expect(other.status).toBe(409);
     expect(body(other).error?.message).toMatch(/another lecturer/);
   });
 
   it('is lecturer-only, and a lecturer cannot see another lecturer\'s students', async () => {
     const student = await makeUser('STUDENT');
-    expect((await api(student.auth).post('/units', { code: 'NOPE 1', name: 'x' })).status).toBe(403);
+    expect((await api(student.auth).post('/units', { code: 'NOPE 1', name: 'x', ...SCHEDULE })).status).toBe(403);
 
     const owner = await makeUser('LECTURER');
     const other = await makeUser('LECTURER');

@@ -1,7 +1,14 @@
-import { query, queryOne } from '../../db/database.js';
+import type { PoolClient } from 'pg';
+import { query, queryOne, transaction } from '../../db/database.js';
 import type { AllocationStatus } from '../../db/types.js';
 
 /** All SQL for the unit module. Every query is parameterised. */
+
+export interface UnitSchedule {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+}
 
 export interface UnitSummary {
   id: string;
@@ -12,6 +19,8 @@ export interface UnitSummary {
   /** Self-enrolment requests waiting for the lecturer. */
   pendingCount: number;
   createdAt: Date;
+  /** Every unit has exactly one issued slot; null only for rows created before schedules existed. */
+  schedule: UnitSchedule | null;
 }
 
 interface UnitSummaryRow {
@@ -21,6 +30,9 @@ interface UnitSummaryRow {
   student_count: number;
   pending_count: number;
   created_at: Date;
+  day_of_week: number | null;
+  start_time: string | null;
+  end_time: string | null;
 }
 
 const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
@@ -30,19 +42,26 @@ const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
   studentCount: row.student_count,
   pendingCount: row.pending_count,
   createdAt: row.created_at,
+  schedule:
+    row.day_of_week === null || row.start_time === null || row.end_time === null
+      ? null
+      : { dayOfWeek: row.day_of_week, startTime: row.start_time.slice(0, 5), endTime: row.end_time.slice(0, 5) },
 });
 
 const SELECT_UNIT_SUMMARY = `
   SELECT u.id, u.code, u.name, u.created_at,
          COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int  AS student_count,
-         COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count
+         COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count,
+         s.day_of_week, s.start_time, s.end_time
     FROM units u
     LEFT JOIN unit_allocations a ON a.unit_id = u.id
+    LEFT JOIN unit_schedule s ON s.unit_id = u.id
 `;
+const GROUP_BY_UNIT_SUMMARY = 'GROUP BY u.id, s.day_of_week, s.start_time, s.end_time';
 
 export async function findUnitsForLecturer(lecturerUserId: string): Promise<UnitSummary[]> {
   const result = await query<UnitSummaryRow>(
-    `${SELECT_UNIT_SUMMARY} WHERE u.lecturer_user_id = $1 GROUP BY u.id ORDER BY u.code`,
+    `${SELECT_UNIT_SUMMARY} WHERE u.lecturer_user_id = $1 ${GROUP_BY_UNIT_SUMMARY} ORDER BY u.code`,
     [lecturerUserId],
   );
   return result.rows.map(toUnitSummary);
@@ -50,10 +69,46 @@ export async function findUnitsForLecturer(lecturerUserId: string): Promise<Unit
 
 export async function findUnitSummary(unitId: string): Promise<UnitSummary | null> {
   const row = await queryOne<UnitSummaryRow>(
-    `${SELECT_UNIT_SUMMARY} WHERE u.id = $1 GROUP BY u.id`,
+    `${SELECT_UNIT_SUMMARY} WHERE u.id = $1 ${GROUP_BY_UNIT_SUMMARY}`,
     [unitId],
   );
   return row ? toUnitSummary(row) : null;
+}
+
+/**
+ * The unit whose issued slot covers this moment, for this lecturer — the one
+ * `ActivateClass` shows, if any.
+ *
+ * `dayOfWeek`/`timeOfDay` are computed by the caller from a JS `Date` (server
+ * local time — the same convention `startTime`/`endTime` were entered in),
+ * rather than cast inside SQL: `unit_schedule.start_time`/`end_time` are
+ * timezone-naive `TIME` values, and casting a `timestamptz` to `time` inside
+ * Postgres uses the *session's* timezone, which need not match the server's —
+ * comparing two values in the same (JS) timezone up front avoids that mismatch.
+ */
+export async function findCurrentUnitForLecturer(
+  lecturerUserId: string,
+  dayOfWeek: number,
+  timeOfDay: string,
+): Promise<UnitSummary | null> {
+  const row = await queryOne<UnitSummaryRow>(
+    `${SELECT_UNIT_SUMMARY}
+      WHERE u.lecturer_user_id = $1
+        AND s.day_of_week = $2
+        AND $3::time BETWEEN s.start_time AND s.end_time
+      ${GROUP_BY_UNIT_SUMMARY}`,
+    [lecturerUserId, dayOfWeek, timeOfDay],
+  );
+  return row ? toUnitSummary(row) : null;
+}
+
+/** The issued slot for one unit, for the session-activation time gate. */
+export async function findUnitSchedule(unitId: string): Promise<UnitSchedule | null> {
+  const row = await queryOne<{ day_of_week: number; start_time: string; end_time: string }>(
+    `SELECT day_of_week, start_time, end_time FROM unit_schedule WHERE unit_id = $1`,
+    [unitId],
+  );
+  return row ? { dayOfWeek: row.day_of_week, startTime: row.start_time.slice(0, 5), endTime: row.end_time.slice(0, 5) } : null;
 }
 
 export interface UnitOwner {
@@ -83,13 +138,22 @@ export async function createUnit(
   code: string,
   name: string,
   lecturerUserId: string,
+  schedule: UnitSchedule,
 ): Promise<string> {
-  const row = await queryOne<{ id: string }>(
-    `INSERT INTO units (code, name, lecturer_user_id) VALUES ($1, $2, $3) RETURNING id`,
-    [code, name, lecturerUserId],
-  );
-  if (!row) throw new Error('units insert returned no row');
-  return row.id;
+  return transaction(async (client: PoolClient) => {
+    const row = await queryOne<{ id: string }>(
+      `INSERT INTO units (code, name, lecturer_user_id) VALUES ($1, $2, $3) RETURNING id`,
+      [code, name, lecturerUserId],
+      client,
+    );
+    if (!row) throw new Error('units insert returned no row');
+    await query(
+      `INSERT INTO unit_schedule (unit_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)`,
+      [row.id, schedule.dayOfWeek, schedule.startTime, schedule.endTime],
+      client,
+    );
+    return row.id;
+  });
 }
 
 // ---------------------------------------------------------------------------

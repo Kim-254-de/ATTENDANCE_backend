@@ -101,7 +101,7 @@ const envSchema = z
     // --- Attendance QR codes ---
     // How often the projected code changes. Shorter is safer but leaves less
     // room for a slow scan; 60s is the balance the spec asks for.
-    QR_ROTATION_SECONDS: z.coerce.number().int().min(15).max(600).default(60),
+    QR_ROTATION_SECONDS: z.coerce.number().int().min(15).max(600).default(45),
     // Earlier windows still accepted, to cover the gap between a student
     // opening the camera and the scan reaching the server. Each extra window
     // is another rotation period in which a shared screenshot still works.

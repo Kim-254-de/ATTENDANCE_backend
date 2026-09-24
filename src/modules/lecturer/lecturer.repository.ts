@@ -1,5 +1,51 @@
 import { queryOne } from '../../db/database.js';
 
+export interface LecturerSummary {
+  unitsAllocated: number;
+  totalStudents: number;
+  sessionsHeld: number;
+  /** 0–100, averaged across every session's own checked-in ÷ ACTIVE-allocation rate. */
+  avgAttendance: number;
+}
+
+/** The four numbers the Dashboard's stat cards and the Profile page's teaching summary both show. */
+export async function getSummary(lecturerUserId: string): Promise<LecturerSummary> {
+  const [units, sessions, attendance] = await Promise.all([
+    queryOne<{ units_count: number; total_students: number }>(
+      `SELECT COUNT(DISTINCT u.id)::int AS units_count,
+              COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int AS total_students
+         FROM units u
+         LEFT JOIN unit_allocations a ON a.unit_id = u.id
+        WHERE u.lecturer_user_id = $1`,
+      [lecturerUserId],
+    ),
+    queryOne<{ sessions_held: number }>(
+      `SELECT COUNT(*)::int AS sessions_held FROM attendance_sessions WHERE lecturer_user_id = $1`,
+      [lecturerUserId],
+    ),
+    queryOne<{ avg_attendance: number }>(
+      `SELECT COALESCE(AVG(rate), 0)::float8 AS avg_attendance
+         FROM (
+           SELECT
+             (SELECT COUNT(*) FROM attendance_records r WHERE r.session_id = s.id)::numeric
+             / NULLIF((SELECT COUNT(*) FROM unit_allocations a
+                        WHERE a.unit_id = s.unit_id AND a.status = 'ACTIVE'), 0) * 100 AS rate
+             FROM attendance_sessions s
+            WHERE s.lecturer_user_id = $1
+         ) per_session
+        WHERE rate IS NOT NULL`,
+      [lecturerUserId],
+    ),
+  ]);
+
+  return {
+    unitsAllocated: units?.units_count ?? 0,
+    totalStudents: units?.total_students ?? 0,
+    sessionsHeld: sessions?.sessions_held ?? 0,
+    avgAttendance: attendance?.avg_attendance ?? 0,
+  };
+}
+
 export interface LecturerProfile {
   id: string;
   role: 'lecturer';

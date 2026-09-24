@@ -1,16 +1,21 @@
 import type { Request, Response } from 'express';
+import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import * as loginService from './auth.login.service.js';
 import * as sessions from './auth.session.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as authService from './auth.service.js';
 import * as passwordService from './auth.password.service.js';
+import { findAvatarUrl } from './auth.repository.js';
 import type {
+  AvatarInput,
+  ChangePasswordInput,
   EmailVerificationInput,
   ForgotPasswordInput,
   LecturerRegistrationInput,
   LoginInput,
   ResetPasswordInput,
+  UpdateProfileInput,
 } from './auth.schema.js';
 
 /**
@@ -62,9 +67,54 @@ export async function login(req: Request, res: Response): Promise<void> {
   sendSuccess(res, issued.lecturer);
 }
 
-/** GET /api/v1/auth/me */
-export function me(req: Request, res: Response): void {
-  sendSuccess(res, req.auth?.lecturer ?? null);
+/**
+ * GET /api/v1/auth/me
+ *
+ * The avatar is deliberately NOT part of `req.auth.lecturer` (that comes from
+ * the session lookup `requireAuth` runs on every authenticated request) — it
+ * is fetched here, once, only for the endpoint that actually needs it.
+ */
+export async function me(req: Request, res: Response): Promise<void> {
+  const lecturer = req.auth?.lecturer ?? null;
+  if (!lecturer) {
+    sendSuccess(res, null);
+    return;
+  }
+  const avatarUrl = await findAvatarUrl(lecturer.id);
+  sendSuccess(res, { ...lecturer, avatarUrl });
+}
+
+/** PATCH /api/v1/auth/me — title and department only; see updateProfileSchema. */
+export async function updateProfile(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) throw AppError.unauthenticated('Please sign in.');
+  const updated = await authService.updateProfile(userId, req.body as UpdateProfileInput, contextFrom(req));
+  sendSuccess(res, updated);
+}
+
+/** POST /api/v1/auth/change-password */
+export async function changePassword(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  const sessionId = req.auth?.sessionId;
+  if (!userId || !sessionId) throw AppError.unauthenticated('Please sign in.');
+  const result = await authService.changePassword(userId, sessionId, req.body as ChangePasswordInput, contextFrom(req));
+  sendSuccess(res, result);
+}
+
+/** POST /api/v1/auth/me/avatar */
+export async function setAvatar(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) throw AppError.unauthenticated('Please sign in.');
+  const result = await authService.setAvatar(userId, req.body as AvatarInput, contextFrom(req));
+  sendSuccess(res, result);
+}
+
+/** DELETE /api/v1/auth/me/avatar */
+export async function removeAvatar(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) throw AppError.unauthenticated('Please sign in.');
+  const result = await authService.removeAvatar(userId, contextFrom(req));
+  sendSuccess(res, result);
 }
 
 /** POST /api/v1/auth/refresh */

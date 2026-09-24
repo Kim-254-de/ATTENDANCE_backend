@@ -136,6 +136,49 @@ export async function createLecturerAccount(
   });
 }
 
+export interface UpdatedLecturerProfile {
+  id: string;
+  email: string;
+  fullName: string;
+  staffNumber: string;
+  title: string | null;
+  department: string | null;
+  status: AccountStatus;
+}
+
+/** Title/department only — see updateProfileSchema for why name and email are excluded. */
+export async function updateLecturerProfile(
+  userId: string,
+  input: { title: string | null; department: string },
+): Promise<UpdatedLecturerProfile | null> {
+  const row = await queryOne<{
+    id: string;
+    email: string;
+    full_name: string;
+    staff_number: string;
+    title: string | null;
+    department: string | null;
+    status: AccountStatus;
+  }>(
+    `UPDATE lecturer_profiles p
+        SET title = $2, department = $3, updated_at = NOW()
+       FROM users u
+      WHERE p.user_id = $1 AND u.id = p.user_id
+    RETURNING u.id, u.email, u.full_name, u.status, p.staff_number, p.title, p.department`,
+    [userId, input.title, input.department],
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    fullName: row.full_name,
+    staffNumber: row.staff_number,
+    title: row.title,
+    status: row.status,
+    department: row.department,
+  };
+}
+
 export interface VerifiableToken {
   id: string;
   userId: string;
@@ -216,4 +259,49 @@ export async function consumeEmailVerificationToken(
 
     return true;
   });
+}
+
+export interface PasswordHolder {
+  passwordHash: string;
+  email: string;
+  fullName: string;
+}
+
+/** For change-password: proof of the current password stands in for the reset flow's emailed token. */
+export async function findPasswordHolder(userId: string): Promise<PasswordHolder | null> {
+  const row = await queryOne<{ password_hash: string; email: string; full_name: string }>(
+    `SELECT password_hash, email, full_name FROM users WHERE id = $1 AND deleted_at IS NULL`,
+    [userId],
+  );
+  if (!row) return null;
+  return { passwordHash: row.password_hash, email: row.email, fullName: row.full_name };
+}
+
+/** Same reset-on-change behaviour as auth.password.repository.ts's completeReset. */
+export async function updatePassword(userId: string, newPasswordHash: string): Promise<void> {
+  await query(
+    `UPDATE users
+        SET password_hash = $2,
+            failed_login_attempts = 0,
+            locked_until = NULL,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [userId, newPasswordHash],
+  );
+}
+
+/** For GET /auth/me only — deliberately not part of the requireAuth session lookup; see app.ts. */
+export async function findAvatarUrl(userId: string): Promise<string | null> {
+  const row = await queryOne<{ avatar_data_url: string | null }>(
+    `SELECT avatar_data_url FROM users WHERE id = $1`,
+    [userId],
+  );
+  return row?.avatar_data_url ?? null;
+}
+
+export async function setAvatarUrl(userId: string, avatarDataUrl: string | null): Promise<void> {
+  await query(`UPDATE users SET avatar_data_url = $2, updated_at = NOW() WHERE id = $1`, [
+    userId,
+    avatarDataUrl,
+  ]);
 }

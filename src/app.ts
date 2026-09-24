@@ -48,6 +48,12 @@ export function createApp(): Express {
 
   app.use(compression());
 
+  // A profile photo needs more room than every other route's payload —
+  // scoped to just this path (registered first: express.json() skips
+  // re-parsing a body it already parsed) so the tight ceiling below still
+  // applies everywhere else.
+  app.use('/api/v1/auth/me/avatar', express.json({ limit: '300kb' }));
+
   // A registration payload is a few hundred bytes; a generous cap here would
   // only widen the memory-exhaustion surface.
   app.use(express.json({ limit: '100kb' }));

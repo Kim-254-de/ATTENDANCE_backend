@@ -3,6 +3,7 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { fakeVerifyPassword, verifyPassword } from '../../common/utils/password.js';
 import type { AccountStatus } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
+import { findAvatarUrl } from './auth.repository.js';
 import * as sessions from './auth.session.js';
 import * as repo from './auth.session.repository.js';
 import type { LoginInput } from './auth.schema.js';
@@ -21,7 +22,9 @@ import type { RegistrationContext } from './auth.service.js';
  */
 
 export interface IssuedSession {
-  lecturer: repo.LecturerPublic;
+  /** avatarUrl merged in here (not part of LecturerPublic — see auth.repository.ts's findAvatarUrl) so
+   *  the object the frontend caches right after login already matches what GET /auth/me later returns. */
+  lecturer: repo.LecturerPublic & { avatarUrl: string | null };
   access: string;
   refresh: string;
   sessionExpiresAt: Date;
@@ -99,7 +102,8 @@ export async function loginLecturer(input: LoginInput, context: RegistrationCont
   const access = await sessions.signAccessToken({ userId: user.id, sessionId, role: 'LECTURER' });
 
   await auditService.record({ ...audit, userId: user.id, action: 'LOGIN_SUCCEEDED', outcome: 'SUCCESS' });
-  return { lecturer: repo.toLecturerPublic(user), access, refresh, sessionExpiresAt };
+  const avatarUrl = await findAvatarUrl(user.id);
+  return { lecturer: { ...repo.toLecturerPublic(user), avatarUrl }, access, refresh, sessionExpiresAt };
 }
 
 /** Trades a valid refresh token for a fresh pair. The old refresh token stops working. */
@@ -132,7 +136,9 @@ export async function refreshSession(refreshToken: string | null, context: Regis
     throw denied; // lost a race with a concurrent refresh
   }
   const access = await sessions.signAccessToken({ userId: session.userId, sessionId: session.sessionId, role: 'LECTURER' });
-  return { lecturer: session.lecturer, access, refresh, sessionExpiresAt: session.expiresAt };
+  // The client never reads this response body (refresh is a transparent, silent
+  // cookie-renewal call) — no avatarUrl lookup here, just satisfying the shared type.
+  return { lecturer: { ...session.lecturer, avatarUrl: null }, access, refresh, sessionExpiresAt: session.expiresAt };
 }
 
 /** Ends the session named by whichever valid token the client still holds. Never throws. */
