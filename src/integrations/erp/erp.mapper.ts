@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ErpStaffRecord } from './erp.types.js';
+import type { ErpStaffRecord, ErpStudentRecord } from './erp.types.js';
 
 /**
  * ============================================================================
@@ -162,6 +162,65 @@ export function toStaffRecord(body: unknown, requestedStaffNumber: string): ErpS
     department: first(payload.department, payload.departmentName),
     faculty: first(payload.faculty, payload.school),
     title: first(payload.title, payload.designation),
+    raw: body,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Students
+// ---------------------------------------------------------------------------
+
+const erpStudentPayloadSchema = z
+  .object({
+    registrationNumber: z.string().optional(),
+    reg_number: z.string().optional(),
+    regNo: z.string().optional(),
+    fullName: z.string().optional(),
+    full_name: z.string().optional(),
+    name: z.string().optional(),
+    programme: z.string().optional().nullable(),
+    program: z.string().optional().nullable(),
+    course: z.string().optional().nullable(),
+    yearOfStudy: z.coerce.number().int().optional().nullable(),
+    year_of_study: z.coerce.number().int().optional().nullable(),
+    isActive: z.boolean().optional(),
+    active: z.boolean().optional(),
+    status: z.string().optional(),
+  })
+  .passthrough();
+
+const erpStudentEnvelopeSchema = z.union([
+  z.object({ data: erpStudentPayloadSchema }),
+  z.object({ result: erpStudentPayloadSchema }),
+  z.object({ student: erpStudentPayloadSchema }),
+  erpStudentPayloadSchema,
+]);
+
+/** A student who is not currently studying may not be put on a unit. */
+const INACTIVE_STUDENT_STATUSES = new Set([...INACTIVE_STATUSES, 'deferred', 'graduated', 'withdrawn', 'expelled']);
+
+/** Translates an ERP student response into the internal record; null when it cannot be understood. */
+export function toStudentRecord(body: unknown, requestedRegNumber: string): ErpStudentRecord | null {
+  const parsed = erpStudentEnvelopeSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const value = parsed.data as Record<string, unknown>;
+  const payload = (value.data ?? value.result ?? value.student ?? value) as z.infer<typeof erpStudentPayloadSchema>;
+
+  const fullName = first(payload.fullName, payload.full_name, payload.name)?.trim();
+  if (!fullName) return null;
+
+  const status = payload.status?.toLowerCase().trim();
+  const isActive =
+    payload.isActive ?? payload.active ?? (status ? !INACTIVE_STUDENT_STATUSES.has(status) : true);
+
+  return {
+    registrationNumber: (
+      first(payload.registrationNumber, payload.reg_number, payload.regNo) ?? requestedRegNumber
+    ).toUpperCase(),
+    fullName,
+    programme: first(payload.programme, payload.program, payload.course),
+    yearOfStudy: first(payload.yearOfStudy, payload.year_of_study),
+    isActive,
     raw: body,
   };
 }

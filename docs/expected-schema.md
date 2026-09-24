@@ -134,7 +134,9 @@ Useful but not load-bearing: indexes on `users(role, status)`,
 
 ## Tables the session / QR module touches
 
-Not yet created. Requested by the session module — see
+`units` and `attendance_sessions` are created by
+`db/migrations/005_attendance_sessions.sql`; `unit_allocations` and
+`attendance_records` by `db/migrations/006_unit_allocations_attendance_records.sql`. See
 [`src/modules/session/README.md`](../src/modules/session/README.md).
 
 ### `units`
@@ -174,24 +176,39 @@ mint valid codes for that session.
 
 ### `unit_allocations`
 
+A student on a unit. A lecturer adds a registration number (verified against
+the ERP; ACTIVE at once, `student_user_id` NULL until the student has an
+account), or a signed-in student asks to join (PENDING until the lecturer
+approves).
+
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `unit_id` | `uuid` | FK -> `units(id)` |
-| `student_user_id` | `uuid` | FK -> `users(id)` |
-| `status` | text | `ACTIVE` / `DROPPED`. Only `ACTIVE` may check in |
-| | | **UNIQUE (unit_id, student_user_id)** |
+| `registration_number` | `varchar(64)` null | Uppercased. Set when a lecturer adds the student |
+| `student_user_id` | `uuid` null | FK -> `users(id)`. Set on self-enrolment, or linked on student registration |
+| `full_name` | `varchar(160)` null | From the ERP at allocation time |
+| `status` | text | `ACTIVE` / `PENDING` / `DROPPED`. Only `ACTIVE` may check in |
+| `source` | text | `LECTURER` / `SELF_ENROLLED` |
+| `added_by_user_id` | `uuid` null | FK -> `users(id)` |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | At least one of `registration_number`, `student_user_id` is set |
+| | | **UNIQUE (unit_id, registration_number)** and **UNIQUE (unit_id, student_user_id)**, each partial on NOT NULL |
 
 ### `attendance_records`
 
-Written by the attendance module, read here to reject a second check-in.
+Written by the attendance module on a verified check-in; read by the session
+module to reject a second one.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `session_id` | `uuid` | FK -> `attendance_sessions(id)` |
 | `student_user_id` | `uuid` | FK -> `users(id)` |
-| `recorded_at` | `timestamptz` | |
+| `allocation_id` | `uuid` null | FK -> `unit_allocations(id)` |
+| `recorded_at` | `timestamptz` | Defaults to `NOW()` |
+| `qr_age_seconds` | `integer` null | How old the scanned code was |
+| `ip_address` / `user_agent` | text null | |
 | | | **UNIQUE (session_id, student_user_id)** -- load-bearing |
 
 The `UNIQUE (session_id, student_user_id)` index is not cosmetic. The service

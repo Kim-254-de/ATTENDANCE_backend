@@ -1,22 +1,38 @@
 # unit module
 
-**Status:** not implemented — placeholder.
+Units, and which students are on them (allocations).
 
-Units, academic periods, lecturer assignment and student allocation.
+Until units come from the ERP, **lecturers add their own units**. A unit code
+is unique across the institution, so two lecturers cannot both claim `COSC 100`.
 
-Spec: README section 6 - Unit and allocation module.
+## How students get onto a unit
 
-## Expected files
+| Route | Who | Result |
+|---|---|---|
+| Lecturer pastes registration numbers | Lecturer | Each is looked up in the ERP's student records. Found and active → `ACTIVE` at once |
+| Student asks to join by unit code | Student | `PENDING` until the lecturer approves |
 
-Follow the layout established by `src/modules/auth`:
+Allocation is the check that makes a forwarded QR code near-useless: only an
+`ACTIVE` student can check in, however current their code. That is why a
+student can never make themselves `ACTIVE`, and why a student the lecturer
+removed (`DROPPED`) cannot re-request their way back.
 
-| File | Responsibility |
-|---|---|
-| `unit.schema.ts` | Zod request contracts; trims and normalises input |
-| `unit.repository.ts` | All SQL for this module; parameterised queries only |
-| `unit.service.ts` | Business rules; throws `AppError` for client-facing failures |
-| `unit.controller.ts` | HTTP in, HTTP out — no business logic |
-| `unit.routes.ts` | Router; applies `validate()` and any rate limits |
-| `index.ts` | Public surface of the module |
+The ERP lookup fails **closed**: if the student records system is unreachable,
+that number is reported `UNAVAILABLE` and not added. One bad number never fails
+the batch — the response reports each number's outcome.
 
-Mount the router in `src/routes.ts` when the module goes live.
+A lecturer-added allocation has a registration number but no account until the
+student registers. Student registration must call
+`linkAllocationsToStudent(userId, registrationNumber)` (exported from
+`index.ts`) so those students can check in.
+
+## Endpoints
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/units` | Lecturer | Units they teach, with active and pending counts |
+| `POST` | `/api/v1/units` | Lecturer | Add a unit `{ code, name }` |
+| `GET` | `/api/v1/units/:unitId/students` | Lecturer (owner) | Everyone on the unit, pending first |
+| `POST` | `/api/v1/units/:unitId/students` | Lecturer (owner) | `{ registrationNumbers: [...] }` (max 300), per-number results |
+| `PATCH` | `/api/v1/units/:unitId/students/:allocationId` | Lecturer (owner) | `{ status: ACTIVE \| DROPPED }` — approve, remove, restore |
+| `POST` | `/api/v1/units/enrol` | Student | `{ code }` — ask to join |

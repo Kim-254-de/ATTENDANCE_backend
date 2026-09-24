@@ -1,22 +1,19 @@
 # attendance module
 
-**Status:** not implemented — placeholder.
+Check-in: turns a verified QR scan into an `attendance_records` row.
 
-Check-in, attendance records, duplicate and window enforcement, auditable corrections.
+Every rule about whether a scan counts — signature, rotation window, session
+state, allocation, one check-in per session — lives in
+`sessionService.verifyScan`. This module only persists the verdict. The
+`UNIQUE (session_id, student_user_id)` constraint is what stops two
+simultaneous scans both being recorded; the loser gets a 409.
 
-Spec: README section 2 objectives 6-7.
+## Endpoints
 
-## Expected files
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| `POST` | `/api/v1/attendance/check-in` | Student | `{ payload }` from the scanned code. 201 with the record |
+| `GET` | `/api/v1/attendance/sessions/:sessionId` | Lecturer (owner) | Who has checked in, newest first |
 
-Follow the layout established by `src/modules/auth`:
-
-| File | Responsibility |
-|---|---|
-| `attendance.schema.ts` | Zod request contracts; trims and normalises input |
-| `attendance.repository.ts` | All SQL for this module; parameterised queries only |
-| `attendance.service.ts` | Business rules; throws `AppError` for client-facing failures |
-| `attendance.controller.ts` | HTTP in, HTTP out — no business logic |
-| `attendance.routes.ts` | Router; applies `validate()` and any rate limits |
-| `index.ts` | Public surface of the module |
-
-Mount the router in `src/routes.ts` when the module goes live.
+`POST /api/v1/sessions/scan` still exists as a dry run: it verifies without
+recording. Clients should use `check-in`.

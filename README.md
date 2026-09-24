@@ -50,6 +50,7 @@ cd .. && npm run dev                                               # http://loca
 ```ini
 ERP_BASE_URL=http://localhost:4100/api/erp
 ERP_STAFF_LOOKUP_PATH=/staff/{staffNumber}
+ERP_STUDENT_LOOKUP_PATH=/students/{registrationNumber}
 ERP_AUTH_SCHEME=api-key
 ERP_API_KEY=<same key as mock-erp/.env>
 ```

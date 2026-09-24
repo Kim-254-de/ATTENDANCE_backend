@@ -20,6 +20,23 @@ export interface ErpStaffRecord {
   raw: unknown;
 }
 
+/** A student record as the ERP knows it, normalised. */
+export interface ErpStudentRecord {
+  registrationNumber: string;
+  fullName: string;
+  programme: string | null;
+  yearOfStudy: number | null;
+  /** False for deferred, graduated or discontinued students. */
+  isActive: boolean;
+  raw: unknown;
+}
+
+export type ErpStudentLookupResult =
+  | { status: 'FOUND'; record: ErpStudentRecord }
+  | { status: 'NOT_FOUND' }
+  | { status: 'INACTIVE'; record: ErpStudentRecord }
+  | { status: 'UNAVAILABLE'; reason: string };
+
 /**
  * Why a lookup ended the way it did. Mirrors ErpVerificationOutcome in
  * src/db/types.ts so an outcome can be written straight to the audit log.
