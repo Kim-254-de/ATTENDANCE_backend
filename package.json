@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "node db/migrate.mjs",
-    "dev:approve": "node scripts/dev-approve-lecturer.mjs"
+    "dev:approve": "node scripts/dev-approve-lecturer.mjs",
+    "dev:seed-attendance": "node scripts/dev-seed-attendance.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

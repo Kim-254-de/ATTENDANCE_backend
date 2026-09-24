@@ -1,22 +1,21 @@
 # reporting module
 
-**Status:** not implemented — placeholder.
+Session-by-session attendance history, and a per-session CSV export.
 
-Attendance summaries, filtering, CSV and PDF export, student progress.
+`present`/`total` per session reuse the same checked-in/ACTIVE-allocation
+counting `session.service.ts`'s `assertSessionAcceptingScans` path and
+`lecturer.service.ts`'s `getOverview` already do — `total` is measured
+*now* (ACTIVE allocations on the unit today), not a historical snapshot of
+who was enrolled at the time, since no such snapshot is kept anywhere.
 
-Spec: README section 6 - Reporting module.
+`reference` (the `QR-COSC100-0924`-style string) is display-only, derived
+from the unit code and session date — nothing is stored under that name.
 
-## Expected files
+## Endpoints
 
-Follow the layout established by `src/modules/auth`:
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/reports/sessions` | Lecturer | `?unitId=&limit=` — session history, newest first |
+| `GET` | `/api/v1/reports/sessions/:sessionId/export` | Lecturer (owner) | CSV: one row per ACTIVE allocation on the session's unit |
 
-| File | Responsibility |
-|---|---|
-| `reporting.schema.ts` | Zod request contracts; trims and normalises input |
-| `reporting.repository.ts` | All SQL for this module; parameterised queries only |
-| `reporting.service.ts` | Business rules; throws `AppError` for client-facing failures |
-| `reporting.controller.ts` | HTTP in, HTTP out — no business logic |
-| `reporting.routes.ts` | Router; applies `validate()` and any rate limits |
-| `index.ts` | Public surface of the module |
-
-Mount the router in `src/routes.ts` when the module goes live.
+PDF export and student-facing progress views are not implemented.
