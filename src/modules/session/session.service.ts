@@ -100,6 +100,10 @@ export interface CurrentQr {
   /** Seconds until the code changes — what the lecturer's screen counts down. */
   expiresInSeconds: number;
   rotatesAt: string;
+  /** Students recorded present so far. */
+  checkedIn: number;
+  /** Students ACTIVE on the unit, i.e. who could check in. */
+  enrolled: number;
 }
 
 /**
@@ -121,12 +125,28 @@ export async function getCurrentQr(sessionId: string, lecturerUserId: string): P
   assertSessionAcceptingScans(session);
 
   const token = issueTokenFor(session);
+  const { checkedIn, enrolled } = await sessionRepository.countAttendance(session.id, session.unitId);
   return {
     session: toSummary(session),
     payload: token.payload,
     expiresInSeconds: token.expiresInSeconds,
     rotatesAt: token.rotatesAt.toISOString(),
+    checkedIn,
+    enrolled,
   };
+}
+
+/**
+ * The session, for its own lecturer only — whatever its state. Used by the
+ * attendance module to guard the attendee list.
+ */
+export async function getOwnedSession(sessionId: string, lecturerUserId: string): Promise<SessionSummary> {
+  const session = await sessionRepository.findSessionById(sessionId);
+  if (!session) throw AppError.notFound('Session not found.');
+  if (session.lecturerUserId !== lecturerUserId) {
+    throw AppError.forbidden('This session belongs to another lecturer.');
+  }
+  return toSummary(session);
 }
 
 /** Raw payload for the image endpoints, without the JSON envelope. */

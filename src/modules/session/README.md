@@ -78,9 +78,9 @@ the class meeting.
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | `POST` | `/api/v1/sessions` | Lecturer | Open a session for a unit they teach |
-| `GET` | `/api/v1/sessions/:id/qr` | Lecturer | Current code + countdown, as JSON |
+| `GET` | `/api/v1/sessions/:id/qr` | Lecturer | Current code + countdown, plus `checkedIn` / `enrolled` counts, as JSON |
 | `GET` | `/api/v1/sessions/:id/qr.image?format=png\|svg` | Lecturer | Rendered image; `X-QR-Expires-In` header carries the countdown |
-| `POST` | `/api/v1/sessions/scan` | Student | Submit a scanned code |
+| `POST` | `/api/v1/sessions/scan` | Student | Verify a scanned code without recording it (dry run — use `/attendance/check-in`) |
 | `PATCH` | `/api/v1/sessions/:id/status` | Lecturer | Pause, resume or close |
 
 Lecturers cannot scan and students cannot mint — a lecturer who could do both
@@ -97,6 +97,6 @@ attendance record — that belongs to the attendance module, which calls
 
 ## Tables
 
-Owned and created elsewhere. `docs/expected-schema.md` documents the exact
+Created by `db/migrations/005_*` and `006_*`. `docs/expected-schema.md` documents the exact
 columns these queries depend on: `units`, `attendance_sessions`,
 `unit_allocations`, `attendance_records`.

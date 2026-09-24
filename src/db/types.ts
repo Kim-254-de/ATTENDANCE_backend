@@ -48,6 +48,16 @@ export const AttendanceSessionStatus = {
 export type AttendanceSessionStatus =
   (typeof AttendanceSessionStatus)[keyof typeof AttendanceSessionStatus];
 
+/** Whether a student on a unit may check in. Only ACTIVE may. */
+export const AllocationStatus = {
+  ACTIVE: 'ACTIVE',
+  /** A student asked to join; waits for the lecturer. */
+  PENDING: 'PENDING',
+  /** Removed by the lecturer. Kept, not deleted, so past attendance still has its context. */
+  DROPPED: 'DROPPED',
+} as const;
+export type AllocationStatus = (typeof AllocationStatus)[keyof typeof AllocationStatus];
+
 export const AuditAction = {
   LECTURER_REGISTRATION_SUBMITTED: 'LECTURER_REGISTRATION_SUBMITTED',
   LECTURER_REGISTRATION_REVOKED: 'LECTURER_REGISTRATION_REVOKED',
@@ -65,6 +75,11 @@ export const AuditAction = {
   ATTENDANCE_SESSION_CLOSED: 'ATTENDANCE_SESSION_CLOSED',
   ATTENDANCE_SCAN_ACCEPTED: 'ATTENDANCE_SCAN_ACCEPTED',
   ATTENDANCE_SCAN_REJECTED: 'ATTENDANCE_SCAN_REJECTED',
+  UNIT_CREATED: 'UNIT_CREATED',
+  UNIT_STUDENTS_ALLOCATED: 'UNIT_STUDENTS_ALLOCATED',
+  UNIT_ALLOCATION_STATUS_CHANGED: 'UNIT_ALLOCATION_STATUS_CHANGED',
+  UNIT_ENROLMENT_REQUESTED: 'UNIT_ENROLMENT_REQUESTED',
+  ATTENDANCE_RECORDED: 'ATTENDANCE_RECORDED',
   PASSWORD_RESET_REQUESTED: 'PASSWORD_RESET_REQUESTED',
   PASSWORD_RESET_COMPLETED: 'PASSWORD_RESET_COMPLETED',
 } as const;

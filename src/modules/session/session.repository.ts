@@ -176,3 +176,17 @@ export async function hasAlreadyCheckedIn(
   );
   return row?.ok ?? false;
 }
+
+/** Check-ins recorded so far, and how many students could check in — the lecturer's live counter. */
+export async function countAttendance(
+  sessionId: string,
+  unitId: string,
+): Promise<{ checkedIn: number; enrolled: number }> {
+  const row = await queryOne<{ checked_in: number; enrolled: number }>(
+    `SELECT (SELECT COUNT(*) FROM attendance_records WHERE session_id = $1)::int AS checked_in,
+            (SELECT COUNT(*) FROM unit_allocations
+              WHERE unit_id = $2 AND status = 'ACTIVE')::int                AS enrolled`,
+    [sessionId, unitId],
+  );
+  return { checkedIn: row?.checked_in ?? 0, enrolled: row?.enrolled ?? 0 };
+}

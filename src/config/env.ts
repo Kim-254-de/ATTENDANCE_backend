@@ -70,6 +70,13 @@ const envSchema = z
         message: 'must contain the {staffNumber} placeholder',
       })
       .default('/v1/staff/{staffNumber}'),
+    ERP_STUDENT_LOOKUP_PATH: z
+      .string()
+      .min(1)
+      .refine((path) => path.includes('{registrationNumber}'), {
+        message: 'must contain the {registrationNumber} placeholder',
+      })
+      .default('/v1/students/{registrationNumber}'),
     ERP_AUTH_SCHEME: z.enum(['bearer', 'api-key', 'basic', 'none']).default('bearer'),
     ERP_API_KEY: z.string().optional(),
     ERP_API_KEY_HEADER: z.string().default('X-API-Key'),

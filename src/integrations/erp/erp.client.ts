@@ -1,9 +1,15 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { toStaffRecord } from './erp.mapper.js';
+import { toStaffRecord, toStudentRecord } from './erp.mapper.js';
 import { compareIdentity } from './erp.identity.js';
-import type { ClaimedIdentity, ErpLookupResult, ErpProvider, ErpStaffRecord } from './erp.types.js';
+import type {
+  ClaimedIdentity,
+  ErpLookupResult,
+  ErpProvider,
+  ErpStaffRecord,
+  ErpStudentLookupResult,
+} from './erp.types.js';
 
 /**
  * HTTP client for the institutional ERP.
@@ -70,11 +76,8 @@ function buildAuthHeaders(): Record<string, string> {
   }
 }
 
-function buildLookupUrl(staffNumber: string): string {
-  const path = env.ERP_STAFF_LOOKUP_PATH.replace(
-    '{staffNumber}',
-    encodeURIComponent(staffNumber),
-  );
+function buildUrl(pathTemplate: string, placeholder: string, value: string): string {
+  const path = pathTemplate.replace(placeholder, encodeURIComponent(value));
   const base = env.ERP_BASE_URL.replace(/\/+$/, '');
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
@@ -118,11 +121,51 @@ export class ErpHttpClient implements ErpProvider {
     return { status: 'VERIFIED', record };
   }
 
-  /** Performs the request with a timeout and bounded exponential backoff. */
+  /**
+   * Looks a registration number up in the ERP's student records, for allocating
+   * a student to a unit. Same failure contract as staff lookups: NOT_FOUND is
+   * the ERP's definitive answer, anything else going wrong is UNAVAILABLE.
+   */
+  async lookupStudent(registrationNumber: string): Promise<ErpStudentLookupResult> {
+    const normalised = registrationNumber.trim().toUpperCase();
+    const url = buildUrl(env.ERP_STUDENT_LOOKUP_PATH, '{registrationNumber}', normalised);
+    const body = await this.request(url, { registrationNumber: normalised });
+
+    if (body === 'NOT_FOUND') return { status: 'NOT_FOUND' };
+    if (body === 'UNAVAILABLE') {
+      return { status: 'UNAVAILABLE', reason: 'The student records system could not be reached.' };
+    }
+
+    const record = toStudentRecord(body, normalised);
+    if (!record) {
+      logger.error({ registrationNumber: normalised, body }, 'erp lookup: student response could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The student records system returned an unexpected response.' };
+    }
+    return record.isActive ? { status: 'FOUND', record } : { status: 'INACTIVE', record };
+  }
+
   private async fetchRecord(
     staffNumber: string,
   ): Promise<ErpStaffRecord | 'NOT_FOUND' | 'UNAVAILABLE'> {
-    const url = buildLookupUrl(staffNumber);
+    const url = buildUrl(env.ERP_STAFF_LOOKUP_PATH, '{staffNumber}', staffNumber);
+    const body = await this.request(url, { staffNumber });
+    if (body === 'NOT_FOUND' || body === 'UNAVAILABLE') return body;
+
+    const record = toStaffRecord(body, staffNumber);
+    if (!record) {
+      // A 200 we cannot parse is an integration fault, not proof of
+      // absence, so it must not revoke the registration.
+      logger.error({ staffNumber, body }, 'erp lookup: response could not be mapped');
+      return 'UNAVAILABLE';
+    }
+    return record;
+  }
+
+  /** Performs the request with a timeout and bounded exponential backoff. */
+  private async request(
+    url: string,
+    logContext: Record<string, string>,
+  ): Promise<unknown> {
     const headers = {
       Accept: 'application/json',
       'User-Agent': 'smart-attendance-backend',
@@ -146,9 +189,9 @@ export class ErpHttpClient implements ErpProvider {
           signal: AbortSignal.timeout(env.ERP_TIMEOUT_MS),
         });
 
-        // The definitive "this staff number is not ours".
+        // The definitive "this person is not ours".
         if (response.status === 404) {
-          logger.info({ staffNumber }, 'erp lookup: staff number not found');
+          logger.info(logContext, 'erp lookup: not found');
           return 'NOT_FOUND';
         }
 
@@ -166,32 +209,22 @@ export class ErpHttpClient implements ErpProvider {
         if (!response.ok) {
           lastFailure = `HTTP ${response.status}`;
           if (isRetryableStatus(response.status)) {
-            logger.warn({ status: response.status, attempt, staffNumber }, 'erp lookup: retrying');
+            logger.warn({ status: response.status, attempt, ...logContext }, 'erp lookup: retrying');
             continue;
           }
-          logger.error({ status: response.status, staffNumber }, 'erp lookup: unexpected status');
+          logger.error({ status: response.status, ...logContext }, 'erp lookup: unexpected status');
           return 'UNAVAILABLE';
         }
 
-        const body: unknown = await response.json();
-        const record = toStaffRecord(body, staffNumber);
-
-        if (!record) {
-          // A 200 we cannot parse is an integration fault, not proof of
-          // absence, so it must not revoke the registration.
-          logger.error({ staffNumber, body }, 'erp lookup: response could not be mapped');
-          return 'UNAVAILABLE';
-        }
-
-        return record;
+        return await response.json();
       } catch (error) {
         const isTimeout = error instanceof Error && error.name === 'TimeoutError';
         lastFailure = isTimeout ? 'timeout' : (error as Error).message;
-        logger.warn({ err: error, attempt, staffNumber }, 'erp lookup: request failed');
+        logger.warn({ err: error, attempt, ...logContext }, 'erp lookup: request failed');
       }
     }
 
-    logger.error({ staffNumber, lastFailure }, 'erp lookup: exhausted retries');
+    logger.error({ ...logContext, lastFailure }, 'erp lookup: exhausted retries');
     return 'UNAVAILABLE';
   }
 
