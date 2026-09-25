@@ -100,6 +100,45 @@ export async function sendPasswordChanged(message: PasswordChangedMessage): Prom
   });
 }
 
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+export interface UnitVerificationRequestMessage {
+  to: string;
+  adminName: string;
+  unitCode: string;
+  unitName: string;
+  lecturerName: string;
+  /** The unit's issued weekly meeting slot. 0=Sunday..6=Saturday, matches JS Date#getDay(). */
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+}
+
+/**
+ * A lecturer added a unit whose code exists on the issued timetable (checked
+ * automatically against the ERP), but the timetable does not list this
+ * lecturer as the one assigned to teach it — so an administrator is asked to
+ * confirm the lecturer-unit assignment by hand before it can be used to
+ * activate a class (unit.service.ts createUnit / session.service.ts createSession).
+ */
+export async function sendUnitVerificationRequest(message: UnitVerificationRequestMessage): Promise<void> {
+  await deliver({
+    to: message.to,
+    subject: `Confirm lecturer assignment: ${message.unitCode}`,
+    text: [
+      `Hello ${message.adminName},`,
+      '',
+      `${message.lecturerName} added a unit that exists on the timetable, but the timetable`,
+      "does not list them as its assigned lecturer. Please confirm they're allocated to teach it:",
+      '',
+      `  ${message.unitCode} — ${message.unitName}`,
+      `  ${DAY_NAMES[message.dayOfWeek]} ${message.startTime}–${message.endTime}`,
+      '',
+      'No classes can be activated for this unit until the assignment is confirmed.',
+    ].join('\n'),
+  });
+}
+
 function buildResetUrl(token: string): string {
   const base = env.APP_PUBLIC_URL;
   return `${base.replace(/\/+$/, '')}/reset-password?token=${encodeURIComponent(token)}`;

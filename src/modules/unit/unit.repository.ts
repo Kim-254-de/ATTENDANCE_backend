@@ -10,6 +10,9 @@ export interface UnitSchedule {
   endTime: string;
 }
 
+/** A lecturer-added unit starts PENDING_VERIFICATION; an admin verifies it against the issued timetable. */
+export type UnitVerificationStatus = 'PENDING_VERIFICATION' | 'VERIFIED';
+
 export interface UnitSummary {
   id: string;
   code: string;
@@ -21,6 +24,7 @@ export interface UnitSummary {
   createdAt: Date;
   /** Every unit has exactly one issued slot; null only for rows created before schedules existed. */
   schedule: UnitSchedule | null;
+  status: UnitVerificationStatus;
 }
 
 interface UnitSummaryRow {
@@ -33,6 +37,7 @@ interface UnitSummaryRow {
   day_of_week: number | null;
   start_time: string | null;
   end_time: string | null;
+  status: UnitVerificationStatus;
 }
 
 const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
@@ -46,10 +51,11 @@ const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
     row.day_of_week === null || row.start_time === null || row.end_time === null
       ? null
       : { dayOfWeek: row.day_of_week, startTime: row.start_time.slice(0, 5), endTime: row.end_time.slice(0, 5) },
+  status: row.status,
 });
 
 const SELECT_UNIT_SUMMARY = `
-  SELECT u.id, u.code, u.name, u.created_at,
+  SELECT u.id, u.code, u.name, u.created_at, u.status,
          COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int  AS student_count,
          COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count,
          s.day_of_week, s.start_time, s.end_time
@@ -58,6 +64,8 @@ const SELECT_UNIT_SUMMARY = `
     LEFT JOIN unit_schedule s ON s.unit_id = u.id
 `;
 const GROUP_BY_UNIT_SUMMARY = 'GROUP BY u.id, s.day_of_week, s.start_time, s.end_time';
+// u.status is functionally dependent on u.id (the primary key already in GROUP BY), so
+// Postgres allows selecting it un-aggregated without adding it to the GROUP BY list.
 
 export async function findUnitsForLecturer(lecturerUserId: string): Promise<UnitSummary[]> {
   const result = await query<UnitSummaryRow>(
@@ -79,6 +87,10 @@ export async function findUnitSummary(unitId: string): Promise<UnitSummary | nul
  * The unit whose issued slot covers this moment, for this lecturer — the one
  * `ActivateClass` shows, if any.
  *
+ * Excludes a unit still `PENDING_VERIFICATION`: `session.service.ts` would
+ * refuse to activate a class for it anyway, so surfacing it here would only
+ * hand the lecturer a button that 403s.
+ *
  * `dayOfWeek`/`timeOfDay` are computed by the caller from a JS `Date` (server
  * local time — the same convention `startTime`/`endTime` were entered in),
  * rather than cast inside SQL: `unit_schedule.start_time`/`end_time` are
@@ -94,6 +106,7 @@ export async function findCurrentUnitForLecturer(
   const row = await queryOne<UnitSummaryRow>(
     `${SELECT_UNIT_SUMMARY}
       WHERE u.lecturer_user_id = $1
+        AND u.status = 'VERIFIED'
         AND s.day_of_week = $2
         AND $3::time BETWEEN s.start_time AND s.end_time
       ${GROUP_BY_UNIT_SUMMARY}`,
@@ -125,6 +138,19 @@ export async function findUnitById(unitId: string): Promise<UnitOwner | null> {
   return row ? { id: row.id, code: row.code, lecturerUserId: row.lecturer_user_id } : null;
 }
 
+/** Who to email when a unit needs verifying: every active administrator. */
+export interface AdminRecipient {
+  email: string;
+  fullName: string;
+}
+
+export async function findAdminRecipients(): Promise<AdminRecipient[]> {
+  const result = await query<{ email: string; full_name: string }>(
+    `SELECT email, full_name FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' AND deleted_at IS NULL`,
+  );
+  return result.rows.map((row) => ({ email: row.email, fullName: row.full_name }));
+}
+
 export async function findUnitByCode(code: string): Promise<UnitOwner | null> {
   const row = await queryOne<{ id: string; code: string; lecturer_user_id: string }>(
     `SELECT id, code, lecturer_user_id FROM units WHERE code = $1`,
@@ -139,11 +165,13 @@ export async function createUnit(
   name: string,
   lecturerUserId: string,
   schedule: UnitSchedule,
+  status: UnitVerificationStatus,
 ): Promise<string> {
   return transaction(async (client: PoolClient) => {
     const row = await queryOne<{ id: string }>(
-      `INSERT INTO units (code, name, lecturer_user_id) VALUES ($1, $2, $3) RETURNING id`,
-      [code, name, lecturerUserId],
+      `INSERT INTO units (code, name, lecturer_user_id, status)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [code, name, lecturerUserId, status],
       client,
     );
     if (!row) throw new Error('units insert returned no row');
@@ -166,7 +194,7 @@ export interface Allocation {
   studentUserId: string | null;
   fullName: string | null;
   status: AllocationStatus;
-  source: 'LECTURER' | 'SELF_ENROLLED';
+  source: 'LECTURER' | 'SELF_ENROLLED' | 'ERP';
   /** Whether the student has an account yet, i.e. can actually sign in and check in. */
   hasAccount: boolean;
   createdAt: Date;
@@ -178,7 +206,7 @@ interface AllocationRow {
   student_user_id: string | null;
   full_name: string | null;
   status: AllocationStatus;
-  source: 'LECTURER' | 'SELF_ENROLLED';
+  source: 'LECTURER' | 'SELF_ENROLLED' | 'ERP';
   created_at: Date;
 }
 
@@ -196,7 +224,7 @@ const toAllocation = (row: AllocationRow): Allocation => ({
 const ALLOCATION_COLUMNS = `a.id, a.registration_number, a.student_user_id,
   COALESCE(a.full_name, s.full_name) AS full_name, a.status, a.source, a.created_at`;
 
-/** Pending requests first — they are the ones waiting on the lecturer. */
+/** ACTIVE students first, dropped ones last. Nothing sits PENDING any more — see syncAllocationsFromErp. */
 export async function listAllocations(unitId: string): Promise<Allocation[]> {
   const result = await query<AllocationRow>(
     `SELECT ${ALLOCATION_COLUMNS}
@@ -210,92 +238,53 @@ export async function listAllocations(unitId: string): Promise<Allocation[]> {
   return result.rows.map(toAllocation);
 }
 
-export type AllocateOutcome = 'ADDED' | 'RESTORED' | 'ALREADY_ALLOCATED';
-
-/**
- * Puts a registration number on a unit as ACTIVE.
- *
- * The upsert is what makes two concurrent "add" requests safe; a previously
- * DROPPED student is restored rather than duplicated. `xmax = 0` is true only
- * for a freshly inserted row, which is how an insert is told apart from an update.
- */
-export async function allocateByRegistrationNumber(args: {
-  unitId: string;
+export interface ErpEnrollment {
   registrationNumber: string;
   fullName: string;
-  addedByUserId: string;
-}): Promise<AllocateOutcome> {
-  const row = await queryOne<{ inserted: boolean }>(
-    `INSERT INTO unit_allocations
-       (unit_id, registration_number, full_name, status, source, added_by_user_id)
-     VALUES ($1, $2, $3, 'ACTIVE', 'LECTURER', $4)
-     ON CONFLICT (unit_id, registration_number) WHERE registration_number IS NOT NULL
-     DO UPDATE SET status = 'ACTIVE', full_name = EXCLUDED.full_name, updated_at = NOW()
-       WHERE unit_allocations.status <> 'ACTIVE'
-     RETURNING (xmax = 0) AS inserted`,
-    [args.unitId, args.registrationNumber, args.fullName, args.addedByUserId],
-  );
-  if (!row) return 'ALREADY_ALLOCATED';
-  return row.inserted ? 'ADDED' : 'RESTORED';
 }
-
-export async function findAllocation(
-  unitId: string,
-  allocationId: string,
-): Promise<Allocation | null> {
-  const row = await queryOne<AllocationRow>(
-    `SELECT ${ALLOCATION_COLUMNS}
-       FROM unit_allocations a
-       LEFT JOIN users s ON s.id = a.student_user_id
-      WHERE a.unit_id = $1 AND a.id = $2`,
-    [unitId, allocationId],
-  );
-  return row ? toAllocation(row) : null;
-}
-
-export async function setAllocationStatus(
-  allocationId: string,
-  status: AllocationStatus,
-): Promise<void> {
-  await query(`UPDATE unit_allocations SET status = $2, updated_at = NOW() WHERE id = $1`, [
-    allocationId,
-    status,
-  ]);
-}
-
-export type EnrolOutcome = 'REQUESTED' | 'ALREADY_REQUESTED' | 'ALREADY_ACTIVE' | 'DROPPED';
 
 /**
- * Records a student's request to join. Never upgrades an existing row: a
- * student the lecturer dropped cannot put themselves back by re-requesting.
+ * Reconciles a unit's roster with the ERP's enrollment list — this is how
+ * students get onto a unit now, in place of a lecturer adding them or a
+ * student self-enrolling. Each enrolled student is upserted ACTIVE with
+ * source 'ERP'; an 'ERP'-sourced row that dropped off the ERP's list is
+ * marked DROPPED (kept, not deleted, so past attendance keeps its context —
+ * same reasoning as a lecturer-removed student previously). Rows from
+ * another source (legacy lecturer-added or self-enrolled data, from before
+ * this sync existed) are left untouched either way.
  */
-export async function requestEnrolment(
+export async function syncAllocationsFromErp(
   unitId: string,
-  studentUserId: string,
-): Promise<EnrolOutcome> {
-  const inserted = await queryOne<{ id: string }>(
-    `INSERT INTO unit_allocations (unit_id, student_user_id, status, source, added_by_user_id)
-     VALUES ($1, $2, 'PENDING', 'SELF_ENROLLED', $2)
-     ON CONFLICT (unit_id, student_user_id) WHERE student_user_id IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [unitId, studentUserId],
-  );
-  if (inserted) return 'REQUESTED';
-
-  const existing = await queryOne<{ status: AllocationStatus }>(
-    `SELECT status FROM unit_allocations WHERE unit_id = $1 AND student_user_id = $2`,
-    [unitId, studentUserId],
-  );
-  if (existing?.status === 'ACTIVE') return 'ALREADY_ACTIVE';
-  if (existing?.status === 'DROPPED') return 'DROPPED';
-  return 'ALREADY_REQUESTED';
+  enrollments: ErpEnrollment[],
+): Promise<void> {
+  await transaction(async (client: PoolClient) => {
+    for (const enrollment of enrollments) {
+      await query(
+        `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source)
+         VALUES ($1, $2, $3, 'ACTIVE', 'ERP')
+         ON CONFLICT (unit_id, registration_number) WHERE registration_number IS NOT NULL
+         DO UPDATE SET status = 'ACTIVE', full_name = EXCLUDED.full_name, source = 'ERP', updated_at = NOW()`,
+        [unitId, enrollment.registrationNumber, enrollment.fullName],
+        client,
+      );
+    }
+    await query(
+      `UPDATE unit_allocations
+          SET status = 'DROPPED', updated_at = NOW()
+        WHERE unit_id = $1 AND source = 'ERP' AND status = 'ACTIVE'
+          AND NOT (registration_number = ANY($2::text[]))`,
+      [unitId, enrollments.map((e) => e.registrationNumber)],
+      client,
+    );
+  });
 }
 
 /**
  * For student registration to call once a student's account exists: attaches
- * the allocations a lecturer made by registration number to that account, so
- * the student can check in. Skips any unit the student already self-enrolled
- * on, which would otherwise break the one-row-per-student-per-unit index.
+ * the allocations synced from the ERP by registration number to that
+ * account, so the student can check in. Skips any unit the student is
+ * already linked to, which would otherwise break the
+ * one-row-per-student-per-unit index.
  */
 export async function linkAllocationsToStudent(
   studentUserId: string,

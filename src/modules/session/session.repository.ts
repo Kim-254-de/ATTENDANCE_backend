@@ -121,16 +121,21 @@ export async function updateSessionStatus(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** True when the lecturer teaches the unit this session belongs to. */
-export async function lecturerOwnsUnit(unitId: string, lecturerUserId: string): Promise<boolean> {
-  const row = await queryOne<{ ok: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM units
-        WHERE id = $1 AND lecturer_user_id = $2
-     ) AS ok`,
+export interface LecturerUnit {
+  /** False while a unit awaits admin verification — createSession refuses those. */
+  verified: boolean;
+}
+
+/** The unit this session would belong to, if the lecturer teaches it — null otherwise. */
+export async function findLecturerUnit(
+  unitId: string,
+  lecturerUserId: string,
+): Promise<LecturerUnit | null> {
+  const row = await queryOne<{ status: string }>(
+    `SELECT status FROM units WHERE id = $1 AND lecturer_user_id = $2`,
     [unitId, lecturerUserId],
   );
-  return row?.ok ?? false;
+  return row ? { verified: row.status === 'VERIFIED' } : null;
 }
 
 /**

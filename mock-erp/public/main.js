@@ -1,6 +1,7 @@
 const STATUS = {
   students: ['active', 'deferred', 'graduated', 'discontinued'],
   staff: ['active', 'left', 'suspended'],
+  courses: ['active', 'inactive'],
 };
 const CONFIG = {
   students: {
@@ -12,6 +13,14 @@ const CONFIG = {
     title: 'Lecturer', key: 'staffNumber', keyLabel: 'Staff number',
     columns: [['staffNumber', 'Staff number'], ['title', 'Title'], ['fullName', 'Name'], ['email', 'Email'], ['department', 'Department'], ['faculty', 'Faculty'], ['status', 'Status']],
     fields: [['staffNumber', 'Staff number', 'text'], ['title', 'Title (Dr., Prof. …)', 'text'], ['fullName', 'Full name (without title)', 'text'], ['email', 'Email (optional)', 'email'], ['department', 'Department', 'text'], ['faculty', 'Faculty', 'text'], ['status', 'Status', 'select']],
+  },
+  // The issued timetable: who's assigned to teach each course, and when. The
+  // application's unit module looks a code up here — this is how a lecturer
+  // "adding a unit" gets verified automatically instead of typed freely.
+  courses: {
+    title: 'Course', key: 'code', keyLabel: 'Code',
+    columns: [['code', 'Code'], ['name', 'Name'], ['staffNumber', 'Staff number'], ['dayOfWeek', 'Day'], ['startTime', 'Start'], ['endTime', 'End'], ['status', 'Status']],
+    fields: [['code', 'Code', 'text'], ['name', 'Name', 'text'], ['staffNumber', 'Staff number (who teaches it, optional)', 'text'], ['dayOfWeek', 'Day of week (0=Sun..6=Sat)', 'number'], ['startTime', 'Start time (HH:MM)', 'text'], ['endTime', 'End time (HH:MM)', 'text'], ['status', 'Status', 'select']],
   },
 };
 
@@ -84,7 +93,7 @@ function openForm(rec) {
       : el('input', { name: k, type });
     input.value = rec?.[k] ?? (type === 'select' ? 'active' : '');
     if (rec && k === cfg.key) input.disabled = true; // the ID can't change
-    if (k === 'fullName' || k === cfg.key) input.required = true;
+    if (k === 'fullName' || k === 'name' || k === cfg.key) input.required = true;
     return el('label', {}, label, input, el('small', { id: 'err_' + k }));
   }));
   $('dlg').showModal();
@@ -109,7 +118,7 @@ $('cancel').onclick = () => $('dlg').close();
 
 async function remove(r) {
   const cfg = CONFIG[tab];
-  if (!confirm(`Delete ${cfg.title.toLowerCase()} ${r[cfg.key]} (${r.fullName})?`)) return;
+  if (!confirm(`Delete ${cfg.title.toLowerCase()} ${r[cfg.key]} (${r.fullName ?? r.name})?`)) return;
   try { await api(`/${tab}/${encodeURIComponent(r[cfg.key])}`, { method: 'DELETE' }); await load(); }
   catch (e) { $('listErr').textContent = e.message; }
 }

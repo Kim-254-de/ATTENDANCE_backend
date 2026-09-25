@@ -3,14 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { validate } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import * as unitController from './unit.controller.js';
-import {
-  addStudentsSchema,
-  allocationParamSchema,
-  createUnitSchema,
-  enrolSchema,
-  unitIdParamSchema,
-  updateAllocationSchema,
-} from './unit.schema.js';
+import { createUnitSchema, unitIdParamSchema } from './unit.schema.js';
 
 export const unitRouter: Router = Router();
 
@@ -20,7 +13,7 @@ unitRouter.get('/', requireAuth('LECTURER'), asyncHandler(unitController.listUni
 /** The unit ActivateClass may open a session for right now, per the lecturer's issued timetable. */
 unitRouter.get('/current', requireAuth('LECTURER'), asyncHandler(unitController.getCurrentUnit));
 
-/** A lecturer adds a unit they teach. */
+/** A lecturer adds a unit they teach, by code. */
 unitRouter.post(
   '/',
   requireAuth('LECTURER'),
@@ -28,34 +21,10 @@ unitRouter.post(
   asyncHandler(unitController.createUnit),
 );
 
-/** A student asks to join a unit by its code; the lecturer approves. */
-unitRouter.post(
-  '/enrol',
-  requireAuth('STUDENT'),
-  validate({ body: enrolSchema }),
-  asyncHandler(unitController.enrol),
-);
-
-/** Everyone on the unit, pending requests first. */
+/** Everyone on the unit — read-only, synced from the ERP's enrollment records. */
 unitRouter.get(
   '/:unitId/students',
   requireAuth('LECTURER'),
   validate({ params: unitIdParamSchema }),
   asyncHandler(unitController.listStudents),
-);
-
-/** Add students by registration number, each verified against the ERP. */
-unitRouter.post(
-  '/:unitId/students',
-  requireAuth('LECTURER'),
-  validate({ params: unitIdParamSchema, body: addStudentsSchema }),
-  asyncHandler(unitController.addStudents),
-);
-
-/** Approve a request, remove a student, or restore one. */
-unitRouter.patch(
-  '/:unitId/students/:allocationId',
-  requireAuth('LECTURER'),
-  validate({ params: allocationParamSchema, body: updateAllocationSchema }),
-  asyncHandler(unitController.updateAllocation),
 );

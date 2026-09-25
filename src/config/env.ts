@@ -77,6 +77,22 @@ const envSchema = z
         message: 'must contain the {registrationNumber} placeholder',
       })
       .default('/v1/students/{registrationNumber}'),
+    /** The issued timetable: a unit's real name/schedule/assigned lecturer, looked up by code. */
+    ERP_COURSE_LOOKUP_PATH: z
+      .string()
+      .min(1)
+      .refine((path) => path.includes('{code}'), {
+        message: 'must contain the {code} placeholder',
+      })
+      .default('/v1/courses/{code}'),
+    /** A unit's roster: who the registrar's records enrol in this course. */
+    ERP_COURSE_ENROLLMENTS_PATH: z
+      .string()
+      .min(1)
+      .refine((path) => path.includes('{code}'), {
+        message: 'must contain the {code} placeholder',
+      })
+      .default('/v1/courses/{code}/students'),
     ERP_AUTH_SCHEME: z.enum(['bearer', 'api-key', 'basic', 'none']).default('bearer'),
     ERP_API_KEY: z.string().optional(),
     ERP_API_KEY_HEADER: z.string().default('X-API-Key'),

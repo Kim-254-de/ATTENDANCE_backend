@@ -4,11 +4,11 @@ import { parse } from 'dotenv';
 import type { Express } from 'express';
 import pg from 'pg';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Units, allocations and check-in against a real Postgres database, with the
- * ERP's student records stubbed at the fetch boundary.
+ * ERP's student and course (timetable) records stubbed at the fetch boundary.
  */
 const TEST_DB = 'attendance_units_test';
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
@@ -23,15 +23,16 @@ const body = <T = Record<string, unknown>>(res: request.Response) => res.body as
 
 const uniq = (() => { let n = 0; return () => ++n; })();
 
-/** A signed-in user of either role, returned as a bearer token. */
+/** A signed-in user of either role, returned as a bearer token; lecturers also get their ERP staff number. */
 async function makeUser(role: 'LECTURER' | 'STUDENT') {
   const n = uniq();
+  const staffNumber = role === 'LECTURER' ? `STF/U${n}` : null;
   const { rows: [u] } = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, full_name, role, status, email_verified_at)
      VALUES ($1, 'x', $2, $3, 'ACTIVE', NOW()) RETURNING id`,
     [`${role.toLowerCase()}${n}@uni.ac.ke`, `${role === 'LECTURER' ? 'Dr. Test' : 'Student'} ${n}`, role]);
-  if (role === 'LECTURER') {
-    await pool.query(`INSERT INTO lecturer_profiles (user_id, staff_number, erp_verified_at) VALUES ($1, $2, NOW())`, [u!.id, `STF/U${n}`]);
+  if (staffNumber) {
+    await pool.query(`INSERT INTO lecturer_profiles (user_id, staff_number, erp_verified_at) VALUES ($1, $2, NOW())`, [u!.id, staffNumber]);
   }
   const sessionId = randomUUID();
   await pool.query(
@@ -39,19 +40,57 @@ async function makeUser(role: 'LECTURER' | 'STUDENT') {
     [sessionId, u!.id]);
   const { signAccessToken } = await import('../../src/modules/auth/auth.session.js');
   const token = await signAccessToken({ userId: u!.id, sessionId, role });
-  return { id: u!.id, auth: `Bearer ${token}` };
+  return { id: u!.id, auth: `Bearer ${token}`, staffNumber };
 }
 
-/** The ERP's student records, as far as these tests are concerned. */
+/** The ERP's student directory, as far as these tests are concerned — used to fill in a roster's names. */
 const erpStudents: Record<string, { status: string; fullName: string } | 'DOWN'> = {
   'REG/001': { status: 'active', fullName: 'Ama Mensah' },
   'REG/002': { status: 'active', fullName: 'Kofi Boateng' },
   'REG/OLD': { status: 'graduated', fullName: 'Old Grad' },
 };
 
+/**
+ * The ERP's issued timetable, as far as these tests are concerned: any course
+ * code is FOUND with today's all-day schedule (see SCHEDULE below) unless
+ * listed here as DOWN or unassigned to nobody in particular ('' means
+ * "not found on the timetable"). Keyed by normalised code; tests assign a
+ * lecturer's staff number here to exercise the auto-verify path.
+ */
+const erpCourseStaff: Record<string, string | null | 'DOWN' | 'NOT_FOUND'> = {};
+
+/**
+ * Who the ERP currently enrols in each course — a unit's real roster, keyed
+ * by normalised code. A course not listed here has an empty roster, same as
+ * a course nobody's enrolled in yet; DOWN/NOT_FOUND simulate a sync failure.
+ */
+const erpEnrollments: Record<string, string[] | 'DOWN' | 'NOT_FOUND'> = {};
+
+/** Stubs every ERP lookup the unit module makes: courses, their rosters, and the student directory. */
 function stubErp() {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes('/courses/') && url.endsWith('/students')) {
+      const code = decodeURIComponent(url.split('/courses/')[1]!.replace(/\/students$/, ''));
+      const roster = erpEnrollments[code] ?? [];
+      if (roster === 'DOWN') return Promise.resolve(new Response('down', { status: 503 }));
+      if (roster === 'NOT_FOUND') return Promise.resolve(new Response('{}', { status: 404 }));
+      const results = roster.map((reg) => {
+        const found = erpStudents[reg];
+        return { registrationNumber: reg, fullName: found && found !== 'DOWN' ? found.fullName : `Student ${reg}`, status: 'active' };
+      });
+      return Promise.resolve(Response.json({ count: results.length, results }));
+    }
+    if (url.includes('/courses/')) {
+      const code = decodeURIComponent(url.split('/courses/')[1] ?? '');
+      const assignment = code in erpCourseStaff ? erpCourseStaff[code] : null;
+      if (assignment === 'DOWN') return Promise.resolve(new Response('down', { status: 503 }));
+      if (assignment === 'NOT_FOUND') return Promise.resolve(new Response('{}', { status: 404 }));
+      return Promise.resolve(Response.json({
+        code, name: `${code} Course`, staffNumber: assignment,
+        dayOfWeek: SCHEDULE.dayOfWeek, startTime: SCHEDULE.startTime, endTime: SCHEDULE.endTime, status: 'active',
+      }));
+    }
     const reg = decodeURIComponent(url.split('/students/')[1] ?? '');
     const found = erpStudents[reg];
     if (found === 'DOWN') return Promise.resolve(new Response('down', { status: 503 }));
@@ -79,6 +118,9 @@ beforeAll(async () => {
   ({ linkAllocationsToStudent } = await import('../../src/modules/unit/index.js'));
 });
 
+// Every unit creation now looks the code up against the ERP, so this must be
+// live for every test, not just the ones about student allocation.
+beforeEach(stubErp);
 afterEach(() => { vi.restoreAllMocks(); });
 
 afterAll(async () => {
@@ -103,21 +145,56 @@ const api = (auth: string) => ({
  */
 const SCHEDULE = { dayOfWeek: new Date().getDay(), startTime: '00:00', endTime: '23:59' };
 
+/** A real admin verifies a unit before it can activate a class; these tests stand in for that. */
+async function verifyUnit(unitId: string) {
+  await pool.query(`UPDATE units SET status = 'VERIFIED' WHERE id = $1`, [unitId]);
+}
+
 async function makeUnit(lecturer: { auth: string }, code = `TEST ${uniq()}`) {
-  const res = await api(lecturer.auth).post('/units', { code, name: 'Testing Unit', ...SCHEDULE });
+  const res = await api(lecturer.auth).post('/units', { code });
   expect(res.status).toBe(201);
-  return body<{ id: string; code: string }>(res).data;
+  const unit = body<{ id: string; code: string }>(res).data;
+  await verifyUnit(unit.id);
+  return unit;
 }
 
 describe('units', () => {
-  it('lets a lecturer add a unit, normalising the code, and lists it with counts', async () => {
+  it('lets a lecturer add a unit by code, normalising it, with the name/schedule taken from the ERP', async () => {
     const lecturer = await makeUser('LECTURER');
-    const res = await api(lecturer.auth).post('/units', { code: '  cosc   100 ', name: 'Intro to Computing', ...SCHEDULE });
+    const res = await api(lecturer.auth).post('/units', { code: '  cosc   100 ' });
     expect(res.status).toBe(201);
-    expect(body(res).data).toMatchObject({ code: 'COSC 100', name: 'Intro to Computing', studentCount: 0, pendingCount: 0 });
+    expect(body(res).data).toMatchObject({ code: 'COSC 100', name: 'COSC 100 Course', studentCount: 0, pendingCount: 0 });
 
     const list = await api(lecturer.auth).get('/units');
     expect(body<unknown[]>(list).data).toEqual([expect.objectContaining({ code: 'COSC 100' })]);
+  });
+
+  it('refuses a code that does not exist on the ERP timetable', async () => {
+    const lecturer = await makeUser('LECTURER');
+    erpCourseStaff['NO SUCH 1'] = 'NOT_FOUND';
+    const res = await api(lecturer.auth).post('/units', { code: 'NO SUCH 1' });
+    expect(res.status).toBe(404);
+  });
+
+  it('fails closed when the ERP timetable is unreachable', async () => {
+    const lecturer = await makeUser('LECTURER');
+    erpCourseStaff['DOWN 1'] = 'DOWN';
+    const res = await api(lecturer.auth).post('/units', { code: 'DOWN 1' });
+    expect(res.status).toBe(503);
+  });
+
+  it('is VERIFIED immediately when the ERP timetable already lists this lecturer, no admin involved', async () => {
+    const lecturer = await makeUser('LECTURER');
+    erpCourseStaff['AUTO 1'] = lecturer.staffNumber;
+    const res = await api(lecturer.auth).post('/units', { code: 'AUTO 1' });
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ status: 'VERIFIED' });
+
+    // VERIFIED means usable at once — no dev:verify-unit step needed.
+    const activate = await api(lecturer.auth).post('/sessions', {
+      unitId: body<{ id: string }>(res).data.id, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
+    expect(activate.status).toBe(201);
   });
 
   it('refuses a code already in use, saying whose it is', async () => {
@@ -125,80 +202,97 @@ describe('units', () => {
     const b = await makeUser('LECTURER');
     await makeUnit(a, 'DUPE 1');
 
-    const again = await api(a.auth).post('/units', { code: 'dupe 1', name: 'Again', ...SCHEDULE });
+    const again = await api(a.auth).post('/units', { code: 'dupe 1' });
     expect(again.status).toBe(409);
     expect(body(again).error?.message).toMatch(/already added/);
 
-    const other = await api(b.auth).post('/units', { code: 'DUPE 1', name: 'Mine', ...SCHEDULE });
+    const other = await api(b.auth).post('/units', { code: 'DUPE 1' });
     expect(other.status).toBe(409);
     expect(body(other).error?.message).toMatch(/another lecturer/);
   });
 
   it('is lecturer-only, and a lecturer cannot see another lecturer\'s students', async () => {
     const student = await makeUser('STUDENT');
-    expect((await api(student.auth).post('/units', { code: 'NOPE 1', name: 'x', ...SCHEDULE })).status).toBe(403);
+    expect((await api(student.auth).post('/units', { code: 'NOPE 1' })).status).toBe(403);
 
     const owner = await makeUser('LECTURER');
     const other = await makeUser('LECTURER');
     const unit = await makeUnit(owner);
     expect((await api(other.auth).get(`/units/${unit.id}/students`)).status).toBe(403);
   });
+
+  it('lands PENDING_VERIFICATION when the ERP timetable does not list this lecturer, and cannot activate a class until an admin verifies it', async () => {
+    const lecturer = await makeUser('LECTURER');
+    const created = await api(lecturer.auth).post('/units', { code: 'PEND 1' });
+    expect(body(created).data).toMatchObject({ status: 'PENDING_VERIFICATION' });
+    const unitId = body<{ id: string }>(created).data.id;
+
+    const blocked = await api(lecturer.auth).post('/sessions', {
+      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
+    expect(blocked.status).toBe(403);
+
+    await pool.query(`UPDATE units SET status = 'VERIFIED' WHERE id = $1`, [unitId]);
+
+    const allowed = await api(lecturer.auth).post('/sessions', {
+      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
+    expect(allowed.status).toBe(201);
+  });
 });
 
-describe('allocating students by registration number', () => {
-  it('verifies each number against the ERP and reports per-number results', async () => {
-    stubErp();
+describe('the roster, synced from the ERP', () => {
+  it('reflects who the ERP enrols, with their real names, and is read-only to the lecturer', async () => {
     const lecturer = await makeUser('LECTURER');
     const unit = await makeUnit(lecturer);
+    erpEnrollments[unit.code] = ['REG/001', 'REG/002'];
 
-    const res = await api(lecturer.auth).post(`/units/${unit.id}/students`, {
-      registrationNumbers: ['reg/001', 'REG/OLD', 'REG/404', 'REG/001'],
-    });
-    expect(res.status).toBe(200);
-    expect(body<unknown[]>(res).data).toEqual([
-      { registrationNumber: 'REG/001', status: 'ADDED', fullName: 'Ama Mensah' },
-      { registrationNumber: 'REG/OLD', status: 'INACTIVE', fullName: 'Old Grad' },
-      { registrationNumber: 'REG/404', status: 'NOT_FOUND', fullName: null },
+    const students = body<Array<{ registrationNumber: string; fullName: string; status: string; source: string; hasAccount: boolean }>>(
+      await api(lecturer.auth).get(`/units/${unit.id}/students`)).data;
+    expect(students).toEqual([
+      expect.objectContaining({ registrationNumber: 'REG/001', fullName: 'Ama Mensah', status: 'ACTIVE', source: 'ERP', hasAccount: false }),
+      expect.objectContaining({ registrationNumber: 'REG/002', fullName: 'Kofi Boateng', status: 'ACTIVE', source: 'ERP' }),
     ]);
 
-    const again = await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/001'] });
-    expect(body<Array<{ status: string }>>(again).data[0]!.status).toBe('ALREADY_ALLOCATED');
+    // The endpoints a lecturer used to change the roster with are gone.
+    expect((await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/001'] })).status).toBe(404);
+    expect((await api(lecturer.auth).patch(`/units/${unit.id}/students/${randomUUID()}`, { status: 'DROPPED' })).status).toBe(404);
+    expect((await api(lecturer.auth).post('/units/enrol', { code: unit.code })).status).toBe(404);
+  });
 
-    const students = body<Array<{ registrationNumber: string; status: string; hasAccount: boolean }>>(
+  it('re-syncing does not duplicate anyone, and drops whoever the ERP no longer enrols', async () => {
+    const lecturer = await makeUser('LECTURER');
+    const unit = await makeUnit(lecturer);
+    erpEnrollments[unit.code] = ['REG/001', 'REG/002'];
+    await api(lecturer.auth).get(`/units/${unit.id}/students`);
+
+    erpEnrollments[unit.code] = ['REG/001'];
+    const students = body<Array<{ registrationNumber: string; status: string }>>(
       await api(lecturer.auth).get(`/units/${unit.id}/students`)).data;
-    expect(students).toEqual([expect.objectContaining({ registrationNumber: 'REG/001', status: 'ACTIVE', hasAccount: false })]);
+    expect(students).toHaveLength(2); // kept, not deleted — past attendance keeps its context
+    expect(students.find((s) => s.registrationNumber === 'REG/001')!.status).toBe('ACTIVE');
+    expect(students.find((s) => s.registrationNumber === 'REG/002')!.status).toBe('DROPPED');
   });
 
-  it('fails closed when the ERP is down', async () => {
-    erpStudents['REG/DOWN'] = 'DOWN';
-    stubErp();
+  it('fails soft: an ERP outage leaves the last-synced roster readable', async () => {
     const lecturer = await makeUser('LECTURER');
     const unit = await makeUnit(lecturer);
-    const res = await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/DOWN'] });
-    expect(body<Array<{ status: string }>>(res).data[0]!.status).toBe('UNAVAILABLE');
-    expect(body<unknown[]>(await api(lecturer.auth).get(`/units/${unit.id}/students`)).data).toEqual([]);
+    erpEnrollments[unit.code] = ['REG/001'];
+    await api(lecturer.auth).get(`/units/${unit.id}/students`);
+
+    erpEnrollments[unit.code] = 'DOWN';
+    const res = await api(lecturer.auth).get(`/units/${unit.id}/students`);
+    expect(res.status).toBe(200);
+    expect(body<Array<{ registrationNumber: string; status: string }>>(res).data).toEqual([
+      expect.objectContaining({ registrationNumber: 'REG/001', status: 'ACTIVE' }),
+    ]);
   });
 
-  it('restores a dropped student instead of duplicating them', async () => {
-    stubErp();
+  it('links an ERP-synced allocation to a student account once one exists', async () => {
     const lecturer = await makeUser('LECTURER');
     const unit = await makeUnit(lecturer);
-    await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/002'] });
-    const [allocation] = body<Array<{ id: string }>>(await api(lecturer.auth).get(`/units/${unit.id}/students`)).data;
-
-    const drop = await api(lecturer.auth).patch(`/units/${unit.id}/students/${allocation!.id}`, { status: 'DROPPED' });
-    expect(body(drop).data).toMatchObject({ status: 'DROPPED' });
-
-    const readd = await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/002'] });
-    expect(body<Array<{ status: string }>>(readd).data[0]!.status).toBe('RESTORED');
-    expect(body<unknown[]>(await api(lecturer.auth).get(`/units/${unit.id}/students`)).data).toHaveLength(1);
-  });
-
-  it('links lecturer-made allocations to a student account once one exists', async () => {
-    stubErp();
-    const lecturer = await makeUser('LECTURER');
-    const unit = await makeUnit(lecturer);
-    await api(lecturer.auth).post(`/units/${unit.id}/students`, { registrationNumbers: ['REG/001'] });
+    erpEnrollments[unit.code] = ['REG/001'];
+    await api(lecturer.auth).get(`/units/${unit.id}/students`);
     const student = await makeUser('STUDENT');
 
     expect(await linkAllocationsToStudent(student.id, 'reg/001')).toBeGreaterThanOrEqual(1);
@@ -207,7 +301,7 @@ describe('allocating students by registration number', () => {
   });
 });
 
-describe('self-enrolment and check-in', () => {
+describe('check-in', () => {
   async function openSession(lecturer: { auth: string }, unitId: string) {
     const res = await api(lecturer.auth).post('/sessions', {
       unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
@@ -219,24 +313,28 @@ describe('self-enrolment and check-in', () => {
     return { sessionId, qr };
   }
 
-  it('a request stays PENDING, and cannot check in, until the lecturer approves it', async () => {
+  /** What the ERP sync writes, without going through it — these tests are about check-in, not the sync. */
+  async function allocate(unitId: string, studentUserId: string, status: 'ACTIVE' | 'DROPPED' = 'ACTIVE') {
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, full_name, status, source)
+       VALUES ($1, $2, $3, 'Test Student', $4, 'ERP')`,
+      [unitId, studentUserId, `REG/A${uniq()}`, status],
+    );
+  }
+
+  it('only a student the ERP puts on the unit can check in, once each', async () => {
     const lecturer = await makeUser('LECTURER');
     const student = await makeUser('STUDENT');
     const unit = await makeUnit(lecturer);
 
-    const enrol = await api(student.auth).post('/units/enrol', { code: unit.code.toLowerCase() });
-    expect(enrol.status).toBe(200);
-    expect(body(enrol).data).toMatchObject({ unitId: unit.id, status: 'PENDING' });
-    expect(body((await api(student.auth).post('/units/enrol', { code: unit.code }))).data).toMatchObject({ status: 'PENDING' });
-
     const { sessionId, qr } = await openSession(lecturer, unit.id);
     expect(qr).toMatchObject({ checkedIn: 0, enrolled: 0 });
+
+    // Not on the unit's roster: a structurally valid code still gets them nowhere.
     const early = await api(student.auth).post('/attendance/check-in', { payload: qr.payload });
     expect(early.status).toBe(403);
 
-    const [pending] = body<Array<{ id: string; status: string }>>(await api(lecturer.auth).get(`/units/${unit.id}/students`)).data;
-    expect(pending!.status).toBe('PENDING');
-    await api(lecturer.auth).patch(`/units/${unit.id}/students/${pending!.id}`, { status: 'ACTIVE' });
+    await allocate(unit.id, student.id);
 
     const checkIn = await api(student.auth).post('/attendance/check-in', { payload: qr.payload });
     expect(checkIn.status).toBe(201);
@@ -255,6 +353,16 @@ describe('self-enrolment and check-in', () => {
     expect(list.attendees[0]!.fullName).toMatch(/^Student/);
   });
 
+  it('a student the ERP no longer enrols (DROPPED) cannot check in', async () => {
+    const lecturer = await makeUser('LECTURER');
+    const student = await makeUser('STUDENT');
+    const unit = await makeUnit(lecturer);
+    await allocate(unit.id, student.id, 'DROPPED');
+
+    const { qr } = await openSession(lecturer, unit.id);
+    expect((await api(student.auth).post('/attendance/check-in', { payload: qr.payload })).status).toBe(403);
+  });
+
   it('only the session\'s lecturer sees its attendance, and lecturers cannot check in', async () => {
     const lecturer = await makeUser('LECTURER');
     const other = await makeUser('LECTURER');
@@ -263,22 +371,5 @@ describe('self-enrolment and check-in', () => {
 
     expect((await api(other.auth).get(`/attendance/sessions/${sessionId}`)).status).toBe(403);
     expect((await api(lecturer.auth).post('/attendance/check-in', { payload: qr.payload })).status).toBe(403);
-  });
-
-  it('a student the lecturer dropped cannot re-enrol themselves', async () => {
-    const lecturer = await makeUser('LECTURER');
-    const student = await makeUser('STUDENT');
-    const unit = await makeUnit(lecturer);
-    await api(student.auth).post('/units/enrol', { code: unit.code });
-    const [row] = body<Array<{ id: string }>>(await api(lecturer.auth).get(`/units/${unit.id}/students`)).data;
-    await api(lecturer.auth).patch(`/units/${unit.id}/students/${row!.id}`, { status: 'DROPPED' });
-
-    const res = await api(student.auth).post('/units/enrol', { code: unit.code });
-    expect(res.status).toBe(403);
-  });
-
-  it('an unknown unit code is a 404', async () => {
-    const student = await makeUser('STUDENT');
-    expect((await api(student.auth).post('/units/enrol', { code: 'NO SUCH 1' })).status).toBe(404);
   });
 });

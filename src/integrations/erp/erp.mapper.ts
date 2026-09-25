@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ErpStaffRecord, ErpStudentRecord } from './erp.types.js';
+import type { ErpCourseRecord, ErpStaffRecord, ErpStudentRecord } from './erp.types.js';
 
 /**
  * ============================================================================
@@ -220,6 +220,100 @@ export function toStudentRecord(body: unknown, requestedRegNumber: string): ErpS
     fullName,
     programme: first(payload.programme, payload.program, payload.course),
     yearOfStudy: first(payload.yearOfStudy, payload.year_of_study),
+    isActive,
+    raw: body,
+  };
+}
+
+/**
+ * Many ERPs wrap a list in an envelope ({ results: [...] }, { data: [...] },
+ * or a bare array). Each item is mapped with the same per-student schema as a
+ * single lookup; an item with no name (unmappable) is dropped rather than
+ * failing the whole roster — one bad row should not hide everyone else's.
+ */
+const erpStudentListEnvelopeSchema = z.union([
+  z.object({ results: z.array(z.unknown()) }),
+  z.object({ data: z.array(z.unknown()) }),
+  z.array(z.unknown()),
+]);
+
+/** Translates an ERP enrollment-list response into internal student records. */
+export function toEnrollmentRecords(body: unknown): ErpStudentRecord[] {
+  const parsed = erpStudentListEnvelopeSchema.safeParse(body);
+  if (!parsed.success) return [];
+  const value = parsed.data as Record<string, unknown>;
+  const items = Array.isArray(value) ? value : ((value.results ?? value.data ?? []) as unknown[]);
+  const records: ErpStudentRecord[] = [];
+  for (const item of items) {
+    const record = toStudentRecord(item, '');
+    if (record) records.push(record);
+  }
+  return records;
+}
+
+// ---------------------------------------------------------------------------
+// Courses (the issued timetable)
+// ---------------------------------------------------------------------------
+
+const erpCoursePayloadSchema = z
+  .object({
+    code: z.string().optional(),
+    courseCode: z.string().optional(),
+    course_code: z.string().optional(),
+    name: z.string().optional(),
+    courseName: z.string().optional(),
+    course_name: z.string().optional(),
+    staffNumber: z.string().optional().nullable(),
+    staff_number: z.string().optional().nullable(),
+    lecturerStaffNumber: z.string().optional().nullable(),
+    dayOfWeek: z.coerce.number().int().optional(),
+    day_of_week: z.coerce.number().int().optional(),
+    startTime: z.string().optional(),
+    start_time: z.string().optional(),
+    endTime: z.string().optional(),
+    end_time: z.string().optional(),
+    isActive: z.boolean().optional(),
+    active: z.boolean().optional(),
+    status: z.string().optional(),
+  })
+  .passthrough();
+
+const erpCourseEnvelopeSchema = z.union([
+  z.object({ data: erpCoursePayloadSchema }),
+  z.object({ result: erpCoursePayloadSchema }),
+  z.object({ course: erpCoursePayloadSchema }),
+  erpCoursePayloadSchema,
+]);
+
+const INACTIVE_COURSE_STATUSES = new Set([...INACTIVE_STATUSES, 'discontinued', 'archived']);
+
+/** HH:MM, dropping any seconds a TIME column-backed ERP might include. */
+const toHhMm = (value: string): string => value.slice(0, 5);
+
+/** Translates an ERP course response into the internal record; null when it cannot be understood. */
+export function toCourseRecord(body: unknown, requestedCode: string): ErpCourseRecord | null {
+  const parsed = erpCourseEnvelopeSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const value = parsed.data as Record<string, unknown>;
+  const payload = (value.data ?? value.result ?? value.course ?? value) as z.infer<typeof erpCoursePayloadSchema>;
+
+  const name = first(payload.name, payload.courseName, payload.course_name)?.trim();
+  const dayOfWeek = first(payload.dayOfWeek, payload.day_of_week);
+  const startTime = first(payload.startTime, payload.start_time);
+  const endTime = first(payload.endTime, payload.end_time);
+  // Without a name or a complete schedule there is nothing to issue a unit from.
+  if (!name || dayOfWeek === null || dayOfWeek < 0 || dayOfWeek > 6 || !startTime || !endTime) return null;
+
+  const status = payload.status?.toLowerCase().trim();
+  const isActive = payload.isActive ?? payload.active ?? (status ? !INACTIVE_COURSE_STATUSES.has(status) : true);
+
+  return {
+    code: (first(payload.code, payload.courseCode, payload.course_code) ?? requestedCode).toUpperCase(),
+    name,
+    staffNumber: first(payload.staffNumber, payload.staff_number, payload.lecturerStaffNumber)?.toUpperCase() ?? null,
+    dayOfWeek,
+    startTime: toHhMm(startTime),
+    endTime: toHhMm(endTime),
     isActive,
     raw: body,
   };

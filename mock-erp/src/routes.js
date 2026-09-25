@@ -100,4 +100,136 @@ for (const [name, e] of Object.entries(entities)) {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Courses: the issued timetable. Shaped differently from students/staff (a
+// schedule slot and a staff assignment, no name/status-only record), so it
+// gets its own routes rather than being squeezed into the `entities` loop above.
+// ---------------------------------------------------------------------------
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const courseStatuses = ['active', 'inactive'];
+
+const courseToApi = (row) => row && {
+  code: row.code,
+  name: row.name,
+  staffNumber: row.staff_number,
+  dayOfWeek: row.day_of_week,
+  startTime: row.start_time.slice(0, 5),
+  endTime: row.end_time.slice(0, 5),
+  status: row.status,
+};
+
+function parseCourse(body, { requireCode }) {
+  const errors = {};
+  const code = str(body?.code);
+  if (requireCode && !code) errors.code = 'Required';
+  const name = str(body?.name);
+  if (!name) errors.name = 'Required';
+  const dayOfWeek = Number(body?.dayOfWeek);
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) errors.dayOfWeek = 'Must be 0-6 (Sun-Sat)';
+  const startTime = str(body?.startTime);
+  if (!HHMM.test(startTime)) errors.startTime = 'Must be HH:MM';
+  const endTime = str(body?.endTime);
+  if (!HHMM.test(endTime)) errors.endTime = 'Must be HH:MM';
+  if (HHMM.test(startTime) && HHMM.test(endTime) && endTime <= startTime) errors.endTime = 'Must be after startTime';
+  const status = str(body?.status) || 'active';
+  if (!courseStatuses.includes(status)) errors.status = `Must be one of: ${courseStatuses.join(', ')}`;
+  const staffNumber = str(body?.staffNumber) || null;
+  return { code, values: { name, staff_number: staffNumber, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, status }, errors };
+}
+
+// List / search: ?q=text (matches code or name) &status=active &staffNumber=STF/0001
+r.get('/courses', h(async (req, res) => {
+  const q = str(req.query.q), status = str(req.query.status), staffNumber = str(req.query.staffNumber);
+  const where = [], args = [];
+  if (q) { args.push(`%${q}%`); where.push(`(code::text ILIKE $${args.length} OR name ILIKE $${args.length})`); }
+  if (status) { args.push(status); where.push(`status = $${args.length}`); }
+  if (staffNumber) { args.push(staffNumber); where.push(`staff_number = $${args.length}`); }
+  const { rows } = await query(`SELECT * FROM erp_courses ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY code LIMIT 500`, args);
+  res.json({ count: rows.length, results: rows.map(courseToApi) });
+}));
+
+// Lookup one: the unit module calls this to verify a code exists and pull its real name/schedule. 404 if unknown.
+r.get('/courses/:code', h(async (req, res) => {
+  const { rows: [row] } = await query('SELECT * FROM erp_courses WHERE code = $1', [req.params.code]);
+  if (!row) return res.status(404).json({ error: 'Not found in ERP' });
+  res.json(courseToApi(row));
+}));
+
+r.post('/courses', h(async (req, res) => {
+  const { code, values, errors } = parseCourse(req.body, { requireCode: true });
+  if (Object.keys(errors).length) return res.status(400).json({ error: 'Validation failed', errors });
+  try {
+    const { rows: [row] } = await query(
+      `INSERT INTO erp_courses (code, name, staff_number, day_of_week, start_time, end_time, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [code, values.name, values.staff_number, values.day_of_week, values.start_time, values.end_time, values.status]);
+    res.status(201).json({ record: courseToApi(row) });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Already exists', errors: { code: 'Already exists' } });
+    throw err;
+  }
+}));
+
+r.put('/courses/:code', h(async (req, res) => {
+  const { values, errors } = parseCourse(req.body, { requireCode: false });
+  if (Object.keys(errors).length) return res.status(400).json({ error: 'Validation failed', errors });
+  const { rows: [row] } = await query(
+    `UPDATE erp_courses SET name = $2, staff_number = $3, day_of_week = $4, start_time = $5, end_time = $6, status = $7
+      WHERE code = $1 RETURNING *`,
+    [req.params.code, values.name, values.staff_number, values.day_of_week, values.start_time, values.end_time, values.status]);
+  if (!row) return res.status(404).json({ error: 'Not found in ERP' });
+  res.json({ record: courseToApi(row) });
+}));
+
+r.delete('/courses/:code', h(async (req, res) => {
+  const { rowCount } = await query('DELETE FROM erp_courses WHERE code = $1', [req.params.code]);
+  if (!rowCount) return res.status(404).json({ error: 'Not found in ERP' });
+  res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+// Enrollments: who's on a course's real class list. The unit module syncs a
+// unit's roster from this instead of a lecturer adding students by hand.
+// ---------------------------------------------------------------------------
+
+// List: the shape matches a plain student lookup (registrationNumber, fullName, ...),
+// so the same mapper as /students is reused. 404 if the course itself is unknown.
+r.get('/courses/:code/students', h(async (req, res) => {
+  const { rows: [course] } = await query('SELECT code FROM erp_courses WHERE code = $1', [req.params.code]);
+  if (!course) return res.status(404).json({ error: 'Not found in ERP' });
+  const { rows } = await query(
+    `SELECT s.* FROM erp_enrollments e
+       JOIN erp_students s ON s.reg_number = e.reg_number
+      WHERE e.course_code = $1
+      ORDER BY s.full_name`,
+    [req.params.code],
+  );
+  res.json({ count: rows.length, results: rows.map((x) => toApi(entities.students, x)) });
+}));
+
+// Enrol one student (for seeding/testing the roster sync).
+r.post('/courses/:code/students', h(async (req, res) => {
+  const regNumber = str(req.body?.registrationNumber);
+  if (!regNumber) return res.status(400).json({ error: 'Validation failed', errors: { registrationNumber: 'Required' } });
+  const { rows: [course] } = await query('SELECT code FROM erp_courses WHERE code = $1', [req.params.code]);
+  if (!course) return res.status(404).json({ error: 'Not found in ERP' });
+  try {
+    await query('INSERT INTO erp_enrollments (course_code, reg_number) VALUES ($1, $2)', [req.params.code, regNumber]);
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Already enrolled' });
+    throw err;
+  }
+}));
+
+r.delete('/courses/:code/students/:regNumber', h(async (req, res) => {
+  const { rowCount } = await query(
+    'DELETE FROM erp_enrollments WHERE course_code = $1 AND reg_number = $2',
+    [req.params.code, req.params.regNumber],
+  );
+  if (!rowCount) return res.status(404).json({ error: 'Not found in ERP' });
+  res.json({ ok: true });
+}));
+
 export default r;

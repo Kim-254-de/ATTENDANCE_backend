@@ -3,14 +3,7 @@ import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as unitService from './unit.service.js';
-import type {
-  AddStudentsInput,
-  AllocationParam,
-  CreateUnitInput,
-  EnrolInput,
-  UnitIdParam,
-  UpdateAllocationInput,
-} from './unit.schema.js';
+import type { CreateUnitInput, UnitIdParam } from './unit.schema.js';
 
 /** HTTP in, HTTP out. Allocation rules live in the service. */
 
@@ -40,44 +33,14 @@ export async function createUnit(req: Request, res: Response): Promise<void> {
   const unit = await unitService.createUnit(
     req.body as CreateUnitInput,
     userId(req),
+    { name: req.auth?.lecturer?.fullName ?? 'A lecturer', staffNumber: req.auth?.lecturer?.staffNumber ?? null },
     contextFrom(req),
   );
   sendCreated(res, unit);
 }
 
-/** GET /api/v1/units/:unitId/students */
+/** GET /api/v1/units/:unitId/students — the roster, synced from the ERP's enrollment records. */
 export async function listStudents(req: Request, res: Response): Promise<void> {
   const { unitId } = req.params as unknown as UnitIdParam;
   sendSuccess(res, await unitService.listStudents(unitId, userId(req)));
-}
-
-/** POST /api/v1/units/:unitId/students */
-export async function addStudents(req: Request, res: Response): Promise<void> {
-  const { unitId } = req.params as unknown as UnitIdParam;
-  const results = await unitService.addStudents(
-    unitId,
-    req.body as AddStudentsInput,
-    userId(req),
-    contextFrom(req),
-  );
-  sendSuccess(res, results);
-}
-
-/** PATCH /api/v1/units/:unitId/students/:allocationId */
-export async function updateAllocation(req: Request, res: Response): Promise<void> {
-  const { unitId, allocationId } = req.params as unknown as AllocationParam;
-  const allocation = await unitService.updateAllocation(
-    unitId,
-    allocationId,
-    req.body as UpdateAllocationInput,
-    userId(req),
-    contextFrom(req),
-  );
-  sendSuccess(res, allocation);
-}
-
-/** POST /api/v1/units/enrol */
-export async function enrol(req: Request, res: Response): Promise<void> {
-  const { code } = req.body as EnrolInput;
-  sendSuccess(res, await unitService.requestEnrolment(code, userId(req), contextFrom(req)));
 }

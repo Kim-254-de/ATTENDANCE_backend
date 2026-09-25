@@ -38,6 +38,39 @@ export type ErpStudentLookupResult =
   | { status: 'UNAVAILABLE'; reason: string };
 
 /**
+ * A course record as the issued timetable knows it: the ground truth for a
+ * unit's real name and weekly meeting slot, and who's assigned to teach it.
+ */
+export interface ErpCourseRecord {
+  code: string;
+  name: string;
+  /** The staff number the timetable assigns to teach it, if any. */
+  staffNumber: string | null;
+  /** 0=Sunday..6=Saturday, matches JS Date#getDay(). */
+  dayOfWeek: number;
+  startTime: string; // "HH:MM"
+  endTime: string;
+  /** False for a retired/discontinued course. */
+  isActive: boolean;
+  raw: unknown;
+}
+
+export type ErpCourseLookupResult =
+  | { status: 'FOUND'; record: ErpCourseRecord }
+  | { status: 'NOT_FOUND' }
+  | { status: 'UNAVAILABLE'; reason: string };
+
+/**
+ * Who the registrar's records enrol in a course — a unit's real roster.
+ * FOUND with an empty array is a normal, valid answer (nobody enrolled yet);
+ * NOT_FOUND means the course itself isn't on the timetable any more.
+ */
+export type ErpEnrollmentsResult =
+  | { status: 'FOUND'; students: ErpStudentRecord[] }
+  | { status: 'NOT_FOUND' }
+  | { status: 'UNAVAILABLE'; reason: string };
+
+/**
  * Why a lookup ended the way it did. Mirrors ErpVerificationOutcome in
  * src/db/types.ts so an outcome can be written straight to the audit log.
  */

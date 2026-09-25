@@ -2,26 +2,49 @@
 
 Units, and which students are on them (allocations).
 
-Until units come from the ERP, **lecturers add their own units**. A unit code
-is unique across the institution, so two lecturers cannot both claim `COSC 100`.
+A lecturer adds a unit by **code only** — the name and schedule are never
+typed in. `unit.service.ts createUnit` looks the code up against the ERP's
+issued timetable (`erpClient.lookupCourse`, mock-erp's `erp_courses` table)
+and takes the name/day/start/end straight from that record, the same way an
+added student's name comes from the ERP rather than a text field.
+
+## Verification: existence is automatic, lecturer assignment is not
+
+| ERP result | What happens |
+|---|---|
+| Code not on the timetable | 404 — creation refused. No admin involved. |
+| ERP unreachable | 503 `ERP_UNAVAILABLE` — fails closed, same as student lookups. |
+| Timetable lists *this* lecturer's staff number for the course | Unit is `VERIFIED` immediately. No admin involved. |
+| Timetable lists someone else (or nobody) | Unit is created `PENDING_VERIFICATION`; every `ADMIN` user is emailed to confirm the lecturer-unit assignment (`notificationService.sendUnitVerificationRequest`, logged rather than sent — see `notification` module). |
+
+`session.service.ts` refuses to activate a class for a unit that is not
+`VERIFIED`. There is no admin UI yet for confirming an assignment by hand;
+do it locally with `npm run dev:verify-unit -- "COSC 100"` (mirrors
+`dev:approve` for lecturer accounts).
 
 ## How students get onto a unit
 
-| Route | Who | Result |
-|---|---|---|
-| Lecturer pastes registration numbers | Lecturer | Each is looked up in the ERP's student records. Found and active → `ACTIVE` at once |
-| Student asks to join by unit code | Student | `PENDING` until the lecturer approves |
+A unit's roster is **read-only** for the lecturer — the same reasoning as a
+unit's name and schedule. Deciding who's enrolled is above a lecturer's
+reach: it's the registrar's call, recorded in the ERP, not something a
+lecturer types in or a student self-declares.
 
-Allocation is the check that makes a forwarded QR code near-useless: only an
-`ACTIVE` student can check in, however current their code. That is why a
-student can never make themselves `ACTIVE`, and why a student the lecturer
-removed (`DROPPED`) cannot re-request their way back.
+`unit.service.ts listStudents` syncs from `erpClient.listCourseEnrollments`
+(mock-erp's `erp_enrollments` table, joined with `erp_students`) every time
+the roster is viewed:
 
-The ERP lookup fails **closed**: if the student records system is unreachable,
-that number is reported `UNAVAILABLE` and not added. One bad number never fails
-the batch — the response reports each number's outcome.
+- Every student the ERP currently enrols in the course is upserted `ACTIVE`,
+  `source = 'ERP'`.
+- An `'ERP'`-sourced row that has dropped off the ERP's list is marked
+  `DROPPED` — kept, not deleted, so past attendance keeps its context.
+- Rows from another source (`'LECTURER'`/`'SELF_ENROLLED'` — legacy data from
+  before this sync existed) are left untouched either way.
 
-A lecturer-added allocation has a registration number but no account until the
+The sync fails **soft**: if the ERP can't be reached, the roster just shows
+whatever was last synced rather than blocking the view — viewing a roster is
+refreshing a display, not granting trust on faith the way unit creation is.
+
+A synced allocation has a registration number but no account until the
 student registers. Student registration must call
 `linkAllocationsToStudent(userId, registrationNumber)` (exported from
 `index.ts`) so those students can check in.
@@ -31,8 +54,5 @@ student registers. Student registration must call
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | `GET` | `/api/v1/units` | Lecturer | Units they teach, with active and pending counts |
-| `POST` | `/api/v1/units` | Lecturer | Add a unit `{ code, name }` |
-| `GET` | `/api/v1/units/:unitId/students` | Lecturer (owner) | Everyone on the unit, pending first |
-| `POST` | `/api/v1/units/:unitId/students` | Lecturer (owner) | `{ registrationNumbers: [...] }` (max 300), per-number results |
-| `PATCH` | `/api/v1/units/:unitId/students/:allocationId` | Lecturer (owner) | `{ status: ACTIVE \| DROPPED }` — approve, remove, restore |
-| `POST` | `/api/v1/units/enrol` | Student | `{ code }` — ask to join |
+| `POST` | `/api/v1/units` | Lecturer | Add a unit `{ code }` — name/schedule come from the ERP |
+| `GET` | `/api/v1/units/:unitId/students` | Lecturer (owner) | The roster, synced from the ERP's enrollment records — read-only |

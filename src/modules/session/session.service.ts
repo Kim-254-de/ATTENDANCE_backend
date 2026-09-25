@@ -66,9 +66,14 @@ export async function createSession(
   lecturerUserId: string,
   context: RequestContext,
 ): Promise<SessionSummary> {
-  const owns = await sessionRepository.lecturerOwnsUnit(input.unitId, lecturerUserId);
-  if (!owns) {
+  const unit = await sessionRepository.findLecturerUnit(input.unitId, lecturerUserId);
+  if (!unit) {
     throw AppError.forbidden('You are not assigned to teach this unit.');
+  }
+  if (!unit.verified) {
+    throw AppError.forbidden(
+      'This unit is awaiting admin verification against the timetable. It cannot be used to activate a class yet.',
+    );
   }
 
   const opensAt = input.opensAt ?? new Date();

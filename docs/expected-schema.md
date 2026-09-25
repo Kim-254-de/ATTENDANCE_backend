@@ -150,6 +150,7 @@ codes never add rows anywhere.
 | `code` | `varchar(32)` | **UNIQUE** — e.g. `COSC 100` |
 | `name` | `varchar(200)` | Nullable |
 | `lecturer_user_id` | `uuid` | FK -> `users(id)`. Who may open sessions for it |
+| `status` | text | `PENDING_VERIFICATION` / `VERIFIED` (CHECK constraint). A lecturer-added unit starts `PENDING_VERIFICATION`; `session.service.ts` refuses to activate a class until an admin verifies it (`db/migrations/009_unit_verification.sql`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `attendance_sessions`
@@ -176,21 +177,24 @@ mint valid codes for that session.
 
 ### `unit_allocations`
 
-A student on a unit. A lecturer adds a registration number (verified against
-the ERP; ACTIVE at once, `student_user_id` NULL until the student has an
-account), or a signed-in student asks to join (PENDING until the lecturer
-approves).
+A student on a unit. Rows are synced from the ERP's enrollment records
+(`unit.service.ts listStudents` -> `unitRepository.syncAllocationsFromErp`,
+`db/migrations/010_unit_allocations_erp_source.sql`) every time the roster is
+viewed — a lecturer cannot add, approve or remove a student, and a student
+cannot self-enrol; deciding who's enrolled is the registrar's call, not
+theirs. `LECTURER` / `SELF_ENROLLED` remain valid `source` values only for
+historical rows written before this sync existed.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `unit_id` | `uuid` | FK -> `units(id)` |
-| `registration_number` | `varchar(64)` null | Uppercased. Set when a lecturer adds the student |
-| `student_user_id` | `uuid` null | FK -> `users(id)`. Set on self-enrolment, or linked on student registration |
-| `full_name` | `varchar(160)` null | From the ERP at allocation time |
-| `status` | text | `ACTIVE` / `PENDING` / `DROPPED`. Only `ACTIVE` may check in |
-| `source` | text | `LECTURER` / `SELF_ENROLLED` |
-| `added_by_user_id` | `uuid` null | FK -> `users(id)` |
+| `registration_number` | `varchar(64)` null | Uppercased. Set by the ERP sync |
+| `student_user_id` | `uuid` null | FK -> `users(id)`. Linked on student registration (`linkAllocationsToStudent`) |
+| `full_name` | `varchar(160)` null | From the ERP at sync time |
+| `status` | text | `ACTIVE` / `PENDING` / `DROPPED`. Only `ACTIVE` may check in. `PENDING` is legacy-only; nothing writes it any more |
+| `source` | text | `ERP` for every row the sync writes; `LECTURER` / `SELF_ENROLLED` only on historical data |
+| `added_by_user_id` | `uuid` null | FK -> `users(id)`. Null on ERP-synced rows |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | At least one of `registration_number`, `student_user_id` is set |
 | | | **UNIQUE (unit_id, registration_number)** and **UNIQUE (unit_id, student_user_id)**, each partial on NOT NULL |

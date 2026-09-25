@@ -1,10 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { toStaffRecord, toStudentRecord } from './erp.mapper.js';
+import { toCourseRecord, toEnrollmentRecords, toStaffRecord, toStudentRecord } from './erp.mapper.js';
 import { compareIdentity } from './erp.identity.js';
 import type {
   ClaimedIdentity,
+  ErpCourseLookupResult,
+  ErpEnrollmentsResult,
   ErpLookupResult,
   ErpProvider,
   ErpStaffRecord,
@@ -142,6 +144,51 @@ export class ErpHttpClient implements ErpProvider {
       return { status: 'UNAVAILABLE', reason: 'The student records system returned an unexpected response.' };
     }
     return record.isActive ? { status: 'FOUND', record } : { status: 'INACTIVE', record };
+  }
+
+  /**
+   * Looks a course code up in the issued timetable, for adding a unit. Same
+   * failure contract as the other lookups: NOT_FOUND is the ERP's definitive
+   * answer, anything else going wrong is UNAVAILABLE. An inactive/discontinued
+   * course is reported UNAVAILABLE-adjacent by simply never matching FOUND —
+   * callers see NOT_FOUND, since it can no longer issue a live unit.
+   */
+  async lookupCourse(code: string): Promise<ErpCourseLookupResult> {
+    const normalised = code.trim().replace(/\s+/g, ' ').toUpperCase();
+    const url = buildUrl(env.ERP_COURSE_LOOKUP_PATH, '{code}', normalised);
+    const body = await this.request(url, { code: normalised });
+
+    if (body === 'NOT_FOUND') return { status: 'NOT_FOUND' };
+    if (body === 'UNAVAILABLE') {
+      return { status: 'UNAVAILABLE', reason: 'The timetable system could not be reached.' };
+    }
+
+    const record = toCourseRecord(body, normalised);
+    if (!record) {
+      logger.error({ code: normalised, body }, 'erp lookup: course response could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
+    }
+    return record.isActive ? { status: 'FOUND', record } : { status: 'NOT_FOUND' };
+  }
+
+  /**
+   * Who the registrar enrols in a course — a unit's real roster
+   * (unit.service.ts listStudents syncs from this instead of a lecturer
+   * adding students by hand). Not cached: unlike a staff/student lookup this
+   * is a list that changes as the registrar's records change, and it is only
+   * ever called on a roster view, not on a hot path.
+   */
+  async listCourseEnrollments(code: string): Promise<ErpEnrollmentsResult> {
+    const normalised = code.trim().replace(/\s+/g, ' ').toUpperCase();
+    const url = buildUrl(env.ERP_COURSE_ENROLLMENTS_PATH, '{code}', normalised);
+    const body = await this.request(url, { code: normalised });
+
+    if (body === 'NOT_FOUND') return { status: 'NOT_FOUND' };
+    if (body === 'UNAVAILABLE') {
+      return { status: 'UNAVAILABLE', reason: 'The timetable system could not be reached.' };
+    }
+
+    return { status: 'FOUND', students: toEnrollmentRecords(body) };
   }
 
   private async fetchRecord(
