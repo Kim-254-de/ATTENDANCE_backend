@@ -22,6 +22,10 @@ const csv = z
       .filter(Boolean),
   );
 
+/** An empty value in .env (`KEY=`) means "not set", not an invalid value. */
+const emptyAsUnset = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), schema);
+
 const envSchema = z
   .object({
     // --- Runtime ---
@@ -103,6 +107,23 @@ const envSchema = z
     ERP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).default(300),
     ERP_ENFORCE_IDENTITY_MATCH: booleanish.default('true'),
 
+    // --- SMARTTT (the university timetable system) ---
+    // Source of the units a lecturer is timetabled to teach and how many
+    // students are registered for each. Unset SMARTTT_BASE_URL = sync off,
+    // and units come only from lecturers adding them by code.
+    SMARTTT_BASE_URL: emptyAsUnset(z.string().url().optional()),
+    /** Sent as X-API-Key; must equal ATTENDANCE_API_KEY on the SMARTTT side. */
+    SMARTTT_API_KEY: emptyAsUnset(z.string().optional()),
+    SMARTTT_LECTURER_UNITS_PATH: z
+      .string()
+      .min(1)
+      .default('/api/v1/integrations/attendance/lecturer-units/'),
+    // Generous: SMARTTT on Render's free tier can take a while to wake. The
+    // sync fails soft, so a timeout only means the last synced data is shown.
+    SMARTTT_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(8000),
+    // Per lecturer. Stops every units-page load from calling SMARTTT.
+    SMARTTT_SYNC_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
+
     // --- Rate limiting ---
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
@@ -144,6 +165,13 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['ERP_BASIC_USERNAME'],
         message: 'ERP_BASIC_USERNAME and ERP_BASIC_PASSWORD are required for basic auth',
+      });
+    }
+    if (env.SMARTTT_BASE_URL && !env.SMARTTT_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SMARTTT_API_KEY'],
+        message: 'is required when SMARTTT_BASE_URL is set',
       });
     }
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {

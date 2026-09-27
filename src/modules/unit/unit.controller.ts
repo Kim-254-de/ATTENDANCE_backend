@@ -7,6 +7,12 @@ import type { CreateUnitInput, UnitIdParam } from './unit.schema.js';
 
 /** HTTP in, HTTP out. Allocation rules live in the service. */
 
+/** Who the signed-in lecturer is, for the SMARTTT sync (staff number and name). */
+function lecturerIdentity(req: Request): unitService.LecturerIdentity | undefined {
+  const lecturer = req.auth?.lecturer;
+  return lecturer ? { name: lecturer.fullName, staffNumber: lecturer.staffNumber } : undefined;
+}
+
 function contextFrom(req: Request): unitService.RequestContext {
   return { ...clientFingerprint(req), requestId: req.requestId };
 }
@@ -20,7 +26,7 @@ function userId(req: Request): string {
 
 /** GET /api/v1/units */
 export async function listUnits(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await unitService.listUnits(userId(req)));
+  sendSuccess(res, await unitService.listUnits(userId(req), lecturerIdentity(req)));
 }
 
 /** GET /api/v1/units/current — the unit ActivateClass may open a session for right now, or null. */
@@ -39,8 +45,8 @@ export async function createUnit(req: Request, res: Response): Promise<void> {
   sendCreated(res, unit);
 }
 
-/** GET /api/v1/units/:unitId/students — the roster, synced from the ERP's enrollment records. */
+/** GET /api/v1/units/:unitId/students — the roster, synced from SMARTTT (or the ERP when SMARTTT is off). */
 export async function listStudents(req: Request, res: Response): Promise<void> {
   const { unitId } = req.params as unknown as UnitIdParam;
-  sendSuccess(res, await unitService.listStudents(unitId, userId(req)));
+  sendSuccess(res, await unitService.listStudents(unitId, userId(req), lecturerIdentity(req)));
 }

@@ -147,10 +147,15 @@ codes never add rows anywhere.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
-| `code` | `varchar(32)` | **UNIQUE** — e.g. `COSC 100` |
+| `code` | `varchar(80)` | **UNIQUE** — e.g. `COSC 100`, or `COSC 103 GR A` for one group of a split unit |
 | `name` | `varchar(200)` | Nullable |
 | `lecturer_user_id` | `uuid` | FK -> `users(id)`. Who may open sessions for it |
 | `status` | text | `PENDING_VERIFICATION` / `VERIFIED` (CHECK constraint). A lecturer-added unit starts `PENDING_VERIFICATION`; `session.service.ts` refuses to activate a class until an admin verifies it (`db/migrations/009_unit_verification.sql`) |
+| `base_code` | `varchar(80)` null | The unit a class belongs to: `COSC 103` for `COSC 103 GR A`. Set by the SMARTTT sync (`db/migrations/011_units_timetable_sync.sql`) |
+| `class_group` | `varchar(50)` null | The teaching group (`GR A`) when the unit is split into groups taught by different lecturers; each group is its own row. Null when not split |
+| `registered_students` | `integer` null | Students registered for this class this term, per SMARTTT (only the group's students for a group). Null for a unit SMARTTT has never reported |
+| `students_without_group` | `integer` null | For a group: students registered for the unit who haven't picked a group in SMARTTT, so are on no group's roster |
+| `timetable_synced_at` | `timestamptz` null | Last time SMARTTT confirmed this unit for its lecturer |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `attendance_sessions`
@@ -177,24 +182,24 @@ mint valid codes for that session.
 
 ### `unit_allocations`
 
-A student on a unit. Rows are synced from the ERP's enrollment records
-(`unit.service.ts listStudents` -> `unitRepository.syncAllocationsFromErp`,
-`db/migrations/010_unit_allocations_erp_source.sql`) every time the roster is
-viewed — a lecturer cannot add, approve or remove a student, and a student
-cannot self-enrol; deciding who's enrolled is the registrar's call, not
-theirs. `LECTURER` / `SELF_ENROLLED` remain valid `source` values only for
-historical rows written before this sync existed.
+A student on a unit. Rows are synced from SMARTTT's registrations when
+`SMARTTT_BASE_URL` is set (`unit.service.ts syncUnitsFromTimetable`), otherwise
+from the ERP's enrollment records (`unit.service.ts listStudents`), both via
+`unitRepository.syncRosterAllocations` (`db/migrations/010_unit_allocations_erp_source.sql`,
+`011_units_timetable_sync.sql`). A lecturer cannot add, approve or remove a
+student, and a student cannot self-enrol. `LECTURER` / `SELF_ENROLLED` remain
+valid `source` values only for historical rows written before rosters were synced.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `unit_id` | `uuid` | FK -> `units(id)` |
-| `registration_number` | `varchar(64)` null | Uppercased. Set by the ERP sync |
+| `registration_number` | `varchar(64)` null | Uppercased. Set by the SMARTTT or ERP sync |
 | `student_user_id` | `uuid` null | FK -> `users(id)`. Linked on student registration (`linkAllocationsToStudent`) |
-| `full_name` | `varchar(160)` null | From the ERP at sync time |
+| `full_name` | `varchar(160)` null | From SMARTTT or the ERP at sync time |
 | `status` | text | `ACTIVE` / `PENDING` / `DROPPED`. Only `ACTIVE` may check in. `PENDING` is legacy-only; nothing writes it any more |
-| `source` | text | `ERP` for every row the sync writes; `LECTURER` / `SELF_ENROLLED` only on historical data |
-| `added_by_user_id` | `uuid` null | FK -> `users(id)`. Null on ERP-synced rows |
+| `source` | text | `SMARTTT` or `ERP`, whichever sync wrote it; `LECTURER` / `SELF_ENROLLED` only on historical data |
+| `added_by_user_id` | `uuid` null | FK -> `users(id)`. Null on synced rows |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | At least one of `registration_number`, `student_user_id` is set |
 | | | **UNIQUE (unit_id, registration_number)** and **UNIQUE (unit_id, student_user_id)**, each partial on NOT NULL |

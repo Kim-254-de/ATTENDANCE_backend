@@ -1,7 +1,10 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { isUniqueViolation } from '../../db/database.js';
 import { logger } from '../../config/logger.js';
+import { env } from '../../config/env.js';
 import { erpClient } from '../../integrations/erp/index.js';
+import { smartttClient } from '../../integrations/smarttt/index.js';
+import type { SmartttUnit } from '../../integrations/smarttt/index.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
 import * as unitRepository from './unit.repository.js';
@@ -14,9 +17,9 @@ import type { CreateUnitInput } from './unit.schema.js';
  * Allocation is the check that makes a forwarded QR code near-useless: a
  * student who is not ACTIVE on the unit cannot check in, however current the
  * code they hold. A student's roster status is not the lecturer's or the
- * student's to set — it is synced from the ERP's own enrollment records
- * (listStudents / unitRepository.syncAllocationsFromErp), same as a unit's
- * name and schedule are.
+ * student's to set — it is synced from SMARTTT's registrations (or, when
+ * SMARTTT is not configured, the ERP's enrollment records) via
+ * unitRepository.syncRosterAllocations, same as a unit's name and schedule are.
  */
 
 export interface RequestContext {
@@ -34,11 +37,22 @@ export interface UnitDto {
   createdAt: string;
   schedule: UnitSummary['schedule'];
   status: UnitSummary['status'];
+  /** The unit this class belongs to ("COSC 103" for "COSC 103 GR A"); null for units only added by code. */
+  baseCode: string | null;
+  /** The teaching group ("GR A") when the unit is split into groups; null otherwise. */
+  group: string | null;
+  /** Students registered for this class this term, per SMARTTT; null if SMARTTT has never reported it. */
+  registeredStudents: number | null;
+  /** For a group: registered students who haven't picked a group in SMARTTT yet, so are on no roster. */
+  studentsWithoutGroup: number | null;
+  /** When SMARTTT last confirmed the unit; null for units only ever added by code. */
+  timetableSyncedAt: string | null;
 }
 
 const toUnitDto = (unit: UnitSummary): UnitDto => ({
   ...unit,
   createdAt: unit.createdAt.toISOString(),
+  timetableSyncedAt: unit.timetableSyncedAt?.toISOString() ?? null,
 });
 
 export interface AllocationDto extends Omit<Allocation, 'createdAt'> {
@@ -50,8 +64,150 @@ const toAllocationDto = (a: Allocation): AllocationDto => ({
   createdAt: a.createdAt.toISOString(),
 });
 
-export async function listUnits(lecturerUserId: string): Promise<UnitDto[]> {
+/** Who is asking, as far as the SMARTTT sync needs to know. */
+export interface LecturerIdentity {
+  name: string;
+  staffNumber: string | null;
+}
+
+/**
+ * The lecturer's units. Refreshed from SMARTTT first (when configured), so
+ * units they are timetabled to teach appear without being added by hand, each
+ * with SMARTTT's registered-student count.
+ */
+export async function listUnits(lecturerUserId: string, lecturer?: LecturerIdentity): Promise<UnitDto[]> {
+  if (lecturer) await syncUnitsFromTimetable(lecturerUserId, lecturer);
   return (await unitRepository.findUnitsForLecturer(lecturerUserId)).map(toUnitDto);
+}
+
+// ---------------------------------------------------------------------------
+// Sync from SMARTTT
+// ---------------------------------------------------------------------------
+
+/** Per lecturer: when the last sync was attempted, and any sync still running. */
+const lastSyncAttempt = new Map<string, number>();
+const syncInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Pulls the classes SMARTTT says this lecturer teaches this term and upserts
+ * them here with their registered-student counts, and replaces each one's
+ * roster with the students SMARTTT has registered for it (registration
+ * number and name).
+ *
+ * A class is a unit, or one teaching group of a unit split into groups
+ * taught by different lecturers ("COSC 103 GR A"). Each group is its own
+ * unit here, owned by its own lecturer, with only that group's students.
+ *
+ * Fails soft, like the roster sync: if SMARTTT is off, asleep or wrong, the
+ * lecturer sees the units already on file. Nothing here ever throws.
+ *
+ * - A unit SMARTTT links to the lecturer's account is VERIFIED straight away:
+ *   the timetable itself assigns it to them (same rule as createUnit).
+ * - A unit SMARTTT only matches by the lecturer's name is created
+ *   PENDING_VERIFICATION and admins are notified, as for a lecturer-added unit
+ *   the timetable doesn't assign to them.
+ * - Units that drop off SMARTTT are kept: their attendance history stays.
+ *
+ * Throttled per lecturer (SMARTTT_SYNC_INTERVAL_SECONDS), counting failed
+ * attempts too, so a sleeping SMARTTT delays at most one page load per
+ * interval rather than every one.
+ */
+export async function syncUnitsFromTimetable(lecturerUserId: string, lecturer: LecturerIdentity): Promise<void> {
+  if (!smartttClient.enabled || !lecturer.staffNumber) return;
+
+  const running = syncInFlight.get(lecturerUserId);
+  if (running) return running;
+
+  const last = lastSyncAttempt.get(lecturerUserId);
+  if (last !== undefined && Date.now() - last < env.SMARTTT_SYNC_INTERVAL_SECONDS * 1000) return;
+  lastSyncAttempt.set(lecturerUserId, Date.now());
+
+  const sync = runTimetableSync(lecturerUserId, lecturer.staffNumber, lecturer.name)
+    .catch((error: unknown) => {
+      logger.error({ err: error, lecturerUserId }, 'smarttt unit sync failed; showing units already on file');
+    })
+    .finally(() => syncInFlight.delete(lecturerUserId));
+  syncInFlight.set(lecturerUserId, sync);
+  return sync;
+}
+
+/** Test seam: forget throttling state between cases. */
+export function resetTimetableSyncState(): void {
+  lastSyncAttempt.clear();
+  syncInFlight.clear();
+}
+
+/** unit_schedule holds one slot per unit, so only a unit with exactly one distinct weekly slot gets one. */
+function singleSchedule(unit: SmartttUnit): unitRepository.UnitSchedule | null {
+  const distinct = new Map(unit.slots.map((s) => [`${s.dayOfWeek}|${s.startTime}|${s.endTime}`, s]));
+  if (distinct.size !== 1) return null;
+  const [slot] = distinct.values();
+  return slot ? { dayOfWeek: slot.dayOfWeek, startTime: slot.startTime, endTime: slot.endTime } : null;
+}
+
+async function runTimetableSync(lecturerUserId: string, staffNumber: string, name: string): Promise<void> {
+  const result = await smartttClient.listLecturerUnits(staffNumber, name);
+  if (result.status !== 'FOUND') {
+    logger.warn({ lecturerUserId, status: result.status }, 'smarttt unit sync skipped');
+    return;
+  }
+
+  for (const unit of result.units) {
+    const status: unitRepository.UnitVerificationStatus =
+      unit.matchedBy === 'ACCOUNT' ? 'VERIFIED' : 'PENDING_VERIFICATION';
+    const upserted = await unitRepository.upsertUnitFromTimetable(lecturerUserId, {
+      code: unit.code,
+      baseCode: unit.baseCode,
+      group: unit.group,
+      name: unit.name,
+      registeredStudents: unit.registeredStudents,
+      studentsWithoutGroup: unit.studentsWithoutGroup,
+      status,
+      schedule: singleSchedule(unit),
+    });
+
+    if (!upserted) {
+      logger.warn(
+        { lecturerUserId, unitCode: unit.code },
+        'smarttt lists this unit for the lecturer, but another lecturer already holds it here; left unchanged',
+      );
+      continue;
+    }
+
+    await unitRepository.syncRosterAllocations(upserted.id, unit.students, 'SMARTTT');
+
+    const metadata = {
+      unitId: upserted.id,
+      unitCode: unit.code,
+      group: unit.group,
+      source: 'SMARTTT',
+      matchedBy: unit.matchedBy,
+      slots: unit.slots.length,
+      term: result.term,
+    };
+    if (upserted.inserted) {
+      await auditService.record({ action: 'UNIT_CREATED', outcome: 'SUCCESS', userId: lecturerUserId, metadata: { ...metadata, status } });
+      if (upserted.status === 'PENDING_VERIFICATION') await notifyAdminsIfScheduled(upserted.id, name);
+    } else if (upserted.previousStatus === 'PENDING_VERIFICATION' && upserted.status === 'VERIFIED') {
+      await auditService.record({ action: 'UNIT_VERIFIED', outcome: 'SUCCESS', userId: lecturerUserId, metadata });
+    }
+  }
+}
+
+/** The admin email names the unit's slot, so it's only sent for a unit that has one. */
+async function notifyAdminsIfScheduled(unitId: string, lecturerName: string): Promise<void> {
+  const unit = await unitRepository.findUnitSummary(unitId);
+  if (!unit) return;
+  if (!unit.schedule) {
+    logger.warn(
+      { unitId, unitCode: unit.code },
+      'unit synced from smarttt is pending verification but has no single slot to put in the admin notice',
+    );
+    return;
+  }
+  void notifyAdminsOfPendingUnit(unit, lecturerName).catch((error: unknown) => {
+    logger.error({ err: error, unitId }, 'unit verification notice failed to send');
+  });
 }
 
 /** The unit ActivateClass may open a session for right now, or null if nothing is scheduled. */
@@ -186,17 +342,24 @@ async function requireOwnedUnit(unitId: string, lecturerUserId: string): Promise
 }
 
 /**
- * A unit's roster, refreshed from the ERP's enrollment records before it's
- * returned. Read-only from here: a lecturer cannot add, approve or remove a
- * student — that would mean trusting a claim about enrollment the ERP itself
- * disagrees with.
+ * A unit's roster, refreshed before it's returned: from SMARTTT's
+ * registrations when SMARTTT is configured (one sync covers all of the
+ * lecturer's units, throttled like the units page), otherwise from the ERP's
+ * enrollment records. Read-only from here: a lecturer cannot add, approve or
+ * remove a student — that would mean trusting a claim about enrollment the
+ * source system itself disagrees with.
  */
 export async function listStudents(
   unitId: string,
   lecturerUserId: string,
+  lecturer?: LecturerIdentity,
 ): Promise<AllocationDto[]> {
   const unit = await requireOwnedUnit(unitId, lecturerUserId);
-  await syncRosterFromErp(unit);
+  if (smartttClient.enabled) {
+    if (lecturer) await syncUnitsFromTimetable(lecturerUserId, lecturer);
+  } else {
+    await syncRosterFromErp(unit);
+  }
   return (await unitRepository.listAllocations(unitId)).map(toAllocationDto);
 }
 
@@ -215,8 +378,9 @@ async function syncRosterFromErp(unit: UnitOwner): Promise<void> {
     );
     return;
   }
-  await unitRepository.syncAllocationsFromErp(
+  await unitRepository.syncRosterAllocations(
     unit.id,
     enrollments.students.map((s) => ({ registrationNumber: s.registrationNumber, fullName: s.fullName })),
+    'ERP',
   );
 }

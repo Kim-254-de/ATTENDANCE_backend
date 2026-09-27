@@ -25,6 +25,16 @@ export interface UnitSummary {
   /** Every unit has exactly one issued slot; null only for rows created before schedules existed. */
   schedule: UnitSchedule | null;
   status: UnitVerificationStatus;
+  /** The unit this class belongs to ("COSC 103" for "COSC 103 GR A"). Null for units only added by code. */
+  baseCode: string | null;
+  /** The teaching group ("GR A") when the unit is split into groups; null otherwise. */
+  group: string | null;
+  /** Students registered for this class this term, per SMARTTT. Null if SMARTTT has never reported it. */
+  registeredStudents: number | null;
+  /** For a group: students registered for the unit with no group picked yet, so on no group's roster. */
+  studentsWithoutGroup: number | null;
+  /** When SMARTTT last confirmed this unit for its lecturer. Null for units only added by code. */
+  timetableSyncedAt: Date | null;
 }
 
 interface UnitSummaryRow {
@@ -38,6 +48,11 @@ interface UnitSummaryRow {
   start_time: string | null;
   end_time: string | null;
   status: UnitVerificationStatus;
+  base_code: string | null;
+  class_group: string | null;
+  registered_students: number | null;
+  students_without_group: number | null;
+  timetable_synced_at: Date | null;
 }
 
 const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
@@ -52,10 +67,16 @@ const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
       ? null
       : { dayOfWeek: row.day_of_week, startTime: row.start_time.slice(0, 5), endTime: row.end_time.slice(0, 5) },
   status: row.status,
+  baseCode: row.base_code,
+  group: row.class_group,
+  registeredStudents: row.registered_students,
+  studentsWithoutGroup: row.students_without_group,
+  timetableSyncedAt: row.timetable_synced_at,
 });
 
 const SELECT_UNIT_SUMMARY = `
-  SELECT u.id, u.code, u.name, u.created_at, u.status,
+  SELECT u.id, u.code, u.name, u.created_at, u.status, u.base_code, u.class_group,
+         u.registered_students, u.students_without_group, u.timetable_synced_at,
          COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int  AS student_count,
          COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count,
          s.day_of_week, s.start_time, s.end_time
@@ -64,7 +85,7 @@ const SELECT_UNIT_SUMMARY = `
     LEFT JOIN unit_schedule s ON s.unit_id = u.id
 `;
 const GROUP_BY_UNIT_SUMMARY = 'GROUP BY u.id, s.day_of_week, s.start_time, s.end_time';
-// u.status is functionally dependent on u.id (the primary key already in GROUP BY), so
+// u.status (and the other u.* columns) are functionally dependent on u.id (the primary key already in GROUP BY), so
 // Postgres allows selecting it un-aggregated without adding it to the GROUP BY list.
 
 export async function findUnitsForLecturer(lecturerUserId: string): Promise<UnitSummary[]> {
@@ -185,6 +206,97 @@ export async function createUnit(
 }
 
 // ---------------------------------------------------------------------------
+// Sync from SMARTTT (the university timetable)
+// ---------------------------------------------------------------------------
+
+export interface TimetableUnit {
+  /** The class: "COSC 103 GR A", or "COSC 103" when not split into groups. */
+  code: string;
+  baseCode: string;
+  group: string | null;
+  name: string;
+  registeredStudents: number;
+  studentsWithoutGroup: number;
+  /** VERIFIED when SMARTTT links the unit to the lecturer's account; otherwise it waits for an admin. */
+  status: UnitVerificationStatus;
+  /** Only set when SMARTTT has exactly one weekly slot for the unit: unit_schedule holds one slot per unit. */
+  schedule: UnitSchedule | null;
+}
+
+export interface TimetableUpsertResult {
+  id: string;
+  /** A new row, as opposed to an update of one this lecturer already had. */
+  inserted: boolean;
+  status: UnitVerificationStatus;
+  /** The status before this sync; null for a new row. */
+  previousStatus: UnitVerificationStatus | null;
+}
+
+/**
+ * Creates or refreshes one of the lecturer's units from SMARTTT, with its
+ * schedule, in one transaction.
+ *
+ * - A unit whose code another lecturer already holds is left alone and null
+ *   is returned: units have one owner here, and a timetable sync must never
+ *   quietly take a unit (and its attendance history) off someone else.
+ * - Status only ever moves up. A unit an admin already verified stays
+ *   VERIFIED even if SMARTTT now only matches it by name.
+ * - A null `schedule` leaves any existing unit_schedule row untouched.
+ */
+export async function upsertUnitFromTimetable(
+  lecturerUserId: string,
+  unit: TimetableUnit,
+): Promise<TimetableUpsertResult | null> {
+  return transaction(async (client: PoolClient) => {
+    // `previous` reads the row as it was before this statement changed it.
+    const row = await queryOne<{
+      id: string;
+      inserted: boolean;
+      status: UnitVerificationStatus;
+      previous_status: UnitVerificationStatus | null;
+    }>(
+      `WITH previous AS (SELECT status FROM units WHERE code = $1)
+       INSERT INTO units (code, name, lecturer_user_id, status, registered_students,
+                          base_code, class_group, students_without_group, timetable_synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+       ON CONFLICT (code) DO UPDATE
+          SET name                   = EXCLUDED.name,
+              registered_students    = EXCLUDED.registered_students,
+              base_code              = EXCLUDED.base_code,
+              class_group            = EXCLUDED.class_group,
+              students_without_group = EXCLUDED.students_without_group,
+              timetable_synced_at = NOW(),
+              status              = CASE WHEN EXCLUDED.status = 'VERIFIED' THEN 'VERIFIED' ELSE units.status END,
+              updated_at          = NOW()
+        WHERE units.lecturer_user_id = EXCLUDED.lecturer_user_id
+       RETURNING id, (xmax = 0) AS inserted, status, (SELECT status FROM previous) AS previous_status`,
+      [unit.code, unit.name, lecturerUserId, unit.status, unit.registeredStudents,
+       unit.baseCode, unit.group, unit.studentsWithoutGroup],
+      client,
+    );
+    if (!row) return null;
+
+    if (unit.schedule) {
+      await query(
+        `INSERT INTO unit_schedule (unit_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (unit_id) DO UPDATE
+            SET day_of_week = EXCLUDED.day_of_week, start_time = EXCLUDED.start_time,
+                end_time = EXCLUDED.end_time, updated_at = NOW()`,
+        [row.id, unit.schedule.dayOfWeek, unit.schedule.startTime, unit.schedule.endTime],
+        client,
+      );
+    }
+
+    return {
+      id: row.id,
+      inserted: row.inserted,
+      status: row.status,
+      previousStatus: row.inserted ? null : row.previous_status,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Allocations
 // ---------------------------------------------------------------------------
 
@@ -194,7 +306,7 @@ export interface Allocation {
   studentUserId: string | null;
   fullName: string | null;
   status: AllocationStatus;
-  source: 'LECTURER' | 'SELF_ENROLLED' | 'ERP';
+  source: AllocationSource;
   /** Whether the student has an account yet, i.e. can actually sign in and check in. */
   hasAccount: boolean;
   createdAt: Date;
@@ -206,7 +318,7 @@ interface AllocationRow {
   student_user_id: string | null;
   full_name: string | null;
   status: AllocationStatus;
-  source: 'LECTURER' | 'SELF_ENROLLED' | 'ERP';
+  source: AllocationSource;
   created_at: Date;
 }
 
@@ -224,7 +336,7 @@ const toAllocation = (row: AllocationRow): Allocation => ({
 const ALLOCATION_COLUMNS = `a.id, a.registration_number, a.student_user_id,
   COALESCE(a.full_name, s.full_name) AS full_name, a.status, a.source, a.created_at`;
 
-/** ACTIVE students first, dropped ones last. Nothing sits PENDING any more — see syncAllocationsFromErp. */
+/** ACTIVE students first, dropped ones last. Nothing sits PENDING any more — see syncRosterAllocations. */
 export async function listAllocations(unitId: string): Promise<Allocation[]> {
   const result = await query<AllocationRow>(
     `SELECT ${ALLOCATION_COLUMNS}
@@ -238,42 +350,60 @@ export async function listAllocations(unitId: string): Promise<Allocation[]> {
   return result.rows.map(toAllocation);
 }
 
-export interface ErpEnrollment {
+/**
+ * Where a roster row came from. 'SMARTTT' (the timetable system's
+ * registrations) and 'ERP' (the registrar's records) are synced; 'LECTURER'
+ * and 'SELF_ENROLLED' are legacy rows from before rosters were synced.
+ */
+export type AllocationSource = 'LECTURER' | 'SELF_ENROLLED' | 'ERP' | 'SMARTTT';
+
+/** The sources a roster sync owns: rows it may re-activate, re-label or drop. */
+const SYNCED_SOURCES: AllocationSource[] = ['ERP', 'SMARTTT'];
+
+export interface RosterEntry {
   registrationNumber: string;
-  fullName: string;
+  /** Null keeps whatever name the row already has. */
+  fullName: string | null;
 }
 
 /**
- * Reconciles a unit's roster with the ERP's enrollment list — this is how
- * students get onto a unit now, in place of a lecturer adding them or a
- * student self-enrolling. Each enrolled student is upserted ACTIVE with
- * source 'ERP'; an 'ERP'-sourced row that dropped off the ERP's list is
- * marked DROPPED (kept, not deleted, so past attendance keeps its context —
- * same reasoning as a lecturer-removed student previously). Rows from
- * another source (legacy lecturer-added or self-enrolled data, from before
- * this sync existed) are left untouched either way.
+ * Reconciles a unit's roster with an authoritative list — SMARTTT's
+ * registrations when it is configured, otherwise the ERP's enrollments. This
+ * is how students get onto a unit, in place of a lecturer adding them or a
+ * student self-enrolling.
+ *
+ * Each listed student is upserted ACTIVE with the given source. A synced row
+ * (source 'ERP' or 'SMARTTT') that is no longer listed is marked DROPPED —
+ * kept, not deleted, so past attendance keeps its context. Only one of the
+ * two is ever the authority for a deployment, so a switch from the mock ERP
+ * to SMARTTT drops the mock students rather than leaving them on the roster.
+ * Legacy lecturer-added or self-enrolled rows are left untouched either way.
  */
-export async function syncAllocationsFromErp(
+export async function syncRosterAllocations(
   unitId: string,
-  enrollments: ErpEnrollment[],
+  entries: RosterEntry[],
+  source: 'ERP' | 'SMARTTT',
 ): Promise<void> {
   await transaction(async (client: PoolClient) => {
-    for (const enrollment of enrollments) {
+    for (const entry of entries) {
       await query(
         `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source)
-         VALUES ($1, $2, $3, 'ACTIVE', 'ERP')
+         VALUES ($1, $2, $3, 'ACTIVE', $4)
          ON CONFLICT (unit_id, registration_number) WHERE registration_number IS NOT NULL
-         DO UPDATE SET status = 'ACTIVE', full_name = EXCLUDED.full_name, source = 'ERP', updated_at = NOW()`,
-        [unitId, enrollment.registrationNumber, enrollment.fullName],
+         DO UPDATE SET status = 'ACTIVE',
+                       full_name = COALESCE(EXCLUDED.full_name, unit_allocations.full_name),
+                       source = EXCLUDED.source,
+                       updated_at = NOW()`,
+        [unitId, entry.registrationNumber, entry.fullName, source],
         client,
       );
     }
     await query(
       `UPDATE unit_allocations
           SET status = 'DROPPED', updated_at = NOW()
-        WHERE unit_id = $1 AND source = 'ERP' AND status = 'ACTIVE'
-          AND NOT (registration_number = ANY($2::text[]))`,
-      [unitId, enrollments.map((e) => e.registrationNumber)],
+        WHERE unit_id = $1 AND source = ANY($2::text[]) AND status = 'ACTIVE'
+          AND NOT (registration_number = ANY($3::text[]))`,
+      [unitId, SYNCED_SOURCES, entries.map((e) => e.registrationNumber)],
       client,
     );
   });
@@ -281,7 +411,7 @@ export async function syncAllocationsFromErp(
 
 /**
  * For student registration to call once a student's account exists: attaches
- * the allocations synced from the ERP by registration number to that
+ * the allocations synced from SMARTTT or the ERP by registration number to that
  * account, so the student can check in. Skips any unit the student is
  * already linked to, which would otherwise break the
  * one-row-per-student-per-unit index.
