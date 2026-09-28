@@ -47,6 +47,8 @@ export interface UnitDto {
   studentsWithoutGroup: number | null;
   /** When SMARTTT last confirmed the unit; null for units only ever added by code. */
   timetableSyncedAt: string | null;
+  /** The slot's room and whether it has been surveyed for the geofence; null when the timetable names none. */
+  room: UnitSummary['room'];
 }
 
 const toUnitDto = (unit: UnitSummary): UnitDto => ({

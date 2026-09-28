@@ -15,11 +15,13 @@ function userId(req: Request): string {
 
 /** POST /api/v1/attendance/check-in */
 export async function checkIn(req: Request, res: Response): Promise<void> {
-  const { payload } = req.body as CheckInInput;
-  const result = await attendanceService.checkIn(payload, userId(req), {
-    ...clientFingerprint(req),
-    requestId: req.requestId,
-  });
+  const { payload, location } = req.body as CheckInInput;
+  const result = await attendanceService.checkIn(
+    payload,
+    userId(req),
+    { ...clientFingerprint(req), requestId: req.requestId },
+    location,
+  );
   sendCreated(res, result);
 }
 

@@ -1,4 +1,5 @@
 import { AppError } from '../../common/errors/index.js';
+import type { GeofenceMode } from '../../db/types.js';
 import { findSessionById } from '../session/index.js';
 import * as reportingRepository from './reporting.repository.js';
 
@@ -15,6 +16,8 @@ export interface SessionReportDto {
   rate: number;
   /** Display only, derived from real fields — nothing is stored under this name. */
   reference: string;
+  /** The session's final geofence setting. */
+  geofenceMode: GeofenceMode;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -36,6 +39,7 @@ const toDto = (row: reportingRepository.SessionReportRow): SessionReportDto => (
   total: row.total,
   rate: row.total > 0 ? Math.round((row.present / row.total) * 1000) / 10 : 0,
   reference: buildReference(row.unitCode, row.opensAt),
+  geofenceMode: row.geofenceMode,
 });
 
 /** Backs both the Dashboard's "Recent Sessions" (small `limit`) and the Attendance page's full log. */
@@ -47,7 +51,11 @@ export async function listSessionReports(
   return rows.map(toDto);
 }
 
-/** `Registration Number,Full Name,Status,Recorded At` — one row per ACTIVE allocation on the session's unit. */
+/**
+ * `Registration Number,Full Name,Status,Recorded At,Distance (m)` — one row per
+ * ACTIVE allocation on the session's unit. Distance is blank for absentees and
+ * for check-ins made with the geofence off.
+ */
 export async function exportSessionCsv(
   sessionId: string,
   lecturerUserId: string,
@@ -62,13 +70,14 @@ export async function exportSessionCsv(
 
   const escape = (value: string) => (/[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
   const lines = [
-    'Registration Number,Full Name,Status,Recorded At',
+    'Registration Number,Full Name,Status,Recorded At,Distance (m)',
     ...attendees.map((a) =>
       [
         escape(a.registrationNumber ?? ''),
         escape(a.fullName ?? ''),
         a.recordedAt ? 'Present' : 'Absent',
         a.recordedAt ? a.recordedAt.toISOString() : '',
+        a.distanceMetres === null ? '' : String(Math.round(a.distanceMetres)),
       ].join(','),
     ),
   ];

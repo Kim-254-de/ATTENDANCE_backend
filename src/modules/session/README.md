@@ -38,9 +38,56 @@ send a screenshot within the current minute. Three checks do the real work:
 3. **Session window** — a session that has closed, or drifted past `closes_at`,
    accepts nothing regardless of status.
 
-If you want the window closed further, geofencing or classroom-network checks
-(root README §13) are the next layer. Shortening `QR_ROTATION_SECONDS` helps
-too, at the cost of more failed scans.
+The fourth layer is the **geofence** (`session.geofence.ts`), below.
+Shortening `QR_ROTATION_SECONDS` also helps, at the cost of more failed scans.
+
+## The geofence
+
+Each session is fenced to a centre point chosen at activation
+(`chooseCentre`):
+
+1. the room's surveyed point (`rooms`, set with `npm run dev:set-room`), else
+2. the lecturer's device reading sent with `POST /sessions` as
+   `location: { latitude, longitude, accuracy }`, if accurate to
+   `GEOFENCE_MAX_ANCHOR_ACCURACY_METRES` (30 m), else
+3. activation is refused with `422 GEOFENCE_ANCHOR_UNAVAILABLE`.
+
+`geofence: 'OFF'` on `POST /sessions` opens the class unfenced.
+`PATCH /sessions/:id/geofence` takes `{ mode: 'OFF' }` or
+`{ mode: 'ON', location? }` (switch back on, or re-capture the lecturer's
+position). A surveyed room always wins, so a lecturer cannot drag the fence
+off it. Every change is audited as `ATTENDANCE_SESSION_GEOFENCE_CHANGED`.
+The fence's status (never its coordinates) is returned as `session.geofence`
+by every session endpoint, including `GET /sessions/:id/qr`.
+
+### At check-in
+
+The full contract for app developers, with platform settings and what to
+show for each error, is [`docs/student-app-checkin.md`](../../../docs/student-app-checkin.md).
+
+`POST /attendance/check-in` and `POST /sessions/scan` take
+`location: { latitude, longitude, accuracy, capturedAt, isMocked? }`
+(`capturedAt` as epoch milliseconds or ISO 8601). When the fence is on,
+`verifyScan` checks it after the code and session-time checks and before the
+class-list check:
+
+| Code | Status | When |
+|---|---|---|
+| `LOCATION_REQUIRED` | 422 | no `location` |
+| `LOCATION_MOCKED` | 403 | `isMocked: true` |
+| `LOCATION_STALE` | 422 | `capturedAt` more than `GEOFENCE_MAX_FIX_AGE_SECONDS` (60) from the server's clock |
+| `LOCATION_TOO_IMPRECISE` | 422 | `accuracy` above `GEOFENCE_MAX_STUDENT_ACCURACY_METRES` (50) |
+| `OUTSIDE_GEOFENCE` | 403 | `distance - accuracy > radius` |
+
+422 means the phone can fix it and retry; 403 means retrying won't help.
+`error.details` carries the rounded distance and the limits, for the app to
+show. Every refusal is audited through `recordFailure` with the distance and
+accuracy (never coordinates), and `GET /sessions/:id/qr` counts students
+refused as `OUTSIDE_GEOFENCE` who have not since checked in
+(`refusedOutsideFence`). An accepted check-in stores `distance_m`,
+`location_accuracy_m` and `geofence_result`; the student's coordinates are
+never stored. With the fence off, `location` is ignored and the record is
+`NOT_CHECKED`.
 
 ## The grace window
 

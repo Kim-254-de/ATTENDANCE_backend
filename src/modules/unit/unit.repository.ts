@@ -35,6 +35,12 @@ export interface UnitSummary {
   studentsWithoutGroup: number | null;
   /** When SMARTTT last confirmed this unit for its lecturer. Null for units only added by code. */
   timetableSyncedAt: Date | null;
+  /**
+   * Where the unit's slot is taught, per SMARTTT, and whether that room's centre
+   * point has been surveyed. Activate Class only asks for the lecturer's location
+   * when it hasn't. Null when the timetable names no room.
+   */
+  room: { code: string; surveyed: boolean } | null;
 }
 
 interface UnitSummaryRow {
@@ -53,6 +59,8 @@ interface UnitSummaryRow {
   registered_students: number | null;
   students_without_group: number | null;
   timetable_synced_at: Date | null;
+  room_code: string | null;
+  room_surveyed: boolean;
 }
 
 const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
@@ -72,6 +80,7 @@ const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
   registeredStudents: row.registered_students,
   studentsWithoutGroup: row.students_without_group,
   timetableSyncedAt: row.timetable_synced_at,
+  room: row.room_code === null ? null : { code: row.room_code, surveyed: row.room_surveyed },
 });
 
 const SELECT_UNIT_SUMMARY = `
@@ -79,12 +88,13 @@ const SELECT_UNIT_SUMMARY = `
          u.registered_students, u.students_without_group, u.timetable_synced_at,
          COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int  AS student_count,
          COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count,
-         s.day_of_week, s.start_time, s.end_time
+         s.day_of_week, s.start_time, s.end_time, s.room_code,
+         EXISTS (SELECT 1 FROM rooms r WHERE r.code = s.room_code AND r.latitude IS NOT NULL) AS room_surveyed
     FROM units u
     LEFT JOIN unit_allocations a ON a.unit_id = u.id
     LEFT JOIN unit_schedule s ON s.unit_id = u.id
 `;
-const GROUP_BY_UNIT_SUMMARY = 'GROUP BY u.id, s.day_of_week, s.start_time, s.end_time';
+const GROUP_BY_UNIT_SUMMARY = 'GROUP BY u.id, s.day_of_week, s.start_time, s.end_time, s.room_code';
 // u.status (and the other u.* columns) are functionally dependent on u.id (the primary key already in GROUP BY), so
 // Postgres allows selecting it un-aggregated without adding it to the GROUP BY list.
 

@@ -1,5 +1,5 @@
-import rateLimit from 'express-rate-limit';
-import type { Request, Response } from 'express';
+import rateLimit, { type Options } from 'express-rate-limit';
+import type { Request, RequestHandler, Response } from 'express';
 import { env, isTest } from '../config/env.js';
 import { ErrorCode } from '../common/errors/index.js';
 import type { ErrorEnvelope } from '../common/http/index.js';
@@ -15,13 +15,19 @@ import type { ErrorEnvelope } from '../common/http/index.js';
  * a /64 to sidestep the limit).
  */
 
-function buildLimiter(max: number, windowMs: number, message: string) {
+function buildLimiter(
+  max: number,
+  windowMs: number,
+  message: string,
+  options: Pick<Partial<Options>, 'keyGenerator' | 'skip'> = {},
+) {
   return rateLimit({
     windowMs,
     limit: max,
     // Tests skip limiting so they stay deterministic. (In express-rate-limit v7 a limit of 0
     // does NOT disable the limiter - it rejects every request - hence `skip`.)
-    skip: () => isTest,
+    skip: options.skip ?? (() => isTest),
+    ...(options.keyGenerator ? { keyGenerator: options.keyGenerator } : {}),
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     handler: (req: Request, res: Response) => {
@@ -35,11 +41,58 @@ function buildLimiter(max: number, windowMs: number, message: string) {
   });
 }
 
+/**
+ * The two routes a scanning student hits. Mounted at /api, so paths are relative to it.
+ * They have their own limiters (checkInLimiters) and must not also count
+ * against the per-IP global bucket, or a class sharing campus Wi-Fi would.
+ */
+const CHECK_IN_PATHS = new Set(['/v1/attendance/check-in', '/v1/sessions/scan']);
+export const isCheckInRequest = (req: Request): boolean => req.method === 'POST' && CHECK_IN_PATHS.has(req.path);
+
 export const globalLimiter = buildLimiter(
   env.RATE_LIMIT_MAX_REQUESTS,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many requests. Please slow down and try again shortly.',
+  { skip: (req) => isTest || isCheckInRequest(req) },
 );
+
+/**
+ * Check-in limits, in the order the route applies them:
+ *   perIp      - before sign-in is checked, a high backstop against floods from one address
+ *   perStudent - after requireAuth, keyed by the signed-in user, so each student in a
+ *                hall gets their own allowance however many share an IP
+ *
+ * A factory so tests can build enforcing instances; the routes use the shared ones below.
+ * Both check-in routes share one pair of stores: /sessions/scan must not give a
+ * student a second allowance.
+ */
+export function createCheckInLimiters(
+  options: { perStudent?: number; perIp?: number; windowMs?: number; enforceInTests?: boolean } = {},
+): { perIp: RequestHandler; perStudent: RequestHandler } {
+  const windowMs = options.windowMs ?? env.CHECKIN_RATE_LIMIT_WINDOW_MS;
+  const skip = () => isTest && !options.enforceInTests;
+  return {
+    perIp: buildLimiter(
+      options.perIp ?? env.CHECKIN_RATE_LIMIT_PER_IP,
+      windowMs,
+      'Too many check-ins from this network right now. Wait a moment and scan again.',
+      { skip },
+    ),
+    perStudent: buildLimiter(
+      options.perStudent ?? env.CHECKIN_RATE_LIMIT_PER_STUDENT,
+      windowMs,
+      'Too many check-in attempts. Wait a few minutes before scanning again.',
+      {
+        skip,
+        // requireAuth runs first, so auth is always set here; the IP fallback
+        // only guards against the limiter being mounted in the wrong place.
+        keyGenerator: (req) => (req.auth ? `user:${req.auth.userId}` : `ip:${req.ip ?? 'unknown'}`),
+      },
+    ),
+  };
+}
+
+export const checkInLimiters = createCheckInLimiters();
 
 export const registrationLimiter = buildLimiter(
   env.REGISTER_RATE_LIMIT_MAX,

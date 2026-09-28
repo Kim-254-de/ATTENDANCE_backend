@@ -10,3 +10,5 @@ export {
   VERIFICATION_MESSAGES,
 } from './session.token.js';
 export type { QrToken, QrVerificationResult, QrVerificationFailure } from './session.token.js';
+/** For attendance.schema.ts: check-in carries the same reading as a scan. */
+export { studentLocationSchema, type StudentLocationInput } from './session.schema.js';

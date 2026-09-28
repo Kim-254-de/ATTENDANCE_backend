@@ -4,7 +4,19 @@ import { logger } from '../../config/logger.js';
 import { auditService } from '../audit/index.js';
 import { findUnitSchedule } from '../unit/index.js';
 import * as sessionRepository from './session.repository.js';
-import type { SessionForQr } from './session.repository.js';
+import type { SessionForQr, SessionGeofence, UnitRoom } from './session.repository.js';
+import {
+  centreRefusalMessage,
+  checkReading,
+  chooseCentre,
+  rejectionMessage,
+  roundDistanceForDisplay,
+  type AnchorReading,
+  type CentreChoice,
+  type GeofenceRejection,
+  type ReadingCheck,
+  type StudentReading,
+} from './session.geofence.js';
 import {
   VERIFICATION_MESSAGES,
   generateSessionSecret,
@@ -13,7 +25,7 @@ import {
   type QrToken,
   type QrVerificationFailure,
 } from './session.token.js';
-import type { CreateSessionInput } from './session.schema.js';
+import type { CreateSessionInput, UpdateGeofenceInput } from './session.schema.js';
 
 /**
  * Attendance session and rotating QR policy.
@@ -39,7 +51,33 @@ export interface SessionSummary {
   opensAt: string;
   closesAt: string;
   rotationSeconds: number;
+  geofence: GeofenceStatus;
 }
+
+/**
+ * What the lecturer's screen shows about the fence. The centre's coordinates
+ * are left out: the screen has no use for them, and a lecturer-device centre
+ * is where the lecturer was standing.
+ */
+export interface GeofenceStatus {
+  mode: SessionGeofence['mode'];
+  /** Null while OFF with no centre ever set. */
+  radiusMetres: number | null;
+  /** The room the unit's slot is in, per SMARTTT. Null when unknown. */
+  roomCode: string | null;
+  /** How precise the centre is: the room survey, or the lecturer's device reading. */
+  anchorAccuracyMetres: number | null;
+  /** Whether switching it back ON can reuse the stored centre without a new reading. */
+  hasCentre: boolean;
+}
+
+const toGeofenceStatus = (session: SessionForQr): GeofenceStatus => ({
+  mode: session.geofence.mode,
+  radiusMetres: session.geofence.radiusMetres,
+  roomCode: session.roomCode,
+  anchorAccuracyMetres: session.geofence.anchorAccuracyMetres,
+  hasCentre: session.geofence.latitude !== null && session.geofence.longitude !== null,
+});
 
 const toSummary = (session: SessionForQr): SessionSummary => ({
   id: session.id,
@@ -51,6 +89,7 @@ const toSummary = (session: SessionForQr): SessionSummary => ({
   opensAt: session.opensAt.toISOString(),
   closesAt: session.closesAt.toISOString(),
   rotationSeconds: session.rotationSeconds,
+  geofence: toGeofenceStatus(session),
 });
 
 /**
@@ -78,6 +117,8 @@ export async function createSession(
 
   const opensAt = input.opensAt ?? new Date();
   const closesAt = await resolveClosesAt(input.unitId, opensAt, input.closesAt);
+  const room = await sessionRepository.findUnitRoom(input.unitId);
+  const geofence = resolveInitialGeofence(input.geofence, room, input.location);
 
   const session = await sessionRepository.createSession({
     unitId: input.unitId,
@@ -87,6 +128,7 @@ export async function createSession(
     opensAt,
     closesAt,
     rotationSeconds: input.rotationSeconds ?? env.QR_ROTATION_SECONDS,
+    geofence,
   });
 
   await auditService.record({
@@ -96,11 +138,67 @@ export async function createSession(
     requestId: context.requestId,
     ipAddress: context.ipAddress,
     userAgent: context.userAgent,
-    metadata: { sessionId: session.id, unitCode: session.unitCode },
+    metadata: {
+      sessionId: session.id,
+      unitCode: session.unitCode,
+      geofence: { mode: geofence.mode, roomCode: session.roomCode, anchorAccuracyMetres: geofence.anchorAccuracyMetres },
+    },
   });
 
-  logger.info({ sessionId: session.id, unitCode: session.unitCode }, 'attendance session opened');
+  logger.info(
+    { sessionId: session.id, unitCode: session.unitCode, geofence: geofence.mode },
+    'attendance session opened',
+  );
   return toSummary(session);
+}
+
+/**
+ * The fence a new session starts with. See chooseCentre for which point wins.
+ *
+ * ON with no usable centre refuses the activation outright rather than
+ * quietly opening an unfenced session: the lecturer asked for a fence and
+ * should know they are not getting one. They can activate from a phone, or
+ * switch the fence off themselves.
+ *
+ * OFF still records a centre when one is available, so switching the fence
+ * on partway through the class needs no fresh reading.
+ */
+function resolveInitialGeofence(
+  requested: 'ON' | 'OFF',
+  room: UnitRoom | null,
+  lecturerReading: AnchorReading | undefined,
+): SessionGeofence {
+  const choice = chooseCentre(room, lecturerReading);
+
+  if (requested === 'OFF') {
+    return choice.ok
+      ? { ...fenceAt(choice), mode: 'OFF' }
+      : { mode: 'OFF', latitude: null, longitude: null, radiusMetres: null, anchorAccuracyMetres: null };
+  }
+
+  if (!choice.ok) throw anchorUnavailable(choice);
+  return fenceAt(choice);
+}
+
+function fenceAt(choice: Extract<CentreChoice, { ok: true }>, radiusMetres = env.GEOFENCE_RADIUS_METRES): SessionGeofence {
+  return {
+    mode: choice.mode,
+    latitude: choice.latitude,
+    longitude: choice.longitude,
+    radiusMetres,
+    anchorAccuracyMetres: choice.anchorAccuracyMetres,
+  };
+}
+
+/** 422: the request is well-formed, but there is nothing precise enough to fence the class around. */
+function anchorUnavailable(choice: Extract<CentreChoice, { ok: false }>): AppError {
+  return new AppError(422, ErrorCode.GEOFENCE_ANCHOR_UNAVAILABLE, centreRefusalMessage(choice), {
+    details: {
+      reason: choice.reason,
+      accuracyMetres: choice.accuracyMetres ?? null,
+      maxAccuracyMetres: env.GEOFENCE_MAX_ANCHOR_ACCURACY_METRES,
+    },
+  });
 }
 
 /**
@@ -162,6 +260,8 @@ export interface CurrentQr {
   checkedIn: number;
   /** Students ACTIVE on the unit, i.e. who could check in. */
   enrolled: number;
+  /** Students refused for being outside the fence who have not since checked in. */
+  refusedOutsideFence: number;
 }
 
 /**
@@ -183,7 +283,10 @@ export async function getCurrentQr(sessionId: string, lecturerUserId: string): P
   assertSessionAcceptingScans(session);
 
   const token = issueTokenFor(session);
-  const { checkedIn, enrolled } = await sessionRepository.countAttendance(session.id, session.unitId);
+  const { checkedIn, enrolled, refusedOutsideFence } = await sessionRepository.countAttendance(
+    session.id,
+    session.unitId,
+  );
   return {
     session: toSummary(session),
     payload: token.payload,
@@ -191,6 +294,7 @@ export async function getCurrentQr(sessionId: string, lecturerUserId: string): P
     rotatesAt: token.rotatesAt.toISOString(),
     checkedIn,
     enrolled,
+    refusedOutsideFence,
   };
 }
 
@@ -228,7 +332,14 @@ export interface ScanVerdict {
   eligible: boolean;
   /** Seconds between the code being minted and the scan arriving. */
   ageSeconds: number;
+  /** What the location check found; attendance.service.ts stores it on the record. */
+  geofence: ScanGeofence;
 }
+
+/** Never the student's coordinates: only how far they were, which is all attendance needs. */
+export type ScanGeofence =
+  | { result: 'INSIDE'; distanceMetres: number; accuracyMetres: number }
+  | { result: 'NOT_CHECKED' };
 
 /**
  * Validates a scanned code on behalf of a student.
@@ -239,11 +350,17 @@ export interface ScanVerdict {
  * Order matters. The signature is checked before the allocation lookup so a
  * forged code never causes a database read, and every rejection returns the
  * same shape so the endpoint cannot be used to enumerate sessions.
+ *
+ * The location check comes after the code and session-time checks (a student
+ * holding a dead code should be told to rescan, not to move) and before the
+ * class-list check, so a friend at home with a forwarded code is refused for
+ * where they are, and the lecturer's refused-outside counter sees them.
  */
 export async function verifyScan(
   payload: string,
   studentUserId: string,
   context: RequestContext,
+  location?: StudentReading,
 ): Promise<ScanVerdict> {
   // The session id inside the payload is untrusted until the signature over it
   // verifies, so it is only used to look up the candidate session.
@@ -269,6 +386,17 @@ export async function verifyScan(
   }
 
   assertSessionAcceptingScans(session);
+
+  const geofence = checkGeofence(session, location);
+  if (!geofence.accepted) {
+    await recordFailure(session, studentUserId, geofence.reason, context, {
+      geofenceMode: session.geofence.mode,
+      distanceMetres: roundForAudit(geofence.distanceMetres),
+      accuracyMetres: roundForAudit(geofence.accuracyMetres),
+      isMocked: location?.isMocked ?? null,
+    });
+    throw geofenceRejected(geofence, session);
+  }
 
   const allocated = await sessionRepository.studentAllocatedToUnit(session.unitId, studentUserId);
   if (!allocated) {
@@ -296,7 +424,14 @@ export async function verifyScan(
     requestId: context.requestId,
     ipAddress: context.ipAddress,
     userAgent: context.userAgent,
-    metadata: { sessionId: session.id, unitCode: session.unitCode, ageSeconds: result.ageSeconds },
+    metadata: {
+      sessionId: session.id,
+      unitCode: session.unitCode,
+      ageSeconds: result.ageSeconds,
+      geofenceMode: session.geofence.mode,
+      distanceMetres: geofence.checked ? roundForAudit(geofence.distanceMetres) : null,
+      accuracyMetres: geofence.checked ? roundForAudit(geofence.accuracyMetres) : null,
+    },
   });
 
   return {
@@ -305,7 +440,65 @@ export async function verifyScan(
     unitCode: session.unitCode,
     eligible: true,
     ageSeconds: result.ageSeconds,
+    geofence: geofence.checked
+      ? {
+          result: 'INSIDE',
+          distanceMetres: roundForAudit(geofence.distanceMetres)!,
+          accuracyMetres: roundForAudit(geofence.accuracyMetres)!,
+        }
+      : { result: 'NOT_CHECKED' },
   };
+}
+
+type GeofenceOutcome =
+  | ({ checked: true } & Extract<ReadingCheck, { accepted: true }>)
+  | { checked: false; accepted: true }
+  | Extract<ReadingCheck, { accepted: false }>;
+
+/** The session's fence applied to a scan. An OFF fence accepts anything, including no reading. */
+function checkGeofence(session: SessionForQr, location: StudentReading | undefined): GeofenceOutcome {
+  const { mode, latitude, longitude, radiusMetres } = session.geofence;
+  if (mode === 'OFF') return { checked: false, accepted: true };
+  // The CHECK constraint guarantees these when the mode is not OFF.
+  if (latitude === null || longitude === null || radiusMetres === null) {
+    throw new Error(`session ${session.id} is geofenced (${mode}) but has no centre`);
+  }
+  const check = checkReading({ latitude, longitude, radiusMetres }, location);
+  return check.accepted ? { checked: true, ...check } : check;
+}
+
+/**
+ * The status tells the app what to do next:
+ *   422 - fixable on the phone (allow location, wait for a fresh or better fix)
+ *   403 - not fixable by retrying (outside the room, or a faked location)
+ * `details` lets the app show the distance without parsing the message.
+ */
+function geofenceRejected(check: Extract<ReadingCheck, { accepted: false }>, session: SessionForQr): AppError {
+  const status: Record<GeofenceRejection, number> = {
+    LOCATION_REQUIRED: 422,
+    LOCATION_STALE: 422,
+    LOCATION_TOO_IMPRECISE: 422,
+    LOCATION_MOCKED: 403,
+    OUTSIDE_GEOFENCE: 403,
+  };
+  return new AppError(status[check.reason], ErrorCode[check.reason], rejectionMessage(check, session.roomCode), {
+    details: {
+      reason: check.reason,
+      roomCode: session.roomCode,
+      radiusMetres: session.geofence.radiusMetres,
+      maxAccuracyMetres: env.GEOFENCE_MAX_STUDENT_ACCURACY_METRES,
+      maxFixAgeSeconds: env.GEOFENCE_MAX_FIX_AGE_SECONDS,
+      // Rounded like the message: a student has no use for centimetres, and
+      // exact figures would only help someone calibrate a fake position.
+      distanceMetres: check.distanceMetres === undefined ? null : roundDistanceForDisplay(check.distanceMetres),
+      accuracyMetres: check.accuracyMetres === undefined ? null : Math.round(check.accuracyMetres),
+    },
+  });
+}
+
+/** One decimal place: finer than GPS can measure, coarse enough to read. */
+function roundForAudit(metres: number | undefined): number | null {
+  return metres === undefined ? null : Math.round(metres * 10) / 10;
 }
 
 /** Pauses, resumes or closes a session. Closing invalidates every future code. */
@@ -338,6 +531,90 @@ export async function setSessionStatus(
   });
 
   return toSummary({ ...session, status });
+}
+
+/**
+ * Switches a running session's fence off or on, or re-centres it.
+ *
+ * Switching ON picks the centre the same way activation does (a surveyed room
+ * always wins, so a lecturer cannot drag the fence off a surveyed room), with
+ * one addition: with no room and no new reading, the centre the session
+ * already had is reused. Sending a location is how a lecturer re-captures
+ * their position, e.g. after activating from the corridor.
+ *
+ * Every change is audited with the lecturer, because switching the fence off
+ * is exactly what a lecturer covering for absent students would do.
+ */
+export async function setSessionGeofence(
+  sessionId: string,
+  lecturerUserId: string,
+  input: UpdateGeofenceInput,
+  context: RequestContext,
+): Promise<SessionSummary> {
+  const session = await sessionRepository.findSessionById(sessionId);
+  if (!session) throw AppError.notFound('Session not found.');
+  if (session.lecturerUserId !== lecturerUserId) {
+    throw AppError.forbidden('This session belongs to another lecturer.');
+  }
+  if (session.status === 'CLOSED') {
+    throw AppError.conflict('This class session has been closed.');
+  }
+
+  const previous = session.geofence;
+  let next: SessionGeofence;
+
+  if (input.mode === 'OFF') {
+    if (previous.mode === 'OFF') return toSummary(session);
+    next = { ...previous, mode: 'OFF' };
+  } else {
+    const room = await sessionRepository.findUnitRoom(session.unitId);
+    const choice = chooseCentre(room, input.location);
+    const radiusMetres = previous.radiusMetres ?? env.GEOFENCE_RADIUS_METRES;
+
+    if (choice.ok) {
+      next = fenceAt(choice, radiusMetres);
+    } else if (!input.location && previous.latitude !== null && previous.longitude !== null) {
+      // Reuse the centre captured earlier. With no surveyed room behind it any
+      // more, it is the lecturer's device reading (or a room point SMARTTT has
+      // since moved the class away from) and is labelled as such.
+      next = { ...previous, mode: 'LECTURER_DEVICE', radiusMetres };
+    } else {
+      throw anchorUnavailable(choice);
+    }
+  }
+
+  if (sameFence(previous, next)) return toSummary(session);
+
+  await sessionRepository.updateSessionGeofence(sessionId, lecturerUserId, next);
+
+  await auditService.record({
+    action: 'ATTENDANCE_SESSION_GEOFENCE_CHANGED',
+    outcome: 'SUCCESS',
+    userId: lecturerUserId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: {
+      sessionId,
+      unitCode: session.unitCode,
+      from: previous.mode,
+      to: next.mode,
+      recaptured: input.mode === 'ON' && input.location !== undefined,
+      anchorAccuracyMetres: next.anchorAccuracyMetres,
+    },
+  });
+
+  return toSummary({ ...session, geofence: next });
+}
+
+function sameFence(a: SessionGeofence, b: SessionGeofence): boolean {
+  return (
+    a.mode === b.mode &&
+    a.latitude === b.latitude &&
+    a.longitude === b.longitude &&
+    a.radiusMetres === b.radiusMetres &&
+    a.anchorAccuracyMetres === b.anchorAccuracyMetres
+  );
 }
 
 /**
@@ -379,6 +656,7 @@ async function recordFailure(
   studentUserId: string,
   reason: string,
   context: RequestContext,
+  extra: Record<string, unknown> = {},
 ): Promise<void> {
   await auditService.record({
     action: 'ATTENDANCE_SCAN_REJECTED',
@@ -388,6 +666,6 @@ async function recordFailure(
     requestId: context.requestId,
     ipAddress: context.ipAddress,
     userAgent: context.userAgent,
-    metadata: { sessionId: session.id, unitCode: session.unitCode },
+    metadata: { sessionId: session.id, unitCode: session.unitCode, ...extra },
   });
 }

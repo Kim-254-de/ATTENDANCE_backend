@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { studentLocationSchema } from '../session/index.js';
 
 const uuid = z.string().uuid('Not a valid identifier.');
 
@@ -9,6 +10,8 @@ const uuid = z.string().uuid('Not a valid identifier.');
 export const checkInSchema = z
   .object({
     payload: z.string().trim().min(8, 'Not a valid attendance code.').max(512),
+    /** The phone's GPS reading. Required when the session's geofence is on. */
+    location: studentLocationSchema.optional(),
   })
   .strict();
 export type CheckInInput = z.infer<typeof checkInSchema>;

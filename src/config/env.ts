@@ -132,6 +132,16 @@ const envSchema = z
     // Tighter than sign-in: each request sends an email, so an open endpoint is
     // a way to flood someone's inbox from a stranger's browser.
     PASSWORD_RESET_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    // Check-in is limited per signed-in student, not per IP: a lecture hall on
+    // campus Wi-Fi reaches the API from one public address, and a per-IP limit
+    // sized for one person would lock the whole class out within minutes.
+    // Generous enough for a student retrying a vague or stale location reading;
+    // tight enough that nobody can probe the fence to calibrate a fake position.
+    CHECKIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+    CHECKIN_RATE_LIMIT_PER_STUDENT: z.coerce.number().int().positive().default(20),
+    // Backstop against a flood from one address before sign-in is even checked.
+    // Sized for the biggest hall retrying at once, not for one person.
+    CHECKIN_RATE_LIMIT_PER_IP: z.coerce.number().int().positive().default(3000),
 
     // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
     /** Consecutive wrong passwords before the account is temporarily locked. */

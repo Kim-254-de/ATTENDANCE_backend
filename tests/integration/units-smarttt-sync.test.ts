@@ -57,7 +57,7 @@ let smartttCalls: URL[] = [];
 let smartttHeaders: Headers[] = [];
 
 const slot = (dayOfWeek: number, startTime = '08:00', endTime = '10:00') =>
-  ({ day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: 'LH1', class_group: 'MAIN', program: 'BSc CS' });
+  ({ day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: 'LH1' as string | null, class_group: 'MAIN', program: 'BSc CS' });
 type Student = { registration_number: string; full_name: string | null };
 const unit = (
   code: string, registered: number, slots = [slot(1)], matchedBy: 'account' | 'name' = 'account',
@@ -187,6 +187,42 @@ describe('GET /units syncs from SMARTTT', () => {
     expect(second['BIT 110']).toMatchObject({ id: first['BIT 110']!.id, name: 'Renamed', registeredStudents: 12,
       schedule: { dayOfWeek: 3, startTime: '08:00', endTime: '10:00' } });
     expect(second['BIT 120']).toMatchObject({ id: first['BIT 120']!.id, registeredStudents: 5 }); // kept, last known count
+  });
+
+  it("records the room each class is taught in, for the geofence", async () => {
+    const lec = await makeLecturer();
+    const inRoom = (room: string | null, dayOfWeek = 1) => ({ ...slot(dayOfWeek), room });
+    const roomOf = async (code: string) =>
+      (await pool.query<{ room_code: string | null }>(
+        `SELECT s.room_code FROM unit_schedule s JOIN units u ON u.id = s.unit_id WHERE u.code = $1`, [code],
+      )).rows[0]?.room_code;
+
+    smarttt[lec.staffNumber] = { units: [
+      unit('GEO 100', 10, [inRoom(' lh  1 ')]),                   // normalised like codes
+      unit('GEO 200', 10, [inRoom('LH2'), inRoom('lh2')]),        // same slot twice, same room
+      unit('GEO 300', 10, [inRoom('LH3'), inRoom('LAB 1')]),      // same slot, rooms disagree
+      unit('GEO 400', 10, [inRoom(null)]),
+      unit('GEO 500', 10, [inRoom('   ')]),
+    ] };
+    await getUnits(lec);
+    expect(await roomOf('GEO 100')).toBe('LH 1');
+    expect(await roomOf('GEO 200')).toBe('LH2');
+    expect(await roomOf('GEO 300')).toBeNull();
+    expect(await roomOf('GEO 400')).toBeNull();
+    expect(await roomOf('GEO 500')).toBeNull();
+
+    // A move follows SMARTTT, and so does SMARTTT dropping the room.
+    resetTimetableSyncState();
+    smarttt[lec.staffNumber] = { units: [unit('GEO 100', 10, [inRoom('LH9')]), unit('GEO 200', 10, [inRoom(null)])] };
+    await getUnits(lec);
+    expect(await roomOf('GEO 100')).toBe('LH9');
+    expect(await roomOf('GEO 200')).toBeNull();
+
+    // Two slots: no schedule is written, so the last known room is left alone too.
+    resetTimetableSyncState();
+    smarttt[lec.staffNumber] = { units: [unit('GEO 100', 10, [inRoom('LH7', 1), inRoom('LH7', 3)])] };
+    await getUnits(lec);
+    expect(await roomOf('GEO 100')).toBe('LH9');
   });
 
   it('holds back units SMARTTT only matches by name until an admin verifies them', async () => {

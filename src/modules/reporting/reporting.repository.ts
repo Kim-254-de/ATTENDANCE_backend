@@ -1,4 +1,5 @@
 import { query } from '../../db/database.js';
+import type { GeofenceMode } from '../../db/types.js';
 
 /** All SQL for the reporting module. Every query is parameterised. */
 
@@ -12,6 +13,8 @@ export interface SessionReportRow {
   present: number;
   /** ACTIVE allocations on the unit right now — the same roster-size convention session.service.ts's countAttendance uses. */
   total: number;
+  /** The session's final setting; switches made mid-session are in the audit log. */
+  geofenceMode: GeofenceMode;
 }
 
 /**
@@ -31,8 +34,9 @@ export async function listSessionReports(
     unit_name: string | null;
     present: number;
     total: number;
+    geofence_mode: GeofenceMode;
   }>(
-    `SELECT s.id, s.opens_at, s.unit_id, u.code AS unit_code, u.name AS unit_name,
+    `SELECT s.id, s.opens_at, s.unit_id, u.code AS unit_code, u.name AS unit_name, s.geofence_mode,
             (SELECT COUNT(*) FROM attendance_records r WHERE r.session_id = s.id)::int AS present,
             (SELECT COUNT(*) FROM unit_allocations a
               WHERE a.unit_id = s.unit_id AND a.status = 'ACTIVE')::int AS total
@@ -52,6 +56,7 @@ export async function listSessionReports(
     unitName: row.unit_name,
     present: row.present,
     total: row.total,
+    geofenceMode: row.geofence_mode,
   }));
 }
 
@@ -59,6 +64,7 @@ export interface AttendeeCsvRow {
   registrationNumber: string | null;
   fullName: string | null;
   recordedAt: Date | null;
+  distanceMetres: number | null;
 }
 
 /** Every ACTIVE allocation on the session's unit, with whether (and when) they checked in to THIS session. */
@@ -70,8 +76,9 @@ export async function listSessionAttendeesForExport(
     registration_number: string | null;
     full_name: string | null;
     recorded_at: Date | null;
+    distance_m: number | null;
   }>(
-    `SELECT a.registration_number, COALESCE(a.full_name, s.full_name) AS full_name, r.recorded_at
+    `SELECT a.registration_number, COALESCE(a.full_name, s.full_name) AS full_name, r.recorded_at, r.distance_m
        FROM unit_allocations a
        LEFT JOIN users s ON s.id = a.student_user_id
        LEFT JOIN attendance_records r ON r.allocation_id = a.id AND r.session_id = $1
@@ -83,5 +90,6 @@ export async function listSessionAttendeesForExport(
     registrationNumber: row.registration_number,
     fullName: row.full_name,
     recordedAt: row.recorded_at,
+    distanceMetres: row.distance_m,
   }));
 }

@@ -1,7 +1,7 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { isUniqueViolation } from '../../db/database.js';
 import { auditService } from '../audit/index.js';
-import { sessionService } from '../session/index.js';
+import { sessionService, type StudentLocationInput } from '../session/index.js';
 import * as attendanceRepository from './attendance.repository.js';
 
 /**
@@ -20,6 +20,8 @@ export interface CheckInResult {
   sessionId: string;
   unitCode: string;
   recordedAt: string;
+  /** How far from the room's centre the check-in was; null when the session's geofence was off. */
+  distanceMetres: number | null;
 }
 
 const ALREADY_RECORDED = 'Your attendance for this class has already been recorded.';
@@ -28,8 +30,10 @@ export async function checkIn(
   payload: string,
   studentUserId: string,
   context: RequestContext,
+  location?: StudentLocationInput,
 ): Promise<CheckInResult> {
-  const verdict = await sessionService.verifyScan(payload, studentUserId, context);
+  const verdict = await sessionService.verifyScan(payload, studentUserId, context, location);
+  const fence = verdict.geofence;
 
   let record: { id: string; recordedAt: Date };
   try {
@@ -38,6 +42,10 @@ export async function checkIn(
       unitId: verdict.unitId,
       studentUserId,
       qrAgeSeconds: verdict.ageSeconds,
+      // The distance and accuracy only; the student's coordinates are never stored.
+      geofenceResult: fence.result,
+      distanceMetres: fence.result === 'INSIDE' ? fence.distanceMetres : null,
+      locationAccuracyMetres: fence.result === 'INSIDE' ? fence.accuracyMetres : null,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
     });
@@ -62,6 +70,7 @@ export async function checkIn(
     sessionId: verdict.sessionId,
     unitCode: verdict.unitCode,
     recordedAt: record.recordedAt.toISOString(),
+    distanceMetres: fence.result === 'INSIDE' ? fence.distanceMetres : null,
   };
 }
 
@@ -74,6 +83,9 @@ export interface SessionAttendance {
     fullName: string;
     registrationNumber: string | null;
     recordedAt: string;
+    /** Null when the session's geofence was off at check-in. */
+    distanceMetres: number | null;
+    geofenceResult: 'INSIDE' | 'NOT_CHECKED';
   }>;
 }
 

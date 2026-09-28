@@ -192,7 +192,7 @@ describe('units', () => {
 
     // VERIFIED means usable at once — no dev:verify-unit step needed.
     const activate = await api(lecturer.auth).post('/sessions', {
-      unitId: body<{ id: string }>(res).data.id, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      unitId: body<{ id: string }>(res).data.id, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(), geofence: 'OFF',
     });
     expect(activate.status).toBe(201);
   });
@@ -235,7 +235,7 @@ describe('units', () => {
     await pool.query(`UPDATE units SET status = 'VERIFIED' WHERE id = $1`, [unitId]);
 
     const allowed = await api(lecturer.auth).post('/sessions', {
-      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(), geofence: 'OFF',
     });
     expect(allowed.status).toBe(201);
   });
@@ -302,9 +302,10 @@ describe('the roster, synced from the ERP', () => {
 });
 
 describe('check-in', () => {
+  // Geofence off: these tests are about who may check in, not from where (see 'geofence' below).
   async function openSession(lecturer: { auth: string }, unitId: string) {
     const res = await api(lecturer.auth).post('/sessions', {
-      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(), geofence: 'OFF',
     });
     expect(res.status).toBe(201);
     const sessionId = body<{ id: string }>(res).data.id;
@@ -371,5 +372,448 @@ describe('check-in', () => {
 
     expect((await api(other.auth).get(`/attendance/sessions/${sessionId}`)).status).toBe(403);
     expect((await api(lecturer.auth).post('/attendance/check-in', { payload: qr.payload })).status).toBe(403);
+  });
+});
+
+describe('geofence', () => {
+  const LH = { latitude: -0.3703, longitude: 35.9322 };
+  /** The lecturer's phone, a few metres from the room's surveyed point. */
+  const PHONE = { latitude: -0.37035, longitude: 35.93225, accuracy: 12 };
+
+  interface Geofence { mode: string; radiusMetres: number | null; roomCode: string | null; anchorAccuracyMetres: number | null; hasCentre: boolean }
+  const fence = (res: request.Response) => body<{ geofence: Geofence }>(res).data.geofence;
+
+  /** Puts the unit's slot in a room, surveyed or not. */
+  async function placeInRoom(unitId: string, surveyed: boolean) {
+    const code = `LH${uniq()}`;
+    await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [unitId, code]);
+    if (surveyed) {
+      await pool.query(
+        `INSERT INTO rooms (code, latitude, longitude, surveyed_accuracy_m, surveyed_at) VALUES ($1, $2, $3, 4, NOW())`,
+        [code, LH.latitude, LH.longitude]);
+    }
+    return code;
+  }
+
+  const activate = (lecturer: { auth: string }, unitId: string, extra: object = {}) =>
+    api(lecturer.auth).post('/sessions', { unitId, ...extra });
+
+  const storedCentre = async (sessionId: string) => (await pool.query<{ geofence_mode: string; geofence_lat: number | null; geofence_lng: number | null }>(
+    `SELECT geofence_mode, geofence_lat, geofence_lng FROM attendance_sessions WHERE id = $1`, [sessionId])).rows[0]!;
+
+  const geofenceAudits = async (sessionId: string) => (await pool.query<{ user_id: string; metadata: Record<string, unknown> }>(
+    `SELECT user_id, metadata FROM audit_logs
+      WHERE action = 'ATTENDANCE_SESSION_GEOFENCE_CHANGED' AND metadata->>'sessionId' = $1 ORDER BY created_at`,
+    [sessionId])).rows;
+
+  describe('at activation', () => {
+    it('is fenced to a surveyed room, whatever the lecturer\'s device says', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      const room = await placeInRoom(unit.id, true);
+
+      const res = await activate(lecturer, unit.id, { location: { ...PHONE, accuracy: 25 } });
+      expect(res.status).toBe(201);
+      expect(fence(res)).toEqual({ mode: 'ROOM', radiusMetres: 20, roomCode: room, anchorAccuracyMetres: 4, hasCentre: true });
+      const sessionId = body<{ id: string }>(res).data.id;
+      expect(await storedCentre(sessionId)).toEqual({ geofence_mode: 'ROOM', geofence_lat: LH.latitude, geofence_lng: LH.longitude });
+
+      // Also a surveyed room with no reading at all, e.g. activating from a laptop.
+      const unit2 = await makeUnit(lecturer);
+      await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [unit2.id, room]);
+      expect(fence(await activate(lecturer, unit2.id))).toMatchObject({ mode: 'ROOM' });
+    });
+
+    it('falls back to the lecturer\'s device in an unsurveyed room', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      const room = await placeInRoom(unit.id, false);
+
+      const res = await activate(lecturer, unit.id, { location: PHONE });
+      expect(res.status).toBe(201);
+      expect(fence(res)).toEqual({ mode: 'LECTURER_DEVICE', radiusMetres: 20, roomCode: room, anchorAccuracyMetres: 12, hasCentre: true });
+      expect(await storedCentre(body<{ id: string }>(res).data.id)).toMatchObject({ geofence_lat: PHONE.latitude, geofence_lng: PHONE.longitude });
+    });
+
+    it('refuses to activate when the lecturer\'s reading is too vague, and opens nothing', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      await placeInRoom(unit.id, false);
+
+      const res = await activate(lecturer, unit.id, { location: { ...PHONE, accuracy: 45 } });
+      expect(res.status).toBe(422);
+      expect(body(res).error).toMatchObject({ code: 'GEOFENCE_ANCHOR_UNAVAILABLE' });
+      expect(body(res).error!.message).toMatch(/about 45 m.*phone.*geofence off/);
+      expect((res.body as { error: { details: unknown } }).error.details)
+        .toEqual({ reason: 'TOO_IMPRECISE', accuracyMetres: 45, maxAccuracyMetres: 30 });
+
+      const { rows } = await pool.query(`SELECT 1 FROM attendance_sessions WHERE unit_id = $1`, [unit.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('refuses to activate with no room and no reading', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+
+      const res = await activate(lecturer, unit.id);
+      expect(res.status).toBe(422);
+      expect(body(res).error).toMatchObject({ code: 'GEOFENCE_ANCHOR_UNAVAILABLE' });
+    });
+
+    it('lets the lecturer switch the fence off, and still keeps a centre for later when there is one', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const bare = await makeUnit(lecturer);
+      const off = await activate(lecturer, bare.id, { geofence: 'OFF' });
+      expect(off.status).toBe(201);
+      expect(fence(off)).toEqual({ mode: 'OFF', radiusMetres: null, roomCode: null, anchorAccuracyMetres: null, hasCentre: false });
+
+      const surveyed = await makeUnit(lecturer);
+      await placeInRoom(surveyed.id, true);
+      expect(fence(await activate(lecturer, surveyed.id, { geofence: 'OFF' }))).toMatchObject({ mode: 'OFF', hasCentre: true, radiusMetres: 20 });
+    });
+
+    it('rejects a malformed reading', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      for (const location of [{ ...PHONE, latitude: 91 }, { ...PHONE, accuracy: -1 }, { latitude: 0, longitude: 0 }, { ...PHONE, altitude: 3 }]) {
+        expect((await activate(lecturer, unit.id, { location })).status).toBe(400);
+      }
+      expect((await activate(lecturer, unit.id, { geofence: 'MAYBE' })).status).toBe(400);
+    });
+
+    it('shows the fence on the live code', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      const room = await placeInRoom(unit.id, true);
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id)).data.id;
+
+      const qr = await api(lecturer.auth).get(`/sessions/${sessionId}/qr`);
+      expect(body<{ session: { geofence: Geofence } }>(qr).data.session.geofence)
+        .toEqual({ mode: 'ROOM', radiusMetres: 20, roomCode: room, anchorAccuracyMetres: 4, hasCentre: true });
+    });
+  });
+
+  describe('PATCH /sessions/:id/geofence', () => {
+    async function deviceSession() {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      await placeInRoom(unit.id, false);
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id, { location: PHONE })).data.id;
+      const patch = (data: object, who = lecturer) => api(who.auth).patch(`/sessions/${sessionId}/geofence`, data);
+      return { lecturer, unit, sessionId, patch };
+    }
+
+    it('switches off and back on, reusing the centre, and audits each change with the lecturer', async () => {
+      const { lecturer, sessionId, patch } = await deviceSession();
+
+      const off = await patch({ mode: 'OFF' });
+      expect(off.status).toBe(200);
+      expect(fence(off)).toMatchObject({ mode: 'OFF', hasCentre: true });
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_mode: 'OFF', geofence_lat: PHONE.latitude });
+
+      // Already off: nothing to change, nothing audited.
+      expect((await patch({ mode: 'OFF' })).status).toBe(200);
+
+      const on = await patch({ mode: 'ON' });
+      expect(on.status).toBe(200);
+      expect(fence(on)).toMatchObject({ mode: 'LECTURER_DEVICE', anchorAccuracyMetres: 12 });
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_lat: PHONE.latitude, geofence_lng: PHONE.longitude });
+
+      const audits = await geofenceAudits(sessionId);
+      expect(audits.map((a) => [a.user_id, a.metadata['from'], a.metadata['to'], a.metadata['recaptured']])).toEqual([
+        [lecturer.id, 'LECTURER_DEVICE', 'OFF', false],
+        [lecturer.id, 'OFF', 'LECTURER_DEVICE', false],
+      ]);
+    });
+
+    it('re-captures the lecturer\'s position, but never with a vague reading', async () => {
+      const { sessionId, patch } = await deviceSession();
+      const moved = { latitude: -0.3710, longitude: 35.9330, accuracy: 6 };
+
+      const res = await patch({ mode: 'ON', location: moved });
+      expect(res.status).toBe(200);
+      expect(fence(res)).toMatchObject({ mode: 'LECTURER_DEVICE', anchorAccuracyMetres: 6 });
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_lat: moved.latitude, geofence_lng: moved.longitude });
+      expect((await geofenceAudits(sessionId)).at(-1)!.metadata).toMatchObject({ recaptured: true });
+
+      const vague = await patch({ mode: 'ON', location: { ...moved, latitude: -0.5, accuracy: 80 } });
+      expect(vague.status).toBe(422);
+      expect(body(vague).error).toMatchObject({ code: 'GEOFENCE_ANCHOR_UNAVAILABLE' });
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_lat: moved.latitude }); // unchanged
+    });
+
+    it('keeps a surveyed room\'s centre: a lecturer cannot move the fence off it', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      await placeInRoom(unit.id, true);
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id)).data.id;
+
+      const res = await api(lecturer.auth).patch(`/sessions/${sessionId}/geofence`, {
+        mode: 'ON', location: { latitude: -1.28, longitude: 36.82, accuracy: 5 },
+      });
+      expect(fence(res)).toMatchObject({ mode: 'ROOM' });
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_lat: LH.latitude, geofence_lng: LH.longitude });
+    });
+
+    it('cannot switch on a session that never had a centre without a reading', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const unit = await makeUnit(lecturer);
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id, { geofence: 'OFF' })).data.id;
+      const patch = (data: object) => api(lecturer.auth).patch(`/sessions/${sessionId}/geofence`, data);
+
+      expect((await patch({ mode: 'ON' })).status).toBe(422);
+      const on = await patch({ mode: 'ON', location: PHONE });
+      expect(on.status).toBe(200);
+      expect(fence(on)).toMatchObject({ mode: 'LECTURER_DEVICE', radiusMetres: 20 });
+    });
+
+    it('is the session lecturer\'s alone, and not after the class is closed', async () => {
+      const { sessionId, patch } = await deviceSession();
+      const other = await makeUser('LECTURER');
+      const student = await makeUser('STUDENT');
+
+      expect((await patch({ mode: 'OFF' }, other)).status).toBe(403);
+      expect((await patch({ mode: 'OFF' }, student)).status).toBe(403);
+      expect(await geofenceAudits(sessionId)).toHaveLength(0);
+
+      expect((await patch({ mode: 'MAYBE' })).status).toBe(400);
+      expect((await patch({ mode: 'OFF', location: PHONE })).status).toBe(400);
+    });
+
+    it('refuses changes to a closed session', async () => {
+      const { lecturer, sessionId, patch } = await deviceSession();
+      await api(lecturer.auth).patch(`/sessions/${sessionId}/status`, { status: 'CLOSED' });
+      expect((await patch({ mode: 'OFF' })).status).toBe(409);
+    });
+  });
+
+  describe('check-in', () => {
+    /** `metres` due north of the room's centre. */
+    const north = (metres: number) => ({ latitude: LH.latitude + (metres / 6_371_008.8) * (180 / Math.PI), longitude: LH.longitude });
+    const reading = (metres: number, extra: object = {}) => ({ ...north(metres), accuracy: 8, capturedAt: Date.now(), ...extra });
+
+    /** A class in a surveyed room with one student on its roster. */
+    async function fencedClass() {
+      const lecturer = await makeUser('LECTURER');
+      const student = await makeUser('STUDENT');
+      const unit = await makeUnit(lecturer);
+      const room = await placeInRoom(unit.id, true);
+      await pool.query(
+        `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, full_name, status, source)
+         VALUES ($1, $2, $3, 'Test Student', 'ACTIVE', 'ERP')`, [unit.id, student.id, `REG/G${uniq()}`]);
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id)).data.id;
+      const qr = async () => body<{ payload: string; checkedIn: number; refusedOutsideFence: number }>(
+        await api(lecturer.auth).get(`/sessions/${sessionId}/qr`)).data;
+      const checkIn = async (location?: object, who = student) =>
+        api(who.auth).post('/attendance/check-in', { payload: (await qr()).payload, ...(location ? { location } : {}) });
+      return { lecturer, student, unit, room, sessionId, qr, checkIn };
+    }
+
+    const record = async (sessionId: string) => (await pool.query(
+      `SELECT geofence_result, distance_m, location_accuracy_m FROM attendance_records WHERE session_id = $1`, [sessionId])).rows[0];
+    const rejections = async (sessionId: string) => (await pool.query<{ reason: string; metadata: Record<string, unknown> }>(
+      `SELECT reason, metadata FROM audit_logs WHERE action = 'ATTENDANCE_SCAN_REJECTED' AND metadata->>'sessionId' = $1 ORDER BY created_at`,
+      [sessionId])).rows;
+
+    it('records a student inside the room with their distance, never their coordinates', async () => {
+      const { sessionId, checkIn } = await fencedClass();
+
+      const res = await checkIn(reading(12));
+      expect(res.status).toBe(201);
+      expect(body<{ distanceMetres: number }>(res).data.distanceMetres).toBeCloseTo(12, 0);
+      const row = await record(sessionId);
+      expect(row).toMatchObject({ geofence_result: 'INSIDE', location_accuracy_m: 8 });
+      expect(row.distance_m).toBeCloseTo(12, 0);
+
+      const { rows: [columns] } = await pool.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM information_schema.columns
+          WHERE table_name = 'attendance_records' AND column_name ~ '(lat|lng|lon)'`);
+      expect(columns!.n).toBe(0);
+    });
+
+    it('lets in a reading whose accuracy could put it inside the fence', async () => {
+      const { checkIn } = await fencedClass();
+      expect((await checkIn(reading(35, { accuracy: 16 }))).status).toBe(201);
+    });
+
+    it('refuses a student outside the room, tells them how far away they are, and counts them for the lecturer', async () => {
+      const { room, sessionId, qr, checkIn } = await fencedClass();
+
+      const res = await checkIn(reading(140));
+      expect(res.status).toBe(403);
+      expect(body(res).error).toMatchObject({ code: 'OUTSIDE_GEOFENCE' });
+      expect(body(res).error!.message).toContain(`about 140 m from ${room}`);
+      expect((res.body as { error: { details: Record<string, unknown> } }).error.details)
+        .toMatchObject({ reason: 'OUTSIDE_GEOFENCE', roomCode: room, radiusMetres: 20, distanceMetres: 140, accuracyMetres: 8 });
+      expect(await record(sessionId)).toBeUndefined();
+
+      const [rejection] = await rejections(sessionId);
+      expect(rejection!.reason).toBe('OUTSIDE_GEOFENCE');
+      expect(rejection!.metadata).toMatchObject({ geofenceMode: 'ROOM', accuracyMetres: 8 });
+      expect(rejection!.metadata['distanceMetres']).toBeCloseTo(140, 0);
+      expect(JSON.stringify(rejection!.metadata)).not.toMatch(/latitude|longitude/);
+
+      await checkIn(reading(300)); // the same student twice still counts once
+      expect((await qr()).refusedOutsideFence).toBe(1);
+
+      // They walk in and rescan: recorded, and no longer counted as refused.
+      expect((await checkIn(reading(5))).status).toBe(201);
+      expect(await qr()).toMatchObject({ checkedIn: 1, refusedOutsideFence: 0 });
+    });
+
+    it('refuses before the class-list check, so a friend at home is refused for where they are', async () => {
+      const { sessionId, qr } = await fencedClass();
+      const friend = await makeUser('STUDENT');
+      const res = await api(friend.auth).post('/attendance/check-in', { payload: (await qr()).payload, location: reading(2000) });
+      expect(res.status).toBe(403);
+      expect(body(res).error).toMatchObject({ code: 'OUTSIDE_GEOFENCE' });
+      expect((await qr()).refusedOutsideFence).toBe(1);
+      expect((await rejections(sessionId)).map((r) => r.reason)).toEqual(['OUTSIDE_GEOFENCE']);
+    });
+
+    it('asks for a location, a fresh one, and a precise one', async () => {
+      const { sessionId, checkIn } = await fencedClass();
+
+      const none = await checkIn();
+      expect(none.status).toBe(422);
+      expect(body(none).error).toMatchObject({ code: 'LOCATION_REQUIRED' });
+
+      const stale = await checkIn(reading(5, { capturedAt: Date.now() - 5 * 60_000 }));
+      expect(stale.status).toBe(422);
+      expect(body(stale).error).toMatchObject({ code: 'LOCATION_STALE' });
+
+      const vague = await checkIn(reading(5, { accuracy: 120 }));
+      expect(vague.status).toBe(422);
+      expect(body(vague).error).toMatchObject({ code: 'LOCATION_TOO_IMPRECISE' });
+      expect(body(vague).error!.message).toMatch(/window/);
+
+      expect((await rejections(sessionId)).map((r) => r.reason))
+        .toEqual(['LOCATION_REQUIRED', 'LOCATION_STALE', 'LOCATION_TOO_IMPRECISE']);
+
+      // An ISO timestamp works as well as epoch milliseconds.
+      expect((await checkIn(reading(5, { capturedAt: new Date().toISOString() }))).status).toBe(201);
+    });
+
+    it('refuses a location the phone reports as faked, even from the middle of the room', async () => {
+      const { sessionId, checkIn } = await fencedClass();
+      const res = await checkIn(reading(0, { isMocked: true }));
+      expect(res.status).toBe(403);
+      expect(body(res).error).toMatchObject({ code: 'LOCATION_MOCKED' });
+      expect((await rejections(sessionId))[0]!.metadata).toMatchObject({ isMocked: true });
+    });
+
+    it('rejects a malformed reading', async () => {
+      const { checkIn } = await fencedClass();
+      for (const bad of [
+        reading(5, { capturedAt: 'yesterday' }),
+        reading(5, { capturedAt: undefined }),
+        reading(5, { isMocked: 'no' }),
+        { ...reading(5), latitude: -91 },
+        { ...reading(5), speed: 3 },
+      ]) {
+        expect((await checkIn(bad)).status).toBe(400);
+      }
+    });
+
+    it('checks nothing when the fence is off, including partway through the class', async () => {
+      const { lecturer, sessionId, checkIn } = await fencedClass();
+      const other = await makeUser('STUDENT');
+      await pool.query(
+        `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, status, source)
+         SELECT unit_id, $2, 'REG/OFF' || $3, 'ACTIVE', 'ERP' FROM attendance_sessions WHERE id = $1`,
+        [sessionId, other.id, uniq()]);
+
+      expect((await checkIn(reading(500))).status).toBe(403);
+      await api(lecturer.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'OFF' });
+
+      const res = await checkIn();
+      expect(res.status).toBe(201);
+      expect(body<{ distanceMetres: number | null }>(res).data.distanceMetres).toBeNull();
+      expect(await record(sessionId)).toEqual({ geofence_result: 'NOT_CHECKED', distance_m: null, location_accuracy_m: null });
+
+      // A reading sent anyway is ignored, not stored.
+      expect((await checkIn(reading(500), other)).status).toBe(201);
+    });
+
+    it('tells the portal each unit\'s room and whether it is surveyed', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const surveyed = await makeUnit(lecturer);
+      const unsurveyed = await makeUnit(lecturer);
+      const roomless = await makeUnit(lecturer);
+      const surveyedRoom = await placeInRoom(surveyed.id, true);
+      const plainRoom = await placeInRoom(unsurveyed.id, false);
+
+      const units = body<Array<{ id: string; room: unknown }>>(await api(lecturer.auth).get('/units')).data;
+      const roomOf = (id: string) => units.find((u) => u.id === id)!.room;
+      expect(roomOf(surveyed.id)).toEqual({ code: surveyedRoom, surveyed: true });
+      expect(roomOf(unsurveyed.id)).toEqual({ code: plainRoom, surveyed: false });
+      expect(roomOf(roomless.id)).toBeNull();
+
+      // The unit to activate right now carries it too. Every test unit's slot spans today,
+      // so ask as a lecturer with only the surveyed one.
+      const solo = await makeUser('LECTURER');
+      const only = await makeUnit(solo);
+      await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [only.id, surveyedRoom]);
+      const current = body<{ id: string; room: unknown }>(await api(solo.auth).get('/units/current')).data;
+      expect(current).toMatchObject({ id: only.id, room: { code: surveyedRoom, surveyed: true } });
+    });
+
+    it('shows distances on the attendee list and the CSV, and the fence mode on reports', async () => {
+      const { lecturer, sessionId, checkIn } = await fencedClass();
+      expect((await checkIn(reading(12))).status).toBe(201);
+
+      const list = body<{ attendees: Array<{ distanceMetres: number | null; geofenceResult: string }> }>(
+        await api(lecturer.auth).get(`/attendance/sessions/${sessionId}`)).data;
+      expect(list.attendees).toHaveLength(1);
+      expect(list.attendees[0]!.geofenceResult).toBe('INSIDE');
+      expect(list.attendees[0]!.distanceMetres).toBeCloseTo(12, 0);
+
+      const reports = body<Array<{ id: string; geofenceMode: string }>>(await api(lecturer.auth).get('/reports/sessions')).data;
+      expect(reports.find((r) => r.id === sessionId)).toMatchObject({ geofenceMode: 'ROOM' });
+
+      const csv = await api(lecturer.auth).get(`/reports/sessions/${sessionId}/export`);
+      expect(csv.status).toBe(200);
+      const [header, row] = csv.text.split('\n');
+      expect(header).toBe('Registration Number,Full Name,Status,Recorded At,Distance (m)');
+      expect(row).toMatch(/,Present,[^,]+,12$/);
+
+      // With the fence off: no distance, and the report says so.
+      await api(lecturer.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'OFF' });
+      const after = body<Array<{ id: string; geofenceMode: string }>>(await api(lecturer.auth).get('/reports/sessions')).data;
+      expect(after.find((r) => r.id === sessionId)).toMatchObject({ geofenceMode: 'OFF' });
+    });
+
+    it('leaves the distance blank for check-ins made with the fence off, and for absentees', async () => {
+      const lecturer = await makeUser('LECTURER');
+      const student = await makeUser('STUDENT');
+      const absentee = await makeUser('STUDENT');
+      const unit = await makeUnit(lecturer);
+      for (const who of [student, absentee]) {
+        await pool.query(
+          `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, full_name, status, source)
+           VALUES ($1, $2, $3, $4, 'ACTIVE', 'ERP')`, [unit.id, who.id, `REG/C${uniq()}`, `Z ${who.id}`]);
+      }
+      const sessionId = body<{ id: string }>(await activate(lecturer, unit.id, { geofence: 'OFF' })).data.id;
+      const { payload } = body<{ payload: string }>(await api(lecturer.auth).get(`/sessions/${sessionId}/qr`)).data;
+      expect((await api(student.auth).post('/attendance/check-in', { payload })).status).toBe(201);
+
+      const list = body<{ attendees: Array<{ distanceMetres: number | null; geofenceResult: string }> }>(
+        await api(lecturer.auth).get(`/attendance/sessions/${sessionId}`)).data;
+      expect(list.attendees[0]).toMatchObject({ distanceMetres: null, geofenceResult: 'NOT_CHECKED' });
+
+      const rows = (await api(lecturer.auth).get(`/reports/sessions/${sessionId}/export`)).text.split('\n').slice(1);
+      expect(rows).toHaveLength(2);
+      expect(rows.find((r) => r.includes(',Present,'))).toMatch(/,Present,[^,]+,$/);
+      expect(rows.find((r) => r.includes(',Absent,'))).toMatch(/,Absent,,$/);
+    });
+
+    it('applies the same rule on POST /sessions/scan', async () => {
+      const { student, qr } = await fencedClass();
+      const scan = async (location?: object) => api(student.auth).post('/sessions/scan', { payload: (await qr()).payload, location });
+      expect((await scan(reading(140))).status).toBe(403);
+      const ok = await scan(reading(3));
+      expect(ok.status).toBe(200);
+      expect(body<{ geofence: { result: string } }>(ok).data.geofence).toMatchObject({ result: 'INSIDE' });
+    });
   });
 });

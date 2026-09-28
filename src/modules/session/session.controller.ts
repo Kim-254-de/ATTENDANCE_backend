@@ -8,6 +8,7 @@ import type {
   CreateSessionInput,
   QrQuery,
   SessionIdParam,
+  UpdateGeofenceInput,
   VerifyScanInput,
 } from './session.schema.js';
 
@@ -65,8 +66,8 @@ export async function getQrImage(req: Request, res: Response): Promise<void> {
 
 /** POST /api/v1/sessions/scan — a student submits a scanned code. */
 export async function verifyScan(req: Request, res: Response): Promise<void> {
-  const { payload } = req.body as VerifyScanInput;
-  const verdict = await sessionService.verifyScan(payload, userId(req), contextFrom(req));
+  const { payload, location } = req.body as VerifyScanInput;
+  const verdict = await sessionService.verifyScan(payload, userId(req), contextFrom(req), location);
   sendSuccess(res, verdict);
 }
 
@@ -80,5 +81,13 @@ export async function setStatus(req: Request, res: Response): Promise<void> {
     status,
     contextFrom(req),
   );
+  sendSuccess(res, session);
+}
+
+/** PATCH /api/v1/sessions/:sessionId/geofence */
+export async function setGeofence(req: Request, res: Response): Promise<void> {
+  const { sessionId } = req.params as unknown as SessionIdParam;
+  const input = req.body as UpdateGeofenceInput;
+  const session = await sessionService.setSessionGeofence(sessionId, userId(req), input, contextFrom(req));
   sendSuccess(res, session);
 }

@@ -1,5 +1,5 @@
 import { query, queryOne } from '../../db/database.js';
-import type { AttendanceSessionStatus } from '../../db/types.js';
+import type { AttendanceSessionStatus, GeofenceMode } from '../../db/types.js';
 
 /**
  * All SQL for the session module. Every query is parameterised.
@@ -23,6 +23,21 @@ export interface SessionForQr {
   opensAt: Date;
   closesAt: Date;
   rotationSeconds: number;
+  /** Where the unit's slot is taught, per SMARTTT (unit_schedule.room_code). Null when unknown. */
+  roomCode: string | null;
+  geofence: SessionGeofence;
+}
+
+/**
+ * The fence stored on the session. The centre is kept when the mode is OFF,
+ * so switching the fence back on can reuse it.
+ */
+export interface SessionGeofence {
+  mode: GeofenceMode;
+  latitude: number | null;
+  longitude: number | null;
+  radiusMetres: number | null;
+  anchorAccuracyMetres: number | null;
 }
 
 interface SessionRow {
@@ -37,6 +52,12 @@ interface SessionRow {
   opens_at: Date;
   closes_at: Date;
   rotation_seconds: number;
+  room_code: string | null;
+  geofence_mode: GeofenceMode;
+  geofence_lat: number | null;
+  geofence_lng: number | null;
+  geofence_radius_m: number | null;
+  geofence_anchor_accuracy_m: number | null;
 }
 
 const toSession = (row: SessionRow): SessionForQr => ({
@@ -51,14 +72,25 @@ const toSession = (row: SessionRow): SessionForQr => ({
   opensAt: row.opens_at,
   closesAt: row.closes_at,
   rotationSeconds: row.rotation_seconds,
+  roomCode: row.room_code,
+  geofence: {
+    mode: row.geofence_mode,
+    latitude: row.geofence_lat,
+    longitude: row.geofence_lng,
+    radiusMetres: row.geofence_radius_m,
+    anchorAccuracyMetres: row.geofence_anchor_accuracy_m,
+  },
 });
 
+// unit_schedule is one row per unit, so the LEFT JOIN never multiplies rows.
 const SELECT_SESSION = `
   SELECT s.id, s.unit_id, s.lecturer_user_id, s.qr_secret, s.status, s.title,
          s.opens_at, s.closes_at, s.rotation_seconds,
-         u.code AS unit_code, u.name AS unit_name
+         s.geofence_mode, s.geofence_lat, s.geofence_lng, s.geofence_radius_m, s.geofence_anchor_accuracy_m,
+         u.code AS unit_code, u.name AS unit_name, sch.room_code
     FROM attendance_sessions s
     JOIN units u ON u.id = s.unit_id
+    LEFT JOIN unit_schedule sch ON sch.unit_id = s.unit_id
 `;
 
 export async function findSessionById(sessionId: string): Promise<SessionForQr | null> {
@@ -74,13 +106,15 @@ export interface CreateSessionArgs {
   opensAt: Date;
   closesAt: Date;
   rotationSeconds: number;
+  geofence: SessionGeofence;
 }
 
 export async function createSession(args: CreateSessionArgs): Promise<SessionForQr> {
   const created = await queryOne<{ id: string }>(
     `INSERT INTO attendance_sessions
-       (unit_id, lecturer_user_id, qr_secret, title, opens_at, closes_at, rotation_seconds, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN')
+       (unit_id, lecturer_user_id, qr_secret, title, opens_at, closes_at, rotation_seconds, status,
+        geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12)
      RETURNING id`,
     [
       args.unitId,
@@ -90,6 +124,11 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
       args.opensAt,
       args.closesAt,
       args.rotationSeconds,
+      args.geofence.mode,
+      args.geofence.latitude,
+      args.geofence.longitude,
+      args.geofence.radiusMetres,
+      args.geofence.anchorAccuracyMetres,
     ],
   );
 
@@ -119,6 +158,58 @@ export async function updateSessionStatus(
     [sessionId, lecturerUserId, status],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/** Replaces a session's fence. Owner-scoped like updateSessionStatus; false when nothing matched. */
+export async function updateSessionGeofence(
+  sessionId: string,
+  lecturerUserId: string,
+  geofence: SessionGeofence,
+): Promise<boolean> {
+  const result = await query(
+    `UPDATE attendance_sessions
+        SET geofence_mode = $3, geofence_lat = $4, geofence_lng = $5,
+            geofence_radius_m = $6, geofence_anchor_accuracy_m = $7, updated_at = NOW()
+      WHERE id = $1 AND lecturer_user_id = $2`,
+    [sessionId, lecturerUserId, geofence.mode, geofence.latitude, geofence.longitude,
+     geofence.radiusMetres, geofence.anchorAccuracyMetres],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export interface UnitRoom {
+  /** Null when SMARTTT names no room for the unit's slot. */
+  roomCode: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  surveyedAccuracyMetres: number | null;
+}
+
+/**
+ * The room a unit is taught in and, if someone has surveyed it, its centre.
+ * Null when the unit has no schedule at all.
+ */
+export async function findUnitRoom(unitId: string): Promise<UnitRoom | null> {
+  const row = await queryOne<{
+    room_code: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    surveyed_accuracy_m: number | null;
+  }>(
+    `SELECT sch.room_code, r.latitude, r.longitude, r.surveyed_accuracy_m
+       FROM unit_schedule sch
+       LEFT JOIN rooms r ON r.code = sch.room_code
+      WHERE sch.unit_id = $1`,
+    [unitId],
+  );
+  return row
+    ? {
+        roomCode: row.room_code,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        surveyedAccuracyMetres: row.surveyed_accuracy_m,
+      }
+    : null;
 }
 
 export interface LecturerUnit {
@@ -182,16 +273,32 @@ export async function hasAlreadyCheckedIn(
   return row?.ok ?? false;
 }
 
-/** Check-ins recorded so far, and how many students could check in — the lecturer's live counter. */
+/**
+ * The lecturer's live counters: check-ins so far, how many students could
+ * check in, and how many were refused for being outside the fence and have
+ * not checked in since (a student who moved closer and rescanned no longer
+ * counts). Refusals are only recorded in audit_logs, so that is read here;
+ * audit_logs_action_idx narrows it to rejected scans first.
+ */
 export async function countAttendance(
   sessionId: string,
   unitId: string,
-): Promise<{ checkedIn: number; enrolled: number }> {
-  const row = await queryOne<{ checked_in: number; enrolled: number }>(
+): Promise<{ checkedIn: number; enrolled: number; refusedOutsideFence: number }> {
+  const row = await queryOne<{ checked_in: number; enrolled: number; refused_outside: number }>(
     `SELECT (SELECT COUNT(*) FROM attendance_records WHERE session_id = $1)::int AS checked_in,
             (SELECT COUNT(*) FROM unit_allocations
-              WHERE unit_id = $2 AND status = 'ACTIVE')::int                AS enrolled`,
+              WHERE unit_id = $2 AND status = 'ACTIVE')::int                AS enrolled,
+            (SELECT COUNT(DISTINCT l.user_id) FROM audit_logs l
+              WHERE l.action = 'ATTENDANCE_SCAN_REJECTED'
+                AND l.reason = 'OUTSIDE_GEOFENCE'
+                AND l.metadata->>'sessionId' = $1::text
+                AND NOT EXISTS (SELECT 1 FROM attendance_records r
+                                 WHERE r.session_id = $1 AND r.student_user_id = l.user_id))::int AS refused_outside`,
     [sessionId, unitId],
   );
-  return { checkedIn: row?.checked_in ?? 0, enrolled: row?.enrolled ?? 0 };
+  return {
+    checkedIn: row?.checked_in ?? 0,
+    enrolled: row?.enrolled ?? 0,
+    refusedOutsideFence: row?.refused_outside ?? 0,
+  };
 }

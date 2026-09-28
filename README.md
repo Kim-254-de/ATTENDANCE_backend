@@ -28,6 +28,21 @@ revokes the whole session. Native clients may send `Authorization: Bearer <acces
 There is no administrator approval endpoint yet. Locally, after the lecturer has confirmed their email (the link is
 printed in the API log in development), run `npm run dev:approve -- STF/0004` to activate them.
 
+## Classroom geofence: surveying rooms
+
+Check-ins are fenced to the room a class is taught in (`src/modules/session/session.geofence.ts`). The SMARTTT sync
+records each class's room in `unit_schedule.room_code`; a room's centre point is surveyed separately, by someone
+standing in the middle of it with a phone. There is no admin interface for this yet, and lecturers deliberately cannot
+set it, so locally:
+
+```bash
+npm run dev:set-room -- --list                                   # timetabled rooms, and which are surveyed
+npm run dev:set-room -- LH1 -0.3031 36.0800 8 --by STF/0001      # code, latitude, longitude, accuracy in metres
+```
+
+Readings vaguer than `GEOFENCE_MAX_ANCHOR_ACCURACY_METRES` (30 m) are refused. Every survey is audited as
+`ROOM_SURVEYED`, with the previous point. A class in an unsurveyed room is fenced around the lecturer's device instead.
+
 ## Local development with the mock ERP
 
 The real university ERP is not available yet, so `mock-erp/` stands in for it. It is a separate

@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { asyncHandler } from '../../common/utils/async-handler.js';
 import { validate } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/authenticate.js';
+import { checkInLimiters } from '../../middleware/rate-limit.js';
 import * as sessionController from './session.controller.js';
 import {
   createSessionSchema,
   qrQuerySchema,
   sessionIdParamSchema,
+  updateGeofenceSchema,
   verifyScanSchema,
 } from './session.schema.js';
 
@@ -48,7 +50,9 @@ sessionRouter.get(
 /** A student submits a scanned code. */
 sessionRouter.post(
   '/scan',
+  checkInLimiters.perIp,
   requireAuth('STUDENT'),
+  checkInLimiters.perStudent,
   validate({ body: verifyScanSchema }),
   asyncHandler(sessionController.verifyScan),
 );
@@ -62,4 +66,12 @@ sessionRouter.patch(
     body: z.object({ status: z.enum(['OPEN', 'PAUSED', 'CLOSED']) }).strict(),
   }),
   asyncHandler(sessionController.setStatus),
+);
+
+/** Switch the location check off or on, or re-centre it on the lecturer's device. */
+sessionRouter.patch(
+  '/:sessionId/geofence',
+  requireAuth('LECTURER'),
+  validate({ params: sessionIdParamSchema, body: updateGeofenceSchema }),
+  asyncHandler(sessionController.setGeofence),
 );
