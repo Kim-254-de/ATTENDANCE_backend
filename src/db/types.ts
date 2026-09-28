@@ -58,6 +58,25 @@ export const AllocationStatus = {
 } as const;
 export type AllocationStatus = (typeof AllocationStatus)[keyof typeof AllocationStatus];
 
+/** Where a session's geofence is centred, fixed at activation (db/migrations/012_geofence.sql). */
+export const GeofenceMode = {
+  /** The room's surveyed centre point. */
+  ROOM: 'ROOM',
+  /** The lecturer's device location at activation, for a room not yet surveyed. */
+  LECTURER_DEVICE: 'LECTURER_DEVICE',
+  /** No location check; the lecturer switched it off. */
+  OFF: 'OFF',
+} as const;
+export type GeofenceMode = (typeof GeofenceMode)[keyof typeof GeofenceMode];
+
+/** What a check-in's location proved. Rejected scans are never recorded, so there is no OUTSIDE. */
+export const GeofenceResult = {
+  INSIDE: 'INSIDE',
+  /** The session's geofence was off. */
+  NOT_CHECKED: 'NOT_CHECKED',
+} as const;
+export type GeofenceResult = (typeof GeofenceResult)[keyof typeof GeofenceResult];
+
 export const AuditAction = {
   LECTURER_REGISTRATION_SUBMITTED: 'LECTURER_REGISTRATION_SUBMITTED',
   LECTURER_REGISTRATION_REVOKED: 'LECTURER_REGISTRATION_REVOKED',
@@ -74,6 +93,7 @@ export const AuditAction = {
   ATTENDANCE_SESSION_OPENED: 'ATTENDANCE_SESSION_OPENED',
   ATTENDANCE_SESSION_STATUS_CHANGED: 'ATTENDANCE_SESSION_STATUS_CHANGED',
   ATTENDANCE_SESSION_CLOSED: 'ATTENDANCE_SESSION_CLOSED',
+  ATTENDANCE_SESSION_GEOFENCE_CHANGED: 'ATTENDANCE_SESSION_GEOFENCE_CHANGED',
   ATTENDANCE_SCAN_ACCEPTED: 'ATTENDANCE_SCAN_ACCEPTED',
   ATTENDANCE_SCAN_REJECTED: 'ATTENDANCE_SCAN_REJECTED',
   UNIT_CREATED: 'UNIT_CREATED',

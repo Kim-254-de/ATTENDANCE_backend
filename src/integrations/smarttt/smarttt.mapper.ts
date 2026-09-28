@@ -36,6 +36,10 @@ const responseSchema = z.object({
 /** Same normalisation as unit.schema.ts applies to a typed-in code. */
 export const normaliseUnitCode = (code: string): string => code.trim().replace(/\s+/g, ' ').toUpperCase();
 
+/** "lh 1 " -> "LH 1", so a room is one rooms.code however SMARTTT spells it. Null when blank. */
+export const normaliseRoomCode = (room: string | null | undefined): string | null =>
+  room?.trim() ? normaliseUnitCode(room) : null;
+
 /** Uppercased and de-duplicated, the way unit_allocations keys a roster. */
 function toStudents(students: z.infer<typeof studentSchema>[]): SmartttStudent[] {
   const byNumber = new Map<string, SmartttStudent>();
@@ -71,7 +75,7 @@ export function toLecturerUnits(body: unknown): { term: SmartttTerm | null; unit
         dayOfWeek: slot.day_of_week,
         startTime: slot.start_time.slice(0, 5),
         endTime: slot.end_time.slice(0, 5),
-        room: slot.room ?? null,
+        room: normaliseRoomCode(slot.room),
         classGroup: slot.class_group ?? '',
       })),
       students: toStudents(unit.students),

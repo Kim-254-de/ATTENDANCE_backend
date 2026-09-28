@@ -146,6 +146,20 @@ const envSchema = z
     // Pixel width of a rendered PNG. Large enough to scan from the back row.
     QR_IMAGE_SIZE: z.coerce.number().int().min(128).max(2048).default(512),
 
+    // --- Geofenced check-in (session.geofence.ts) ---
+    // How far from the room's centre a student may be. Accuracy counts in the
+    // student's favour, so the effective reach is radius + reported accuracy.
+    GEOFENCE_RADIUS_METRES: z.coerce.number().min(5).max(500).default(20),
+    // A reading vaguer than this is refused outright: at 200m accuracy the
+    // phone could be anywhere on campus, and the rule above would let it in.
+    GEOFENCE_MAX_STUDENT_ACCURACY_METRES: z.coerce.number().min(5).max(500).default(50),
+    // Tighter than the student limit: every check-in is measured from this
+    // point, so an error here moves the fence for the whole class.
+    GEOFENCE_MAX_ANCHOR_ACCURACY_METRES: z.coerce.number().min(5).max(500).default(30),
+    // A cached fix from the corridor or the bus stop is not evidence of being
+    // in the room now.
+    GEOFENCE_MAX_FIX_AGE_SECONDS: z.coerce.number().int().min(5).max(600).default(60),
+
     LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   })

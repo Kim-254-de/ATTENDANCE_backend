@@ -221,6 +221,8 @@ export interface TimetableUnit {
   status: UnitVerificationStatus;
   /** Only set when SMARTTT has exactly one weekly slot for the unit: unit_schedule holds one slot per unit. */
   schedule: UnitSchedule | null;
+  /** Where that slot is taught (rooms.code). Only written alongside `schedule`. */
+  roomCode: string | null;
 }
 
 export interface TimetableUpsertResult {
@@ -241,7 +243,9 @@ export interface TimetableUpsertResult {
  *   quietly take a unit (and its attendance history) off someone else.
  * - Status only ever moves up. A unit an admin already verified stays
  *   VERIFIED even if SMARTTT now only matches it by name.
- * - A null `schedule` leaves any existing unit_schedule row untouched.
+ * - A null `schedule` leaves any existing unit_schedule row untouched, room included.
+ * - Otherwise the room is overwritten, null included: a room SMARTTT stops
+ *   naming must not keep fencing the class to where it used to be taught.
  */
 export async function upsertUnitFromTimetable(
   lecturerUserId: string,
@@ -278,11 +282,11 @@ export async function upsertUnitFromTimetable(
 
     if (unit.schedule) {
       await query(
-        `INSERT INTO unit_schedule (unit_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)
+        `INSERT INTO unit_schedule (unit_id, day_of_week, start_time, end_time, room_code) VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (unit_id) DO UPDATE
             SET day_of_week = EXCLUDED.day_of_week, start_time = EXCLUDED.start_time,
-                end_time = EXCLUDED.end_time, updated_at = NOW()`,
-        [row.id, unit.schedule.dayOfWeek, unit.schedule.startTime, unit.schedule.endTime],
+                end_time = EXCLUDED.end_time, room_code = EXCLUDED.room_code, updated_at = NOW()`,
+        [row.id, unit.schedule.dayOfWeek, unit.schedule.startTime, unit.schedule.endTime, unit.roomCode],
         client,
       );
     }

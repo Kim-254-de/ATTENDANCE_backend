@@ -137,12 +137,25 @@ export function resetTimetableSyncState(): void {
   syncInFlight.clear();
 }
 
-/** unit_schedule holds one slot per unit, so only a unit with exactly one distinct weekly slot gets one. */
-function singleSchedule(unit: SmartttUnit): unitRepository.UnitSchedule | null {
+/**
+ * unit_schedule holds one slot per unit, so only a unit with exactly one
+ * distinct weekly slot gets one.
+ *
+ * That slot can still come back as several entries (one per class group
+ * SMARTTT lists), and each names its room. The room is kept only when they
+ * agree: a class the timetable puts in two rooms at once has no one room to
+ * fence it to, and the session falls back to the lecturer's location.
+ */
+function singleSlot(unit: SmartttUnit): Pick<unitRepository.TimetableUnit, 'schedule' | 'roomCode'> {
   const distinct = new Map(unit.slots.map((s) => [`${s.dayOfWeek}|${s.startTime}|${s.endTime}`, s]));
-  if (distinct.size !== 1) return null;
   const [slot] = distinct.values();
-  return slot ? { dayOfWeek: slot.dayOfWeek, startTime: slot.startTime, endTime: slot.endTime } : null;
+  if (distinct.size !== 1 || !slot) return { schedule: null, roomCode: null };
+
+  const rooms = new Set(unit.slots.map((s) => s.room));
+  return {
+    schedule: { dayOfWeek: slot.dayOfWeek, startTime: slot.startTime, endTime: slot.endTime },
+    roomCode: rooms.size === 1 ? slot.room : null,
+  };
 }
 
 async function runTimetableSync(lecturerUserId: string, staffNumber: string, name: string): Promise<void> {
@@ -163,7 +176,7 @@ async function runTimetableSync(lecturerUserId: string, staffNumber: string, nam
       registeredStudents: unit.registeredStudents,
       studentsWithoutGroup: unit.studentsWithoutGroup,
       status,
-      schedule: singleSchedule(unit),
+      ...singleSlot(unit),
     });
 
     if (!upserted) {

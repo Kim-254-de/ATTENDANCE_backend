@@ -8,6 +8,7 @@ export interface SmartttSlot {
   dayOfWeek: number;
   startTime: string; // "HH:MM"
   endTime: string;
+  /** Normalised like unit codes ("LH1"); matches rooms.code. Null when SMARTTT names no room. */
   room: string | null;
   classGroup: string;
 }

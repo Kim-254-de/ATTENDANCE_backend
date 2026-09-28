@@ -174,7 +174,12 @@ row here and nothing else, however many times the code rotates.
 | `opens_at` | `timestamptz` | Scans before this are refused |
 | `closes_at` | `timestamptz` | Scans after this are refused even if status is OPEN |
 | `rotation_seconds` | `integer` | Per-session override of `QR_ROTATION_SECONDS` |
+| `geofence_mode` | text | `ROOM` / `LECTURER_DEVICE` / `OFF` (CHECK constraint, default `OFF`). Where the fence is centred; see `session.geofence.ts` (`db/migrations/012_geofence.sql`) |
+| `geofence_lat` / `geofence_lng` | `double precision` null | The fence's centre, fixed at activation. Kept when the fence is switched `OFF` so it can be switched back on |
+| `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
+| `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
 | `created_at` / `updated_at` | `timestamptz` | |
+| | | Unless `geofence_mode` is `OFF`, the centre and radius are set (CHECK constraint) |
 
 `qr_secret` is credential material. It should never be selected into a
 response, logged, or exposed through any admin screen — anyone holding it can
@@ -218,12 +223,50 @@ module to reject a second one.
 | `recorded_at` | `timestamptz` | Defaults to `NOW()` |
 | `qr_age_seconds` | `integer` null | How old the scanned code was |
 | `ip_address` / `user_agent` | text null | |
+| `distance_m` | `double precision` null | How far the student's reading was from the fence's centre |
+| `location_accuracy_m` | `double precision` null | The reading's reported accuracy |
+| `geofence_result` | text | `INSIDE` / `NOT_CHECKED` (CHECK constraint, default `NOT_CHECKED`). `INSIDE` requires both columns above |
 | | | **UNIQUE (session_id, student_user_id)** -- load-bearing |
+
+The student's raw coordinates are deliberately never stored; the distance is
+all attendance needs.
 
 The `UNIQUE (session_id, student_user_id)` index is not cosmetic. The service
 checks for an existing record before writing, but that check cannot be atomic
 on its own: two simultaneous scans would both pass it. The unique violation is
 what actually stops a double record.
+
+### `unit_schedule`
+
+Each unit's issued weekly slot (`db/migrations/007_unit_schedule.sql`). A class
+can only be activated while `now` falls inside it.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | **UNIQUE**, FK -> `units(id)` |
+| `day_of_week` | `smallint` | 0=Sun..6=Sat |
+| `start_time` / `end_time` | `time` | |
+| `room_code` | `varchar(80)` null | Where the slot is taught, as SMARTTT names it. Looked up in `rooms` by code; not a foreign key, since SMARTTT may name a room nobody has surveyed |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `rooms`
+
+A teaching room and its surveyed centre point (`db/migrations/012_geofence.sql`).
+Coordinates are set by an administrator (`npm run dev:set-room`), never by a
+lecturer, who could otherwise move the fence to wherever their absent students are.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(80)` | **UNIQUE**, e.g. `LH1` |
+| `name` | `varchar(160)` null | |
+| `latitude` / `longitude` | `double precision` null | Null until surveyed |
+| `surveyed_accuracy_m` | `double precision` null | The survey reading's accuracy |
+| `surveyed_at` | `timestamptz` null | |
+| `surveyed_by_user_id` | `uuid` null | FK -> `users(id)` |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | `latitude`, `longitude` and `surveyed_at` are all set or all null (CHECK constraint) |
 
 ---
 
