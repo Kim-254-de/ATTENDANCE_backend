@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { SmartttStudent, SmartttTerm, SmartttUnit } from './smarttt.types.js';
+import type { SmartttStudent, SmartttStudentRecord, SmartttTerm, SmartttUnit } from './smarttt.types.js';
 
 /** SMARTTT's response, exactly as its view serialises it (snake_case). */
 const slotSchema = z.object({
@@ -86,5 +86,30 @@ export function toLecturerUnits(body: unknown): { term: SmartttTerm | null; unit
   return {
     term: term ? { academicYear: term.academic_year, semester: term.semester } : null,
     units: [...byCode.values()],
+  };
+}
+
+const studentRecordSchema = z.object({
+  registration_number: z.string().min(1),
+  full_name: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  programme: z.string().nullable().optional(),
+  year_of_study: z.number().int().nullable().optional(),
+  is_active: z.boolean(),
+});
+
+/** Translates SMARTTT's student lookup; null when it cannot be understood. */
+export function toStudentRecord(body: unknown): SmartttStudentRecord | null {
+  const parsed = studentRecordSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const v = parsed.data;
+  return {
+    registrationNumber: v.registration_number.trim().toUpperCase(),
+    fullName: v.full_name?.trim() || null,
+    email: v.email?.trim().toLowerCase() || null,
+    programme: v.programme?.trim() || null,
+    yearOfStudy: v.year_of_study ?? null,
+    isActive: v.is_active,
+    raw: body,
   };
 }

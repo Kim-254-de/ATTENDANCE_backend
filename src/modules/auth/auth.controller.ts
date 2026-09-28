@@ -15,6 +15,7 @@ import type {
   LecturerRegistrationInput,
   LoginInput,
   ResetPasswordInput,
+  StudentRegistrationInput,
   UpdateProfileInput,
 } from './auth.schema.js';
 
@@ -45,6 +46,23 @@ export async function registerLecturer(req: Request, res: Response): Promise<voi
   });
 }
 
+/** POST /api/v1/auth/student/register */
+export async function registerStudent(req: Request, res: Response): Promise<void> {
+  const input = req.body as StudentRegistrationInput;
+  const result = await authService.registerStudent(input, contextFrom(req));
+
+  sendCreated(res, {
+    id: result.userId,
+    fullName: result.fullName,
+    email: result.email,
+    registrationNumber: result.registrationNumber,
+    status: result.status,
+    nextStep: result.nextStep,
+    createdAt: result.createdAt.toISOString(),
+    message: 'Your registration number was verified. Check your email to confirm your address, then sign in.',
+  });
+}
+
 /** POST /api/v1/auth/verify-email */
 export async function verifyEmail(req: Request, res: Response): Promise<void> {
   const { token } = req.body as EmailVerificationInput;
@@ -62,26 +80,26 @@ export async function verifyEmail(req: Request, res: Response): Promise<void> {
 
 /** POST /api/v1/auth/login */
 export async function login(req: Request, res: Response): Promise<void> {
-  const issued = await loginService.loginLecturer(req.body as LoginInput, contextFrom(req));
+  const issued = await loginService.loginAccount(req.body as LoginInput, contextFrom(req));
   sessions.setAuthCookies(res, { access: issued.access, refresh: issued.refresh, sessionExpiresAt: issued.sessionExpiresAt });
-  sendSuccess(res, issued.lecturer);
+  sendSuccess(res, issued.account);
 }
 
 /**
- * GET /api/v1/auth/me
+ * GET /api/v1/auth/me — the signed-in lecturer or student (`role` says which).
  *
- * The avatar is deliberately NOT part of `req.auth.lecturer` (that comes from
- * the session lookup `requireAuth` runs on every authenticated request) — it
- * is fetched here, once, only for the endpoint that actually needs it.
+ * The avatar is deliberately NOT part of `req.auth` (that comes from the
+ * session lookup `requireAuth` runs on every authenticated request) — it is
+ * fetched here, once, only for the endpoint that actually needs it.
  */
 export async function me(req: Request, res: Response): Promise<void> {
-  const lecturer = req.auth?.lecturer ?? null;
-  if (!lecturer) {
+  const account = req.auth?.lecturer ?? req.auth?.student ?? null;
+  if (!account) {
     sendSuccess(res, null);
     return;
   }
-  const avatarUrl = await findAvatarUrl(lecturer.id);
-  sendSuccess(res, { ...lecturer, avatarUrl });
+  const avatarUrl = await findAvatarUrl(account.id);
+  sendSuccess(res, { ...account, avatarUrl });
 }
 
 /** PATCH /api/v1/auth/me — title and department only; see updateProfileSchema. */

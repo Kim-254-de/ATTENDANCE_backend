@@ -373,6 +373,25 @@ describe('check-in', () => {
     expect((await api(other.auth).get(`/attendance/sessions/${sessionId}`)).status).toBe(403);
     expect((await api(lecturer.auth).post('/attendance/check-in', { payload: qr.payload })).status).toBe(403);
   });
+
+  it('answers a QR code that is not ours with 400, not 500', async () => {
+    const student = await makeUser('STUDENT');
+
+    // Scanning the wrong thing is the ordinary case in a lecture hall. None of
+    // these carry a UUID where the session id belongs, so each one used to reach
+    // Postgres as a malformed uuid and come back a 500.
+    const notOurs = [
+      'https://example.com/menu',
+      'v1.notauuid.123.abcd',
+      'WIFI:S:campus;T:WPA;P:secret;;',
+      'v1..123.abcd',
+    ];
+
+    for (const payload of notOurs) {
+      const res = await api(student.auth).post('/attendance/check-in', { payload });
+      expect(res.status, `payload: ${payload}`).toBe(400);
+    }
+  });
 });
 
 describe('geofence', () => {

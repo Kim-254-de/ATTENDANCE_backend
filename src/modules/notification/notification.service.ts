@@ -17,6 +17,8 @@ export interface EmailVerificationMessage {
   fullName: string;
   /** Plaintext token. Only ever leaves the system inside this email. */
   token: string;
+  /** Decides the wording. Defaults to lecturer. */
+  accountType?: 'lecturer' | 'student';
 }
 
 interface OutboundEmail {
@@ -34,8 +36,9 @@ export async function sendEmailVerification(message: EmailVerificationMessage): 
     text: [
       `Hello ${message.fullName},`,
       '',
-      'Your lecturer account has been created and your staff number has been verified',
-      'against the institutional staff records.',
+      ...(message.accountType === 'student'
+        ? ['Your student account has been created and your registration number has been verified', 'against the student records.']
+        : ['Your lecturer account has been created and your staff number has been verified', 'against the institutional staff records.']),
       '',
       'Confirm your email address to continue:',
       verificationUrl,

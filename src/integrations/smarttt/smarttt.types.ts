@@ -57,6 +57,25 @@ export interface SmartttTerm {
   semester: number;
 }
 
+/** A student as SMARTTT holds them, for checking a student registration. */
+export interface SmartttStudentRecord {
+  registrationNumber: string;
+  fullName: string | null;
+  /** Lower-cased. Null when SMARTTT has no email for them. */
+  email: string | null;
+  programme: string | null;
+  yearOfStudy: number | null;
+  /** False for graduated, withdrawn, suspended or disabled students. */
+  isActive: boolean;
+  raw: unknown;
+}
+
+export type SmartttStudentLookupResult =
+  | { status: 'FOUND'; record: SmartttStudentRecord }
+  | { status: 'NOT_FOUND' }
+  | { status: 'UNAVAILABLE'; reason: string }
+  | { status: 'DISABLED' };
+
 export type SmartttLecturerUnitsResult =
   | { status: 'FOUND'; term: SmartttTerm | null; units: SmartttUnit[] }
   /** SMARTTT has no lecturer with this staff number (and could not match the name). */

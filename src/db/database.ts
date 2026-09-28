@@ -114,6 +114,8 @@ export const PgErrorCode = {
   FOREIGN_KEY_VIOLATION: '23503',
   NOT_NULL_VIOLATION: '23502',
   CHECK_VIOLATION: '23514',
+  /** A value the caller supplied is not valid for the column's type, e.g. a non-UUID for a uuid. */
+  INVALID_TEXT_REPRESENTATION: '22P02',
   UNDEFINED_TABLE: '42P01',
   UNDEFINED_COLUMN: '42703',
   QUERY_CANCELED: '57014',
@@ -141,7 +143,7 @@ export function isUniqueViolation(error: unknown): error is PostgresError {
  * rather than as a 500 on the first registration.
  */
 export async function verifyDatabaseConnection(): Promise<void> {
-  const required = ['users', 'lecturer_profiles', 'email_verification_tokens', 'audit_logs'];
+  const required = ['users', 'lecturer_profiles', 'student_profiles', 'email_verification_tokens', 'audit_logs'];
 
   const result = await query<{ table_name: string }>(
     `SELECT table_name

@@ -1,22 +1,44 @@
 # student module
 
-**Status:** not implemented — placeholder.
+Student accounts and what a signed-in student sees about their own classes.
 
-Student registration and profile. Mirrors the lecturer flow but gated on registration number against the student records system.
+## Registration and sign-in (in `src/modules/auth`)
 
-Spec: README section 3.2.
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/v1/auth/student/register` | `{ fullName, email, registrationNumber, password, confirmPassword }` |
+| `POST` | `/api/v1/auth/verify-email` | Same as lecturers. A student is `ACTIVE` here (no admin approval) and is linked to every roster already listing their registration number |
+| `POST` | `/api/v1/auth/login` | `identifier` may be a registration number; the token carries `role: STUDENT` |
+| `GET` | `/api/v1/auth/me` | Returns `{ role: 'student', registrationNumber, programme, yearOfStudy, ... }` |
+| `POST` | `/api/v1/auth/forgot-password`, `/reset-password`, `/change-password` | Same as lecturers |
 
-## Expected files
+**The registration gate** (`student.directory.ts`). The registration number
+is looked up in the student directory: **SMARTTT** when `SMARTTT_BASE_URL` is
+set (`GET /api/v1/integrations/attendance/students/`), otherwise the **ERP**
+(`erpClient.lookupStudent`, today `mock-erp/`) — the same authority the unit
+rosters come from.
 
-Follow the layout established by `src/modules/auth`:
-
-| File | Responsibility |
+| Directory says | Result |
 |---|---|
-| `student.schema.ts` | Zod request contracts; trims and normalises input |
-| `student.repository.ts` | All SQL for this module; parameterised queries only |
-| `student.service.ts` | Business rules; throws `AppError` for client-facing failures |
-| `student.controller.ts` | HTTP in, HTTP out — no business logic |
-| `student.routes.ts` | Router; applies `validate()` and any rate limits |
-| `index.ts` | Public surface of the module |
+| Not found | 403 `STUDENT_RECORD_NOT_FOUND`, nothing created |
+| Not a current student (graduated, withdrawn, suspended…) | 403 `STUDENT_RECORD_INACTIVE` |
+| Name doesn't match, or email doesn't match where the directory holds one | 403 `STUDENT_IDENTITY_MISMATCH` (field names only, never the directory's values) |
+| Unreachable | 503 `STUDENT_DIRECTORY_UNAVAILABLE`: fails closed |
+| Match | 201; account `PENDING_VERIFICATION` until the emailed link is used |
 
-Mount the router in `src/routes.ts` when the module goes live.
+Every attempt is audited (`STUDENT_REGISTRATION_*`, `audit_logs.subject_registration_number`).
+
+## Endpoints
+
+| Method | Path | Role | Returns |
+|---|---|---|---|
+| `GET` | `/api/v1/students/me/units` | Student | Units they're `ACTIVE` on: code (with group, e.g. `COSC 103 GR A`), lecturer, schedule, `sessionsHeld`, `sessionsAttended`, `attendanceRate` |
+| `GET` | `/api/v1/students/me/attendance?unitId=&limit=` | Student | `{ summary, records }`: each class session newest first, marked `PRESENT`, `ABSENT`, or `OPEN` (still taking check-ins, not counted yet) |
+
+Check-in itself is `POST /api/v1/attendance/check-in` (attendance module).
+
+## Tables
+
+`student_profiles` (`db/migrations/012_student_accounts.sql`): one row per
+student account, `registration_number` UNIQUE and upper-cased, plus the
+programme and year from the directory and which directory verified them.
