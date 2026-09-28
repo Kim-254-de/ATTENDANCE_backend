@@ -2,13 +2,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../common/errors/index.js';
 import type { UserRole } from '../db/types.js';
 import { readAccessToken, verifyAccessToken } from '../modules/auth/auth.session.js';
-import { findSession, type LecturerPublic } from '../modules/auth/auth.session.repository.js';
+import { findSession, type LecturerPublic, type StudentPublic } from '../modules/auth/auth.session.repository.js';
 
 export interface AuthContext {
   userId: string;
   sessionId: string;
   role: UserRole;
   lecturer: LecturerPublic | null;
+  student: StudentPublic | null;
 }
 
 declare global {
@@ -39,7 +40,13 @@ export function requireAuth(...roles: UserRole[]) {
       if (session.status !== 'ACTIVE') throw AppError.forbidden('This account is not active.');
       if (roles.length > 0 && !roles.includes(session.role)) throw AppError.forbidden();
 
-      req.auth = { userId: session.userId, sessionId: session.sessionId, role: session.role, lecturer: session.lecturer };
+      req.auth = {
+        userId: session.userId,
+        sessionId: session.sessionId,
+        role: session.role,
+        lecturer: session.lecturer,
+        student: session.student,
+      };
       next();
     } catch (error) {
       next(error);

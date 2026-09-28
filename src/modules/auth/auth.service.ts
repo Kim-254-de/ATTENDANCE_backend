@@ -9,9 +9,17 @@ import { erpClient } from '../../integrations/erp/index.js';
 import type { ErpLookupResult, ErpProvider } from '../../integrations/erp/index.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
+import { lookupStudent, mismatchedIdentityFields, type DirectoryLookup } from '../student/student.directory.js';
+import { linkAllocationsToStudent } from '../unit/index.js';
 import * as authRepository from './auth.repository.js';
 import { revokeOtherSessions, toLecturerPublic, type LecturerPublic } from './auth.session.repository.js';
-import type { AvatarInput, ChangePasswordInput, LecturerRegistrationInput, UpdateProfileInput } from './auth.schema.js';
+import type {
+  AvatarInput,
+  ChangePasswordInput,
+  LecturerRegistrationInput,
+  StudentRegistrationInput,
+  UpdateProfileInput,
+} from './auth.schema.js';
 
 /**
  * Lecturer registration.
@@ -441,7 +449,10 @@ export async function verifyEmail(
     throw invalid;
   }
 
-  const nextStatus: AccountStatus = env.LECTURER_REQUIRES_ADMIN_APPROVAL
+  // Students are active once their email is confirmed: the directory check at
+  // registration already proved who they are. Lecturers may also need an admin.
+  const isStudent = stored.userRole === 'STUDENT';
+  const nextStatus: AccountStatus = !isStudent && env.LECTURER_REQUIRES_ADMIN_APPROVAL
     ? 'PENDING_APPROVAL'
     : 'ACTIVE';
 
@@ -462,8 +473,247 @@ export async function verifyEmail(
     requestId: context.requestId,
   });
 
+  if (isStudent) await linkStudentToRosters(stored.userId, context);
+
   return {
     status: nextStatus,
     nextStep: nextStatus === 'PENDING_APPROVAL' ? 'AWAIT_APPROVAL' : 'SIGN_IN',
   };
+}
+
+/**
+ * Puts a newly active student on every roster that already lists their
+ * registration number (synced from SMARTTT or the ERP before they had an
+ * account), so they can check in straight away. Rosters synced later link
+ * them the same way (unit.repository.ts syncRosterAllocations keys on the
+ * registration number, and linkAllocationsToStudent runs here once).
+ *
+ * Best-effort: the account is already verified; a failure here is logged and
+ * the next sign-in's roster views still show the student by number.
+ */
+async function linkStudentToRosters(userId: string, context: RegistrationContext): Promise<void> {
+  try {
+    const registrationNumber = await authRepository.findStudentRegistrationNumber(userId);
+    if (!registrationNumber) return;
+    const linked = await linkAllocationsToStudent(userId, registrationNumber);
+    await auditService.record({
+      userId,
+      action: 'STUDENT_ROSTERS_LINKED',
+      outcome: 'SUCCESS',
+      subjectRegistrationNumber: registrationNumber,
+      requestId: context.requestId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      metadata: { rostersLinked: linked },
+    });
+  } catch (error) {
+    logger.error({ err: error, userId }, 'could not link verified student to rosters');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Student registration
+// ---------------------------------------------------------------------------
+
+export interface StudentRegistrationResult {
+  userId: string;
+  email: string;
+  fullName: string;
+  registrationNumber: string;
+  status: AccountStatus;
+  nextStep: 'VERIFY_EMAIL';
+  createdAt: Date;
+}
+
+/**
+ * Student registration. Same shape as the lecturer flow: the registration
+ * number must belong to a current student in the directory (SMARTTT, or the
+ * ERP when SMARTTT is off), the name — and the email, where the directory
+ * holds one — must match it, and the gate fails CLOSED: if the directory
+ * can't be reached nothing is created (503).
+ *
+ * The account starts PENDING_VERIFICATION and becomes ACTIVE when the email
+ * is confirmed (verifyEmail); there is no admin approval for students.
+ */
+export async function registerStudent(
+  input: StudentRegistrationInput,
+  context: RegistrationContext,
+): Promise<StudentRegistrationResult> {
+  const { fullName, email, registrationNumber, password } = input;
+  const auditBase = {
+    subjectEmail: email,
+    subjectRegistrationNumber: registrationNumber,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    requestId: context.requestId,
+  };
+
+  await auditService.record({ ...auditBase, action: 'STUDENT_REGISTRATION_SUBMITTED', outcome: 'SUCCESS' });
+
+  const alreadyExists = () =>
+    AppError.conflict(
+      'An account already exists for these details. Try signing in, or reset your password.',
+      ErrorCode.ACCOUNT_ALREADY_EXISTS,
+    );
+
+  // 1. Duplicates, before spending a directory call. One message for both,
+  //    so the endpoint can't be used to test which numbers are registered.
+  const conflict = await authRepository.findConflictingStudentAccounts(email, registrationNumber);
+  if (conflict.emailTaken || conflict.registrationNumberTaken) {
+    await auditService.record({
+      ...auditBase,
+      action: 'STUDENT_REGISTRATION_REVOKED',
+      outcome: 'FAILURE',
+      reason: conflict.emailTaken ? 'email already registered' : 'registration number already registered',
+    });
+    throw alreadyExists();
+  }
+
+  // 2. The directory gate.
+  const lookup = await lookupStudent(registrationNumber);
+  if (lookup.status !== 'FOUND') await revokeStudentRegistration(lookup, auditBase);
+  const record = (lookup as Extract<DirectoryLookup, { status: 'FOUND' }>).record;
+
+  const mismatched = mismatchedIdentityFields(record, { fullName, email });
+  if (mismatched.length > 0) {
+    await auditService.record({
+      ...auditBase,
+      action: 'STUDENT_REGISTRATION_REVOKED',
+      outcome: 'FAILURE',
+      erpOutcome: 'IDENTITY_MISMATCH',
+      reason: `identity mismatch on: ${mismatched.join(', ')}`,
+      metadata: { directory: record.source },
+    });
+    // Which fields disagreed, never the directory's values: that would leak a
+    // classmate's details to whoever typed their number.
+    throw new AppError(
+      403,
+      ErrorCode.STUDENT_IDENTITY_MISMATCH,
+      'Registration was not completed. The details entered do not match the student records for this registration number. Check your name and email address, or contact the registrar.',
+      { details: { mismatchedFields: mismatched } },
+    );
+  }
+
+  // 3. Create the account.
+  const passwordHash = await hashPassword(password);
+  const verification = generateToken();
+  let created: authRepository.CreatedStudent;
+  try {
+    created = await authRepository.createStudentAccount(
+      {
+        email,
+        fullName,
+        passwordHash,
+        status: 'PENDING_VERIFICATION',
+        registrationNumber,
+        programme: record.programme,
+        yearOfStudy: record.yearOfStudy,
+        directorySource: record.source,
+        directorySnapshot: record.raw,
+        emailVerificationTokenHash: verification.tokenHash,
+        emailVerificationExpiresAt: expiresInHours(env.EMAIL_VERIFICATION_TTL_HOURS),
+      },
+      async (tx, userId) => {
+        await auditService.recordInTransaction(tx, {
+          ...auditBase,
+          userId,
+          action: 'STUDENT_REGISTRATION_COMPLETED',
+          outcome: 'SUCCESS',
+          erpOutcome: 'VERIFIED',
+          metadata: { directory: record.source, programme: record.programme },
+        });
+      },
+    );
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      await auditService.record({
+        ...auditBase,
+        action: 'STUDENT_REGISTRATION_REVOKED',
+        outcome: 'FAILURE',
+        reason: 'unique constraint violation on concurrent registration',
+      });
+      throw alreadyExists();
+    }
+    throw error;
+  }
+
+  // 4. Verification email. A delivery failure doesn't undo the registration.
+  await notificationService
+    .sendEmailVerification({ to: created.email, fullName: created.fullName, token: verification.token, accountType: 'student' })
+    .then(() =>
+      auditService.record({ ...auditBase, userId: created.userId, action: 'EMAIL_VERIFICATION_SENT', outcome: 'SUCCESS' }),
+    )
+    .catch(async (error: unknown) => {
+      logger.error({ err: error, userId: created.userId }, 'verification email failed to send');
+      await auditService.record({
+        ...auditBase,
+        userId: created.userId,
+        action: 'EMAIL_VERIFICATION_SENT',
+        outcome: 'FAILURE',
+        reason: 'delivery failed',
+      });
+    });
+
+  logger.info({ userId: created.userId, registrationNumber, requestId: context.requestId }, 'student registered');
+
+  return {
+    userId: created.userId,
+    email: created.email,
+    fullName: created.fullName,
+    registrationNumber: created.registrationNumber,
+    status: created.status,
+    nextStep: 'VERIFY_EMAIL',
+    createdAt: created.createdAt,
+  };
+}
+
+/** A failed directory lookup, as an audit entry and a client error. Always throws. */
+async function revokeStudentRegistration(
+  lookup: Exclude<DirectoryLookup, { status: 'FOUND' }>,
+  auditBase: {
+    subjectEmail: string;
+    subjectRegistrationNumber: string;
+    ipAddress: string | null;
+    userAgent: string | null;
+    requestId: string;
+  },
+): Promise<never> {
+  const byStatus = {
+    NOT_FOUND: {
+      statusCode: 403,
+      code: ErrorCode.STUDENT_RECORD_NOT_FOUND,
+      message:
+        'Registration was not completed. This registration number is not in the student records. Check it, or contact the registrar.',
+      auditReason: 'registration number not in student directory',
+    },
+    INACTIVE: {
+      statusCode: 403,
+      code: ErrorCode.STUDENT_RECORD_INACTIVE,
+      message:
+        'Registration was not completed. This registration number is not a current student in the student records. Please contact the registrar.',
+      auditReason: 'student record not active',
+    },
+    UNAVAILABLE: {
+      statusCode: 503,
+      code: ErrorCode.STUDENT_DIRECTORY_UNAVAILABLE,
+      message:
+        'Registration could not be verified right now because the student records system is unreachable. Please try again shortly.',
+      auditReason: `student directory unavailable${lookup.status === 'UNAVAILABLE' ? `: ${lookup.reason}` : ''}`,
+    },
+  }[lookup.status];
+
+  await auditService.record({
+    ...auditBase,
+    action: 'STUDENT_REGISTRATION_REVOKED',
+    outcome: 'FAILURE',
+    erpOutcome: lookup.status,
+    reason: byStatus.auditReason,
+  });
+  logger.warn(
+    { registrationNumber: auditBase.subjectRegistrationNumber, directoryOutcome: lookup.status, requestId: auditBase.requestId },
+    'student registration revoked',
+  );
+  throw new AppError(byStatus.statusCode, byStatus.code, byStatus.message, {
+    ...(lookup.status === 'UNAVAILABLE' ? { retryAfterSeconds: 60 } : {}),
+  });
 }

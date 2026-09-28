@@ -92,6 +92,58 @@ export const lecturerRegistrationSchema = z
 
 export type LecturerRegistrationInput = z.infer<typeof lecturerRegistrationSchema>;
 
+/**
+ * A student's registration number, e.g. EBT1/08223/23. Same character set as
+ * staff numbers, stored upper-case so "ebt1/08223/23" and "EBT1/08223/23"
+ * can't become two accounts.
+ */
+const registrationNumberSchema = z
+  .string()
+  .trim()
+  .min(3, 'Registration number is too short.')
+  .max(64, 'Registration number is too long.')
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9/\-_.]*$/,
+    'Registration number may only contain letters, digits and the characters / - _ .',
+  )
+  .transform((value) => value.toUpperCase());
+
+/**
+ * Student registration. The registration number is checked against the
+ * student directory (SMARTTT, or the ERP when SMARTTT is off), and the name,
+ * and the email where the directory holds one, must match it.
+ */
+export const studentRegistrationSchema = z
+  .object({
+    fullName: fullNameSchema,
+    email: emailSchema,
+    registrationNumber: registrationNumberSchema,
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.password !== value.confirmPassword) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Passwords do not match.' });
+    }
+    const lowered = value.password.toLowerCase();
+    const emailLocalPart = value.email.split('@')[0] ?? '';
+    const compactReg = value.registrationNumber.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (
+      lowered.includes(value.registrationNumber.toLowerCase()) ||
+      (compactReg.length >= 6 && lowered.replace(/[^a-z0-9]/g, '').includes(compactReg)) ||
+      (emailLocalPart.length >= 4 && lowered.includes(emailLocalPart.toLowerCase()))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['password'],
+        message: 'Password must not contain your registration number or email address.',
+      });
+    }
+  });
+
+export type StudentRegistrationInput = z.infer<typeof studentRegistrationSchema>;
+
 export const emailVerificationSchema = z
   .object({
     token: z.string().trim().min(16, 'Verification token is not valid.').max(256),
@@ -121,7 +173,7 @@ export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
  */
 export const loginSchema = z
   .object({
-    identifier: z.string().trim().min(1, 'Enter your staff number or email.').max(255),
+    identifier: z.string().trim().min(1, 'Enter your staff number, registration number or email.').max(255),
     password: z.string().min(1, 'Enter your password.').max(128),
   })
   .strict();

@@ -22,6 +22,8 @@ export interface AuditEntry {
   userId?: string | null;
   subjectEmail?: string | null;
   subjectStaffNumber?: string | null;
+  /** A student's registration number, e.g. on a rejected student registration. */
+  subjectRegistrationNumber?: string | null;
   erpOutcome?: ErpVerificationOutcome | null;
   reason?: string | null;
   ipAddress?: string | null;
@@ -33,8 +35,8 @@ export interface AuditEntry {
 const INSERT_SQL = `
   INSERT INTO audit_logs
     (action, outcome, user_id, subject_email, subject_staff_number,
-     erp_outcome, reason, ip_address, user_agent, request_id, metadata)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     erp_outcome, reason, ip_address, user_agent, request_id, metadata, subject_registration_number)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `;
 
 function toParams(entry: AuditEntry): unknown[] {
@@ -52,6 +54,7 @@ function toParams(entry: AuditEntry): unknown[] {
     entry.userAgent ?? null,
     entry.requestId ?? null,
     entry.metadata === undefined ? null : JSON.stringify(entry.metadata),
+    entry.subjectRegistrationNumber ?? null,
   ];
 }
 
