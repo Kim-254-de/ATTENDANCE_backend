@@ -305,3 +305,109 @@ export async function setAvatarUrl(userId: string, avatarDataUrl: string | null)
     avatarDataUrl,
   ]);
 }
+
+// ---------------------------------------------------------------------------
+// Students
+// ---------------------------------------------------------------------------
+
+export interface ExistingStudentCheck {
+  emailTaken: boolean;
+  registrationNumberTaken: boolean;
+}
+
+export async function findConflictingStudentAccounts(
+  email: string,
+  registrationNumber: string,
+): Promise<ExistingStudentCheck> {
+  const row = await queryOne<{ email_taken: boolean; registration_taken: boolean }>(
+    `SELECT
+       EXISTS (SELECT 1 FROM users WHERE email = $1)                                   AS email_taken,
+       EXISTS (SELECT 1 FROM student_profiles WHERE registration_number = $2)          AS registration_taken`,
+    [email, registrationNumber],
+  );
+  return {
+    emailTaken: row?.email_taken ?? false,
+    registrationNumberTaken: row?.registration_taken ?? false,
+  };
+}
+
+export interface CreateStudentArgs {
+  email: string;
+  fullName: string;
+  passwordHash: string;
+  status: AccountStatus;
+  registrationNumber: string;
+  programme: string | null;
+  yearOfStudy: number | null;
+  directorySource: 'SMARTTT' | 'ERP';
+  directorySnapshot: unknown;
+  emailVerificationTokenHash: string;
+  emailVerificationExpiresAt: Date;
+}
+
+export interface CreatedStudent {
+  userId: string;
+  email: string;
+  fullName: string;
+  status: AccountStatus;
+  registrationNumber: string;
+  createdAt: Date;
+}
+
+/** User, student profile and email verification token, in one transaction. */
+export async function createStudentAccount(
+  args: CreateStudentArgs,
+  onCreated?: (client: PoolClient, userId: string) => Promise<void>,
+): Promise<CreatedStudent> {
+  return transaction(async (client) => {
+    const user = await queryOne<{ id: string; email: string; full_name: string; status: AccountStatus; created_at: Date }>(
+      `INSERT INTO users (email, password_hash, full_name, role, status)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, email, full_name, status, created_at`,
+      [args.email, args.passwordHash, args.fullName, 'STUDENT' satisfies UserRole, args.status],
+      client,
+    );
+    if (!user) throw new Error('user insert returned no row');
+
+    await query(
+      `INSERT INTO student_profiles
+         (user_id, registration_number, programme, year_of_study, directory_source, directory_verified_at, directory_snapshot)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
+      [
+        user.id,
+        args.registrationNumber,
+        args.programme,
+        args.yearOfStudy,
+        args.directorySource,
+        JSON.stringify(args.directorySnapshot ?? null),
+      ],
+      client,
+    );
+
+    await query(
+      `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+      [user.id, args.emailVerificationTokenHash, args.emailVerificationExpiresAt],
+      client,
+    );
+
+    if (onCreated) await onCreated(client, user.id);
+
+    return {
+      userId: user.id,
+      email: user.email,
+      fullName: user.full_name,
+      status: user.status,
+      registrationNumber: args.registrationNumber,
+      createdAt: user.created_at,
+    };
+  });
+}
+
+/** A student's registration number, for linking them to the rosters they are on. */
+export async function findStudentRegistrationNumber(userId: string): Promise<string | null> {
+  const row = await queryOne<{ registration_number: string }>(
+    `SELECT registration_number FROM student_profiles WHERE user_id = $1`,
+    [userId],
+  );
+  return row?.registration_number ?? null;
+}

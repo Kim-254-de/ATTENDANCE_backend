@@ -5,6 +5,7 @@ import { lecturerRouter } from './modules/lecturer/lecturer.routes.js';
 import { unitRouter } from './modules/unit/index.js';
 import { attendanceRouter } from './modules/attendance/index.js';
 import { reportingRouter } from './modules/reporting/index.js';
+import { studentRouter } from './modules/student/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -12,7 +13,6 @@ import { reportingRouter } from './modules/reporting/index.js';
  *
  * Routers are mounted here as each module is built:
  *   /lecturers   - profile management          (lecturer module)
- *   /students    - student registration        (student module)
  *   /reports     - summaries and exports       (reporting module)
  */
 export const apiRouter: Router = Router();
@@ -23,3 +23,4 @@ apiRouter.use('/lecturers', lecturerRouter);
 apiRouter.use('/units', unitRouter);
 apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/reports', reportingRouter);
+apiRouter.use('/students', studentRouter);

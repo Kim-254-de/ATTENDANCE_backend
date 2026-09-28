@@ -114,6 +114,8 @@ const envSchema = z
     SMARTTT_BASE_URL: emptyAsUnset(z.string().url().optional()),
     /** Sent as X-API-Key; must equal ATTENDANCE_API_KEY on the SMARTTT side. */
     SMARTTT_API_KEY: emptyAsUnset(z.string().optional()),
+    /** Student registration checks the registration number here (SMARTTT apps/integrations). */
+    SMARTTT_STUDENT_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/students/'),
     SMARTTT_LECTURER_UNITS_PATH: z
       .string()
       .min(1)

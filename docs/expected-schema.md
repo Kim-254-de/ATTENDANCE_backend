@@ -61,6 +61,27 @@ is itself proof of verification.
 | `erp_snapshot` | `jsonb` null | Verbatim ERP payload — evidence for disputes |
 | `created_at` / `updated_at` | `timestamptz` | |
 
+### `student_profiles`
+
+One row per student account (`db/migrations/012_student_accounts.sql`). Created by
+`POST /auth/student/register` once the registration number is verified against the
+student directory (SMARTTT, or the ERP when SMARTTT is off).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `STUDENT`) |
+| `registration_number` | `varchar(64)` | **UNIQUE**, upper-cased. What links the student to `unit_allocations` rows |
+| `programme` | `varchar(200)` null | From the directory at registration |
+| `year_of_study` | `smallint` null | From the directory at registration |
+| `directory_source` | text | `SMARTTT` / `ERP`: which directory verified them |
+| `directory_verified_at` | `timestamptz` | |
+| `directory_snapshot` | `jsonb` null | The directory record as returned |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+`audit_logs.subject_registration_number` (same migration) records the number on
+student registration attempts, including rejected ones.
+
 ### `email_verification_tokens`
 
 | Column | Type | Notes |

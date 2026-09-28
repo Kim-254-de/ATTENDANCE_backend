@@ -15,30 +15,84 @@ export interface LecturerPublic {
   status: AccountStatus;
 }
 
+/** What the app shows about a signed-in student. */
+export interface StudentPublic {
+  id: string;
+  role: 'student';
+  fullName: string;
+  email: string;
+  registrationNumber: string;
+  programme: string | null;
+  yearOfStudy: number | null;
+  status: AccountStatus;
+}
+
+/** Whoever is signed in: what GET /auth/me and sign-in return. */
+export type AccountPublic = LecturerPublic | StudentPublic;
+
+export const toStudentPublic = (c: {
+  id: string; fullName: string; email: string; registrationNumber: string;
+  programme: string | null; yearOfStudy: number | null; status: AccountStatus;
+}): StudentPublic => ({
+  id: c.id,
+  role: 'student',
+  fullName: c.fullName,
+  email: c.email,
+  registrationNumber: c.registrationNumber,
+  programme: c.programme,
+  yearOfStudy: c.yearOfStudy,
+  status: c.status,
+});
+
 export interface LoginCandidate {
   id: string;
+  role: 'LECTURER' | 'STUDENT';
   email: string;
   fullName: string;
   passwordHash: string;
   status: AccountStatus;
   failedAttempts: number;
   lockedUntil: Date | null;
-  staffNumber: string;
-  title: string | null;
-  department: string | null;
+  /** What the app shows once signed in. */
+  account: AccountPublic;
 }
 
 interface LoginRow {
   id: string;
+  role: 'LECTURER' | 'STUDENT';
   email: string;
   full_name: string;
   password_hash: string;
   status: AccountStatus;
   failed_login_attempts: number;
   locked_until: Date | null;
-  staff_number: string;
+  staff_number: string | null;
   title: string | null;
   department: string | null;
+  registration_number: string | null;
+  programme: string | null;
+  year_of_study: number | null;
+}
+
+/** The public shape for a session or login row; null when its profile row is missing. */
+function accountFrom(row: {
+  id: string; role: UserRole; email: string; full_name: string; status: AccountStatus;
+  staff_number: string | null; title: string | null; department: string | null;
+  registration_number: string | null; programme: string | null; year_of_study: number | null;
+}): AccountPublic | null {
+  if (row.role === 'LECTURER' && row.staff_number) {
+    return toLecturerPublic({
+      id: row.id, fullName: row.full_name, email: row.email, staffNumber: row.staff_number,
+      title: row.title, department: row.department, status: row.status,
+    });
+  }
+  if (row.role === 'STUDENT' && row.registration_number) {
+    return toStudentPublic({
+      id: row.id, fullName: row.full_name, email: row.email, registrationNumber: row.registration_number,
+      programme: row.programme, yearOfStudy: row.year_of_study, status: row.status,
+    });
+  }
+  return null;
 }
 
 export const toLecturerPublic = (c: {
@@ -55,32 +109,41 @@ export const toLecturerPublic = (c: {
   status: c.status,
 });
 
-/** `identifier` is already normalised: lower-cased email, or upper-cased staff number. */
-export async function findLecturerForLogin(identifier: string): Promise<LoginCandidate | null> {
+/**
+ * A lecturer or student account for sign-in. `identifier` is already
+ * normalised: a lower-cased email, or an upper-cased staff number
+ * (lecturers) or registration number (students).
+ */
+export async function findAccountForLogin(identifier: string): Promise<LoginCandidate | null> {
   const byEmail = identifier.includes('@');
   const row = await queryOne<LoginRow>(
-    `SELECT u.id, u.email, u.full_name, u.password_hash, u.status,
+    `SELECT u.id, u.role, u.email, u.full_name, u.password_hash, u.status,
             u.failed_login_attempts, u.locked_until,
-            p.staff_number, p.title, p.department
+            p.staff_number, p.title, p.department,
+            sp.registration_number, sp.programme, sp.year_of_study
        FROM users u
-       JOIN lecturer_profiles p ON p.user_id = u.id
-      WHERE u.role = 'LECTURER'
+  LEFT JOIN lecturer_profiles p  ON p.user_id = u.id
+  LEFT JOIN student_profiles  sp ON sp.user_id = u.id
+      WHERE u.role IN ('LECTURER', 'STUDENT')
         AND u.deleted_at IS NULL
-        AND ${byEmail ? 'u.email' : 'p.staff_number'} = $1`,
+        AND ${byEmail ? 'u.email = $1' : '(p.staff_number = $1 OR sp.registration_number = $1)'}
+      ORDER BY u.role
+      LIMIT 1`,
     [identifier],
   );
   if (!row) return null;
+  const account = accountFrom(row);
+  if (!account) return null; // a user without its profile row cannot be shown as anyone
   return {
     id: row.id,
+    role: row.role,
     email: row.email,
     fullName: row.full_name,
     passwordHash: row.password_hash,
     status: row.status,
     failedAttempts: row.failed_login_attempts,
     lockedUntil: row.locked_until,
-    staffNumber: row.staff_number,
-    title: row.title,
-    department: row.department,
+    account,
   };
 }
 
@@ -148,6 +211,7 @@ export interface LiveSession {
   expiresAt: Date;
   revokedAt: Date | null;
   lecturer: LecturerPublic | null;
+  student: StudentPublic | null;
 }
 
 /** A session with its owner, or null. Callers decide what "usable" means. */
@@ -156,13 +220,16 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
     id: string; user_id: string; refresh_token_hash: string; expires_at: Date; revoked_at: Date | null;
     role: UserRole; status: AccountStatus; deleted_at: Date | null;
     email: string; full_name: string; staff_number: string | null; title: string | null; department: string | null;
+    registration_number: string | null; programme: string | null; year_of_study: number | null;
   }>(
     `SELECT s.id, s.user_id, s.refresh_token_hash, s.expires_at, s.revoked_at,
             u.role, u.status, u.deleted_at, u.email, u.full_name,
-            p.staff_number, p.title, p.department
+            p.staff_number, p.title, p.department,
+            sp.registration_number, sp.programme, sp.year_of_study
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
-  LEFT JOIN lecturer_profiles p ON p.user_id = u.id
+  LEFT JOIN lecturer_profiles p  ON p.user_id = u.id
+  LEFT JOIN student_profiles  sp ON sp.user_id = u.id
       WHERE s.id = $1`,
     [sessionId],
   );
@@ -175,14 +242,13 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
     refreshTokenHash: row.refresh_token_hash,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
-    lecturer:
-      row.role === 'LECTURER' && row.staff_number
-        ? toLecturerPublic({
-            id: row.user_id, fullName: row.full_name, email: row.email,
-            staffNumber: row.staff_number, title: row.title, department: row.department,
-            status: row.status,
-          })
-        : null,
+    ...(() => {
+      const account = accountFrom({ ...row, id: row.user_id });
+      return {
+        lecturer: account?.role === 'lecturer' ? account : null,
+        student: account?.role === 'student' ? account : null,
+      };
+    })(),
   };
 }
 

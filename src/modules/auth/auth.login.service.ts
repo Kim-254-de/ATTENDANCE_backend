@@ -10,7 +10,9 @@ import type { LoginInput } from './auth.schema.js';
 import type { RegistrationContext } from './auth.service.js';
 
 /**
- * Lecturer sign-in (README sections 3.1 and 4.1).
+ * Sign-in for lecturers and students (README sections 3.1 and 4.1). One form:
+ * a staff number, a registration number or an email, plus a password.
+ * The access token carries whichever role the account has.
  *
  * Order matters, and each step is deliberate:
  *  1. Unknown account and wrong password give the SAME response, and the unknown-account path
@@ -22,15 +24,16 @@ import type { RegistrationContext } from './auth.service.js';
  */
 
 export interface IssuedSession {
-  /** avatarUrl merged in here (not part of LecturerPublic — see auth.repository.ts's findAvatarUrl) so
+  /** avatarUrl merged in here (not part of the public shape — see auth.repository.ts's findAvatarUrl) so
    *  the object the frontend caches right after login already matches what GET /auth/me later returns. */
-  lecturer: repo.LecturerPublic & { avatarUrl: string | null };
+  account: repo.AccountPublic & { avatarUrl: string | null };
   access: string;
   refresh: string;
   sessionExpiresAt: Date;
 }
 
 const BAD_CREDENTIALS = 'Incorrect staff number/email or password.';
+const BAD_STUDENT_CREDENTIALS = 'Incorrect registration number/email or password.';
 
 const STATUS_MESSAGES: Record<Exclude<AccountStatus, 'ACTIVE'>, string> = {
   PENDING_VERIFICATION: 'Please confirm your email address before signing in. Check your inbox for the verification link.',
@@ -39,19 +42,19 @@ const STATUS_MESSAGES: Record<Exclude<AccountStatus, 'ACTIVE'>, string> = {
   DEACTIVATED: 'This account has been deactivated. Please contact the administrator.',
 };
 
-/** Staff numbers are stored upper-case and emails lower-case; anything with "@" is an email. */
+/** Staff and registration numbers are stored upper-case and emails lower-case; anything with "@" is an email. */
 export function normaliseIdentifier(identifier: string): string {
   const value = identifier.trim();
   return value.includes('@') ? value.toLowerCase() : value.toUpperCase();
 }
 
-export async function loginLecturer(input: LoginInput, context: RegistrationContext): Promise<IssuedSession> {
+export async function loginAccount(input: LoginInput, context: RegistrationContext): Promise<IssuedSession> {
   const identifier = normaliseIdentifier(input.identifier);
   const audit = { subjectEmail: identifier.includes('@') ? identifier : null, subjectStaffNumber: identifier.includes('@') ? null : identifier, ipAddress: context.ipAddress, userAgent: context.userAgent, requestId: context.requestId };
   const fail = (reason: string, userId?: string) =>
     auditService.record({ ...audit, userId: userId ?? null, action: 'LOGIN_FAILED', outcome: 'FAILURE', reason });
 
-  const user = await repo.findLecturerForLogin(identifier);
+  const user = await repo.findAccountForLogin(identifier);
 
   if (!user) {
     await fakeVerifyPassword();
@@ -78,7 +81,9 @@ export async function loginLecturer(input: LoginInput, context: RegistrationCont
       env.LOGIN_LOCKOUT_MINUTES,
     );
     await fail(lockedUntil ? `wrong password; account locked after ${failedAttempts} attempts` : 'wrong password', user.id);
-    throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, BAD_CREDENTIALS);
+    // The wording follows the kind of account the identifier found, so it reveals nothing
+    // the person typing didn't already know (they typed a staff or a registration number).
+    throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, user.role === 'STUDENT' ? BAD_STUDENT_CREDENTIALS : BAD_CREDENTIALS);
   }
 
   if (user.status !== 'ACTIVE') {
@@ -99,11 +104,11 @@ export async function loginLecturer(input: LoginInput, context: RegistrationCont
     userAgent: context.userAgent,
     expiresAt: sessionExpiresAt,
   });
-  const access = await sessions.signAccessToken({ userId: user.id, sessionId, role: 'LECTURER' });
+  const access = await sessions.signAccessToken({ userId: user.id, sessionId, role: user.role });
 
   await auditService.record({ ...audit, userId: user.id, action: 'LOGIN_SUCCEEDED', outcome: 'SUCCESS' });
   const avatarUrl = await findAvatarUrl(user.id);
-  return { lecturer: { ...repo.toLecturerPublic(user), avatarUrl }, access, refresh, sessionExpiresAt };
+  return { account: { ...user.account, avatarUrl }, access, refresh, sessionExpiresAt };
 }
 
 /** Trades a valid refresh token for a fresh pair. The old refresh token stops working. */
@@ -116,7 +121,8 @@ export async function refreshSession(refreshToken: string | null, context: Regis
 
   const session = await repo.findSession(claims.sessionId);
   if (!session || session.userId !== claims.userId || session.revokedAt || session.expiresAt <= new Date()) throw denied;
-  if (session.status !== 'ACTIVE' || !session.lecturer) throw denied;
+  const account = session.lecturer ?? session.student;
+  if (session.status !== 'ACTIVE' || !account) throw denied;
 
   const presentedHash = sessions.hashRefreshToken(refreshToken);
   if (presentedHash !== session.refreshTokenHash) {
@@ -135,10 +141,10 @@ export async function refreshSession(refreshToken: string | null, context: Regis
   if (!(await repo.rotateRefreshHash(session.sessionId, presentedHash, sessions.hashRefreshToken(refresh)))) {
     throw denied; // lost a race with a concurrent refresh
   }
-  const access = await sessions.signAccessToken({ userId: session.userId, sessionId: session.sessionId, role: 'LECTURER' });
+  const access = await sessions.signAccessToken({ userId: session.userId, sessionId: session.sessionId, role: session.role });
   // The client never reads this response body (refresh is a transparent, silent
   // cookie-renewal call) — no avatarUrl lookup here, just satisfying the shared type.
-  return { lecturer: { ...session.lecturer, avatarUrl: null }, access, refresh, sessionExpiresAt: session.expiresAt };
+  return { account: { ...account, avatarUrl: null }, access, refresh, sessionExpiresAt: session.expiresAt };
 }
 
 /** Ends the session named by whichever valid token the client still holds. Never throws. */
