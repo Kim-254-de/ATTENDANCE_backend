@@ -230,6 +230,9 @@ export interface ScanVerdict {
   ageSeconds: number;
 }
 
+/** Session ids are UUIDs; the column is one, so anything else must never reach a query. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Validates a scanned code on behalf of a student.
  *
@@ -246,9 +249,13 @@ export async function verifyScan(
   context: RequestContext,
 ): Promise<ScanVerdict> {
   // The session id inside the payload is untrusted until the signature over it
-  // verifies, so it is only used to look up the candidate session.
+  // verifies, so it is only used to look up the candidate session. Its SHAPE is
+  // checked before it is used at all: a student pointing the camera at a poster
+  // or a Wi-Fi code submits something whose second part is not a UUID, and that
+  // would reach Postgres as a malformed uuid and come back a 500 instead of
+  // "this is not an attendance code".
   const claimedSessionId = payload.trim().split('.')[1];
-  if (!claimedSessionId) {
+  if (!claimedSessionId || !UUID_PATTERN.test(claimedSessionId)) {
     throw scanRejected('MALFORMED');
   }
 

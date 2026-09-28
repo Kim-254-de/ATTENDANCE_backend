@@ -114,6 +114,8 @@ export const PgErrorCode = {
   FOREIGN_KEY_VIOLATION: '23503',
   NOT_NULL_VIOLATION: '23502',
   CHECK_VIOLATION: '23514',
+  /** A value the caller supplied is not valid for the column's type, e.g. a non-UUID for a uuid. */
+  INVALID_TEXT_REPRESENTATION: '22P02',
   UNDEFINED_TABLE: '42P01',
   UNDEFINED_COLUMN: '42703',
   QUERY_CANCELED: '57014',

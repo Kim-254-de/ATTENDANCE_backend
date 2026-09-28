@@ -68,6 +68,17 @@ function normalise(error: unknown): NormalisedError {
           message: 'This action references a record that does not exist.',
           expected: true,
         };
+      case PgErrorCode.INVALID_TEXT_REPRESENTATION:
+        // A caller-supplied value was the wrong shape for its column (a non-UUID
+        // reaching a uuid, say). That is a bad request, not a fault: validate it
+        // at the edge where you can name the field, and fall back to this so a
+        // missed one is still a 400 rather than a 500.
+        return {
+          statusCode: 400,
+          code: ErrorCode.VALIDATION_FAILED,
+          message: 'The submitted details are not valid.',
+          expected: true,
+        };
       case PgErrorCode.QUERY_CANCELED:
         // statement_timeout fired. A genuine fault, but not a code defect.
         return {
