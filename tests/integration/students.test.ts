@@ -307,8 +307,10 @@ describe("a student's units and attendance", () => {
       [lec.unitId, lec.id]);
 
     // Today's class: the lecturer opens it, the student scans the code on screen.
+    // Geofence off: this test is about what a student's units and history report, not where
+    // they scanned from. The fence has its own tests in units-attendance.test.ts.
     const opened = await request(app).post('/api/v1/sessions').set('Authorization', lec.auth)
-      .send({ unitId: lec.unitId, title: 'Week 2', closesAt: new Date(Date.now() + 3600_000).toISOString() });
+      .send({ unitId: lec.unitId, title: 'Week 2', closesAt: new Date(Date.now() + 3600_000).toISOString(), geofence: 'OFF' });
     expect(opened.status).toBe(201);
     const sessionId = body<{ id: string }>(opened).data.id;
     const qr = await request(app).get(`/api/v1/sessions/${sessionId}/qr`).set('Authorization', lec.auth);

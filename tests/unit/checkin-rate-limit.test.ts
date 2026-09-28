@@ -17,7 +17,7 @@ function hall(limits: { perStudent: number; perIp: number }) {
     // Stands in for requireAuth.
     (req, _res, next) => {
       const student = req.header('x-student');
-      if (student) req.auth = { userId: student, sessionId: 's', role: 'STUDENT', lecturer: null };
+      if (student) req.auth = { userId: student, sessionId: 's', role: 'STUDENT', lecturer: null, student: null };
       next();
     },
     perStudent,
