@@ -58,6 +58,14 @@ const envSchema = z
 
     EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(24),
 
+    // --- Email delivery (Resend) ---
+    // Left empty outside production on purpose: mail is then logged instead of
+    // sent, which is what makes registration and password reset testable
+    // locally and in CI without a key. In production an empty key is refused.
+    RESEND_API_KEY: z.string().default(''),
+    /** RFC 5322 sender. The domain must be verified in Resend or it refuses the send. */
+    EMAIL_FROM: z.string().min(3).default('Smart Attendance <onboarding@resend.dev>'),
+
     // Much shorter than email verification: a reset link is a live key to the
     // account, so its useful life is measured in minutes, not days.
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),

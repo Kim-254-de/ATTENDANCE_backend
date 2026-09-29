@@ -1,15 +1,17 @@
+import { Resend } from 'resend';
 import { logger } from '../../config/logger.js';
 import { env, isProduction } from '../../config/env.js';
 
 /**
  * Outbound notifications (README section 6: "Notification module").
  *
- * No email provider is wired up yet. Until one is chosen, delivery is logged
- * rather than sent, and the verification link is printed in non-production so
- * the registration flow is testable end to end.
+ * Delivery goes through Resend, the same provider SMARTTT uses, so both
+ * services send from one verified domain. Set RESEND_API_KEY and EMAIL_FROM.
  *
- * To go live, implement `deliver()` against the chosen provider (SMTP via
- * Nodemailer, SendGrid, SES...). Nothing else in the codebase changes.
+ * With no key, mail is logged instead of sent and the body is written at debug
+ * level — that is how the verification and reset links are read in development
+ * and in the integration tests. In production a missing key is an error: the
+ * alternative is silently dropping account-recovery mail.
  */
 
 export interface EmailVerificationMessage {
@@ -152,18 +154,46 @@ function buildVerificationUrl(token: string): string {
   return `${base.replace(/\/+$/, '')}/verify-email?token=${encodeURIComponent(token)}`;
 }
 
+/** Built once, and only when a key exists, so tests and local runs never construct it. */
+let client: Resend | null = null;
+function provider(): Resend | null {
+  if (!env.RESEND_API_KEY) return null;
+  client ??= new Resend(env.RESEND_API_KEY);
+  return client;
+}
+
 async function deliver(email: OutboundEmail): Promise<void> {
-  if (isProduction) {
-    // Fail loudly rather than silently dropping mail in production.
-    throw new Error(
-      'No email provider is configured. Implement deliver() in notification.service.ts.',
+  const resend = provider();
+
+  if (!resend) {
+    if (isProduction) {
+      // Fail loudly rather than silently dropping mail in production. The
+      // callers catch this, so a missing key costs a logged failure and an
+      // unsent link, never a different answer to the user.
+      throw new Error('RESEND_API_KEY is not set, so no email can be sent.');
+    }
+    logger.info(
+      { to: email.to, subject: email.subject },
+      'email not sent (no provider configured) - body follows',
     );
+    // Load-bearing in development: this is where the verification and reset
+    // links come from when there is nothing to send them with.
+    logger.debug({ body: email.text }, 'outbound email body');
+    return;
   }
 
-  logger.info(
-    { to: email.to, subject: email.subject },
-    'email not sent (no provider configured) - body follows',
-  );
-  logger.debug({ body: email.text }, 'outbound email body');
-  return Promise.resolve();
+  const { data, error } = await resend.emails.send({
+    from: env.EMAIL_FROM,
+    to: email.to,
+    subject: email.subject,
+    text: email.text,
+  });
+
+  // The SDK reports a refusal in the body rather than throwing, so without this
+  // check a rejected message would look exactly like a delivered one.
+  if (error) {
+    throw new Error(`Resend refused the message: ${error.message}`);
+  }
+
+  logger.info({ to: email.to, subject: email.subject, messageId: data?.id }, 'email sent');
 }
