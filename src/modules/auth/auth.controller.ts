@@ -41,8 +41,7 @@ export async function registerLecturer(req: Request, res: Response): Promise<voi
     status: result.status,
     nextStep: result.nextStep,
     createdAt: result.createdAt.toISOString(),
-    message:
-      'Your staff number was verified successfully. Check your email to confirm your address.',
+    message: 'Your staff number was verified and your account is ready. You can now sign in.',
   });
 }
 
@@ -71,10 +70,7 @@ export async function verifyEmail(req: Request, res: Response): Promise<void> {
   sendSuccess(res, {
     status: result.status,
     nextStep: result.nextStep,
-    message:
-      result.nextStep === 'AWAIT_APPROVAL'
-        ? 'Email confirmed. An administrator will review and approve your account.'
-        : 'Email confirmed. You can now sign in.',
+    message: 'Email confirmed. You can now sign in.',
   });
 }
 

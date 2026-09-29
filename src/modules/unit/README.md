@@ -19,8 +19,7 @@ added student's name comes from the ERP rather than a text field.
 
 `session.service.ts` refuses to activate a class for a unit that is not
 `VERIFIED`. There is no admin UI yet for confirming an assignment by hand;
-do it locally with `npm run dev:verify-unit -- "COSC 100"` (mirrors
-`dev:approve` for lecturer accounts).
+do it locally with `npm run dev:verify-unit -- "COSC 100"`.
 
 ## How students get onto a unit
 

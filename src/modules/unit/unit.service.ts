@@ -247,8 +247,7 @@ export async function getCurrentUnit(lecturerUserId: string): Promise<UnitDto | 
  *   PENDING_VERIFICATION and every ADMIN is notified to confirm the
  *   lecturer-unit assignment by hand. It cannot be used to activate a class
  *   (session.service.ts) until then. There is no admin UI yet for this: it
- *   happens via `npm run dev:verify-unit`, the same stand-in
- *   dev-approve-lecturer.mjs is for lecturer account approval.
+ *   happens via `npm run dev:verify-unit`.
  */
 export async function createUnit(
   input: CreateUnitInput,

@@ -70,9 +70,6 @@ const envSchema = z
     // account, so its useful life is measured in minutes, not days.
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
 
-    // --- Registration policy ---
-    LECTURER_REQUIRES_ADMIN_APPROVAL: booleanish.default('true'),
-
     // --- ERP ---
     ERP_BASE_URL: z.string().url(),
     ERP_STAFF_LOOKUP_PATH: z

@@ -1,7 +1,6 @@
 // DEV ONLY. There is no student registration module yet, so there are no real
 // student accounts to generate believable attendance history against — this
-// creates synthetic ones directly, the same way dev-approve-lecturer.mjs
-// stands in for the (also unbuilt) admin-approval endpoint.
+// creates synthetic ones directly.
 //   npm run dev:seed-attendance -- STF/0001
 // For every unit the given lecturer already owns: tops up a roster of ~20
 // synthetic students (idempotent — re-running doesn't duplicate them, keyed

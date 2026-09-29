@@ -18,7 +18,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "node db/migrate.mjs",
-    "dev:approve": "node scripts/dev-approve-lecturer.mjs",
     "dev:verify-unit": "node scripts/dev-verify-unit.mjs",
     "dev:seed-attendance": "node scripts/dev-seed-attendance.mjs",
     "dev:set-room": "node scripts/dev-set-room.mjs"

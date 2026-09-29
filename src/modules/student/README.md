@@ -7,7 +7,7 @@ Student accounts and what a signed-in student sees about their own classes.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/api/v1/auth/student/register` | `{ fullName, email, registrationNumber, password, confirmPassword }` |
-| `POST` | `/api/v1/auth/verify-email` | Same as lecturers. A student is `ACTIVE` here (no admin approval) and is linked to every roster already listing their registration number |
+| `POST` | `/api/v1/auth/verify-email` | A student is `ACTIVE` here and is linked to every roster already listing their registration number. (Lecturers don't confirm an email: they are active on registration) |
 | `POST` | `/api/v1/auth/login` | `identifier` may be a registration number; the token carries `role: STUDENT` |
 | `GET` | `/api/v1/auth/me` | Returns `{ role: 'student', registrationNumber, programme, yearOfStudy, ... }` |
 | `POST` | `/api/v1/auth/forgot-password`, `/reset-password`, `/change-password` | Same as lecturers |

@@ -18,15 +18,15 @@ prototype, `origin/Albert`), plus `GET /auth/me`, `POST /auth/refresh`, `POST /a
 |---|---|---|
 | Signed in | 200 | httpOnly cookies `sa_access` (15m) and `sa_refresh` (7d, path `/api/v1/auth`); body is the lecturer |
 | Wrong password **or** unknown account | 401 `INVALID_CREDENTIALS` | identical answer and comparable timing, so accounts cannot be enumerated |
-| Correct password, account not ACTIVE | 403 `ACCOUNT_NOT_ACTIVE` | says why: unverified email / awaiting approval / suspended / deactivated. Only shown after a correct password |
+| Correct password, account not ACTIVE | 403 `ACCOUNT_NOT_ACTIVE` | says why (e.g. a student who hasn't confirmed their email, or a suspended account). Only shown after a correct password |
 | Too many failures | 429 `ACCOUNT_LOCKED` | `LOGIN_MAX_FAILED_ATTEMPTS` (5) wrong passwords lock the account for `LOGIN_LOCKOUT_MINUTES` (15); checked before the password. There is also a per-IP limiter |
 
 Sessions live in `auth_sessions`. Every request re-checks the session and account status, so **sign-out, suspension
 and detected token theft take effect immediately**. Refresh tokens rotate on every use; presenting an already-rotated one
 revokes the whole session. Native clients may send `Authorization: Bearer <access token>` instead of cookies.
 
-There is no administrator approval endpoint yet. Locally, after the lecturer has confirmed their email (the link is
-printed in the API log in development), run `npm run dev:approve -- STF/0004` to activate them.
+A lecturer can sign in as soon as they have registered: there is no email confirmation and no administrator approval
+for lecturer accounts (see "Lecturer registration" below).
 
 ## Classroom geofence: surveying rooms
 
@@ -207,21 +207,20 @@ the files to add.
 3. **Verify against the ERP** — **if the staff number is not in the ERP, the
    registration is revoked.** No user, no profile, no token; only an audit row
    explaining the rejection.
-4. **Hash the password** with Argon2id and insert the account, profile and
-   verification token in one transaction, with the audit entry committed
-   alongside them.
-5. **Email a verification link.** A delivery failure is logged, not thrown —
-   it must not roll back a valid registration.
+4. **Hash the password** with Argon2id and insert the account and profile in
+   one transaction, with the audit entry committed alongside them.
 
-The account lands in `PENDING_VERIFICATION`. Confirming the email moves it to
-`PENDING_APPROVAL` (or straight to `ACTIVE` if
-`LECTURER_REQUIRES_ADMIN_APPROVAL=false`). Only an `ACTIVE` account can sign in.
+The account is `ACTIVE` straight away: the ERP check in step 3 is what proves the
+person is on the staff records, so there is no email confirmation and no
+administrator approval. The lecturer signs in next
+(`db/migrations/013_lecturers_active_on_registration.sql` activated accounts
+registered before this).
 
 ### Responses
 
 | Status | Code | Meaning |
 |---|---|---|
-| `201` | — | Verified and created; check email |
+| `201` | — | Verified and created; the account is active, sign in next |
 | `400` | `VALIDATION_FAILED` | Payload rejected |
 | `403` | `ERP_STAFF_NOT_FOUND` | **Not in the ERP — revoked** |
 | `403` | `ERP_STAFF_INACTIVE` | Retired or suspended — revoked |

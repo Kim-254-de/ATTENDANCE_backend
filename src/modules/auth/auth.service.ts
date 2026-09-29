@@ -26,7 +26,9 @@ import type {
  *
  * The rule that drives this file: a staff number absent from the ERP means the
  * registration is REVOKED — no account is created, nothing is left behind
- * except an audit entry explaining the rejection.
+ * except an audit entry explaining the rejection. A staff number the ERP
+ * verifies gets an ACTIVE account at once: no email confirmation, no admin
+ * approval — the lecturer signs in straight after registering.
  *
  * The ERP gate fails CLOSED. If the ERP cannot be reached we refuse the
  * registration (503) rather than admitting an unverified lecturer, because a
@@ -45,8 +47,8 @@ export interface LecturerRegistrationResult {
   fullName: string;
   staffNumber: string;
   status: AccountStatus;
-  /** What the client should tell the lecturer to do next. */
-  nextStep: 'VERIFY_EMAIL' | 'AWAIT_APPROVAL';
+  /** The account is active at once: the lecturer signs in next. */
+  nextStep: 'SIGN_IN';
   createdAt: Date;
 }
 
@@ -113,11 +115,11 @@ export async function registerLecturer(
   // 3. Create the account.
   // ---------------------------------------------------------------------
   const passwordHash = await hashPassword(password);
-  const verification = generateToken();
 
-  // Lecturers confirm their email first; admin approval (README section 3.1)
-  // then gates activation when the institution requires it.
-  const status: AccountStatus = 'PENDING_VERIFICATION';
+  // Active at once: the ERP check above is what proves a lecturer is staff.
+  // There is no email confirmation and no administrator approval step, so the
+  // lecturer can sign in as soon as the account exists.
+  const status: AccountStatus = 'ACTIVE';
 
   let created: authRepository.CreatedLecturer;
   try {
@@ -133,8 +135,6 @@ export async function registerLecturer(
         title: record.title,
         department: record.department,
         faculty: record.faculty,
-        emailVerificationTokenHash: verification.tokenHash,
-        emailVerificationExpiresAt: expiresInHours(env.EMAIL_VERIFICATION_TTL_HOURS),
       },
       // Committed with the account, so a successful registration can never
       // exist without its audit entry.
@@ -166,36 +166,6 @@ export async function registerLecturer(
     throw error;
   }
 
-  // ---------------------------------------------------------------------
-  // 4. Send the verification email.
-  // ---------------------------------------------------------------------
-  // Delivery failure must not roll back a valid registration — the lecturer
-  // can request a fresh link — so this is reported, not thrown.
-  await notificationService
-    .sendEmailVerification({
-      to: created.email,
-      fullName: created.fullName,
-      token: verification.token,
-    })
-    .then(() =>
-      auditService.record({
-        ...auditBase,
-        userId: created.userId,
-        action: 'EMAIL_VERIFICATION_SENT',
-        outcome: 'SUCCESS',
-      }),
-    )
-    .catch(async (error: unknown) => {
-      logger.error({ err: error, userId: created.userId }, 'verification email failed to send');
-      await auditService.record({
-        ...auditBase,
-        userId: created.userId,
-        action: 'EMAIL_VERIFICATION_SENT',
-        outcome: 'FAILURE',
-        reason: 'delivery failed',
-      });
-    });
-
   logger.info(
     { userId: created.userId, staffNumber, requestId: context.requestId },
     'lecturer registered',
@@ -207,7 +177,7 @@ export async function registerLecturer(
     fullName: created.fullName,
     staffNumber: created.staffNumber,
     status: created.status,
-    nextStep: 'VERIFY_EMAIL',
+    nextStep: 'SIGN_IN',
     createdAt: created.createdAt,
   };
 }
@@ -436,7 +406,7 @@ function describeRevocation(lookup: ErpLookupResult): Revocation {
 export async function verifyEmail(
   token: string,
   context: RegistrationContext,
-): Promise<{ status: AccountStatus; nextStep: 'AWAIT_APPROVAL' | 'SIGN_IN' }> {
+): Promise<{ status: AccountStatus; nextStep: 'SIGN_IN' }> {
   const stored = await authRepository.findEmailVerificationToken(hashToken(token));
 
   // One message for every failure mode, so the endpoint cannot be used to
@@ -449,12 +419,11 @@ export async function verifyEmail(
     throw invalid;
   }
 
-  // Students are active once their email is confirmed: the directory check at
-  // registration already proved who they are. Lecturers may also need an admin.
+  // Confirming an email activates the account; there is no approval step.
+  // Only students get a verification link now (lecturers are active on
+  // registration), but a lecturer link issued before that change still works.
   const isStudent = stored.userRole === 'STUDENT';
-  const nextStatus: AccountStatus = !isStudent && env.LECTURER_REQUIRES_ADMIN_APPROVAL
-    ? 'PENDING_APPROVAL'
-    : 'ACTIVE';
+  const nextStatus: AccountStatus = 'ACTIVE';
 
   const consumed = await authRepository.consumeEmailVerificationToken(
     stored.id,
@@ -475,10 +444,7 @@ export async function verifyEmail(
 
   if (isStudent) await linkStudentToRosters(stored.userId, context);
 
-  return {
-    status: nextStatus,
-    nextStep: nextStatus === 'PENDING_APPROVAL' ? 'AWAIT_APPROVAL' : 'SIGN_IN',
-  };
+  return { status: nextStatus, nextStep: 'SIGN_IN' };
 }
 
 /**

@@ -49,8 +49,6 @@ export interface CreateLecturerArgs {
   title: string | null;
   department: string | null;
   faculty: string | null;
-  emailVerificationTokenHash: string;
-  emailVerificationExpiresAt: Date;
 }
 
 export interface CreatedLecturer {
@@ -111,13 +109,6 @@ export async function createLecturerAccount(
         // JSON rather than as the string "[object Object]".
         JSON.stringify(args.erpSnapshot ?? null),
       ],
-      client,
-    );
-
-    await query(
-      `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3)`,
-      [user.id, args.emailVerificationTokenHash, args.emailVerificationExpiresAt],
       client,
     );
 
