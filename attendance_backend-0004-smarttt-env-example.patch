@@ -1,0 +1,36 @@
+From 4eb9169e3962c7affb60fcea6ae85658a9091a12 Mon Sep 17 00:00:00 2001
+From: Peter Kamami <peterkamami496@gmail.com>
+Date: Wed, 30 Sep 2026 18:08:08 +0300
+Subject: [PATCH] Document the SMARTTT connection settings in .env.example
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MKtx9SS2GuCYU7oVG3uhYj
+---
+ .env.example | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index 9950609..e8a8190 100644
+--- a/.env.example
++++ b/.env.example
+@@ -85,9 +85,14 @@ ERP_TIMEOUT_MS=5000
+ ERP_MAX_RETRIES=2
+ 
+ # --- SMARTTT (university timetable) ---
+-# Where a lecturer's units and each unit's registered-student count come from.
+-# Leave SMARTTT_BASE_URL empty to switch the sync off.
+-# SMARTTT_API_KEY must equal ATTENDANCE_API_KEY in SMARTTT's environment.
++# Where a lecturer's units, groups, rosters and registered-student counts come
++# from, and where a student's registration number is checked.
++# SMARTTT_BASE_URL is the SMARTTT backend root, no trailing slash, e.g.
++#   production: https://smarttt-backend-n44z.onrender.com
++#   local:      http://localhost:8000
++# Leave it empty to switch the SMARTTT connection off.
++# SMARTTT_API_KEY is sent in the X-API-Key header on every call. It must equal
++# ATTENDANCE_API_KEY in SMARTTT's environment; SMARTTT refuses anything else.
+ SMARTTT_BASE_URL=
+ SMARTTT_API_KEY=
+ SMARTTT_LECTURER_UNITS_PATH=/api/v1/integrations/attendance/lecturer-units/
+-- 
+2.43.0
+
