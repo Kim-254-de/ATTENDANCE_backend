@@ -10,3 +10,6 @@ lecturerRouter.get('/profile', asyncHandler(requireAuth('LECTURER')), asyncHandl
 
 /** Real teaching summary: units taught, total students, avg. attendance, sessions held. */
 lecturerRouter.get('/overview', asyncHandler(requireAuth('LECTURER')), asyncHandler(lecturerController.overview));
+
+/** Every student across every unit this lecturer teaches, with their per-unit attendance rate. */
+lecturerRouter.get('/students', asyncHandler(requireAuth('LECTURER')), asyncHandler(lecturerController.students));

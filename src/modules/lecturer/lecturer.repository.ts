@@ -1,4 +1,4 @@
-import { queryOne } from '../../db/database.js';
+import { query, queryOne } from '../../db/database.js';
 
 export interface LecturerSummary {
   unitsAllocated: number;
@@ -44,6 +44,49 @@ export async function getSummary(lecturerUserId: string): Promise<LecturerSummar
     sessionsHeld: sessions?.sessions_held ?? 0,
     avgAttendance: attendance?.avg_attendance ?? 0,
   };
+}
+
+export interface LecturerStudentRow {
+  id: string;
+  registration_number: string | null;
+  student_user_id: string | null;
+  full_name: string | null;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string | null;
+  sessions_held: number;
+  sessions_attended: number;
+}
+
+/**
+ * Every ACTIVE student across every unit this lecturer teaches, one row per
+ * (student, unit) — a student on two of the lecturer's units gets two rows.
+ * sessions_held/sessions_attended mirror student.repository.ts's
+ * findUnitsForStudent, just keyed by lecturer-owned units instead of one
+ * student: held counts a session once it's opened and either has a check-in
+ * or has closed; attended counts this student's own check-ins.
+ */
+export async function listStudents(lecturerUserId: string): Promise<LecturerStudentRow[]> {
+  const result = await query<LecturerStudentRow>(
+    `SELECT a.id, a.registration_number, a.student_user_id,
+            COALESCE(a.full_name, su.full_name) AS full_name,
+            u.id AS unit_id, u.code AS unit_code, u.name AS unit_name,
+            COUNT(DISTINCT se.id) FILTER (
+              WHERE se.opens_at <= NOW()
+                AND (r.id IS NOT NULL OR se.status = 'CLOSED' OR se.closes_at <= NOW())
+            )::int AS sessions_held,
+            COUNT(DISTINCT r.id)::int AS sessions_attended
+       FROM unit_allocations a
+       JOIN units u  ON u.id = a.unit_id
+  LEFT JOIN users su ON su.id = a.student_user_id
+  LEFT JOIN attendance_sessions se ON se.unit_id = u.id
+  LEFT JOIN attendance_records r   ON r.session_id = se.id AND r.student_user_id = a.student_user_id
+      WHERE u.lecturer_user_id = $1 AND a.status = 'ACTIVE'
+      GROUP BY a.id, a.registration_number, a.student_user_id, a.full_name, su.full_name, u.id, u.code, u.name
+      ORDER BY full_name NULLS LAST, u.code`,
+    [lecturerUserId],
+  );
+  return result.rows;
 }
 
 export interface LecturerProfile {

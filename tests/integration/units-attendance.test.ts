@@ -241,6 +241,89 @@ describe('units', () => {
   });
 });
 
+describe('GET /lecturers/students', () => {
+  /** What the ERP sync writes, without going through it. */
+  async function allocate(unitId: string, studentUserId: string | null, fullName = 'Test Student') {
+    const { rows: [row] } = await pool.query<{ id: string }>(
+      `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, full_name, status, source)
+       VALUES ($1, $2, $3, $4, 'ACTIVE', 'ERP') RETURNING id`,
+      [unitId, studentUserId, `REG/S${uniq()}`, fullName],
+    );
+    return row!.id;
+  }
+
+  async function openSession(lecturer: { auth: string }, unitId: string) {
+    const res = await api(lecturer.auth).post('/sessions', {
+      unitId, closesAt: new Date(Date.now() + 60 * 60_000).toISOString(), geofence: 'OFF',
+    });
+    expect(res.status).toBe(201);
+    return body<{ id: string; qrToken: { payload: string } }>(res).data.id;
+  }
+
+  it("computes each student's real per-unit attendance rate from held sessions and their own check-ins", async () => {
+    const lecturer = await makeUser('LECTURER');
+    const student = await makeUser('STUDENT');
+    const unit = await makeUnit(lecturer);
+    await allocate(unit.id, student.id, 'Ama Mensah');
+
+    // One session the student checks into: held and attended.
+    const attended = await openSession(lecturer, unit.id);
+    const qr = body<{ payload: string }>(await api(lecturer.auth).get(`/sessions/${attended}/qr`)).data;
+    expect((await api(student.auth).post('/attendance/check-in', { payload: qr.payload })).status).toBe(201);
+
+    // A second session the lecturer closes without the student checking in: held, not attended.
+    const missed = await openSession(lecturer, unit.id);
+    expect((await api(lecturer.auth).patch(`/sessions/${missed}/status`, { status: 'CLOSED' })).status).toBe(200);
+
+    const students = body<Array<{ fullName: string; unitCode: string; sessionsHeld: number; sessionsAttended: number; attendanceRate: number }>>(
+      await api(lecturer.auth).get('/lecturers/students'),
+    ).data;
+    expect(students).toEqual([
+      expect.objectContaining({ fullName: 'Ama Mensah', unitCode: unit.code, sessionsHeld: 2, sessionsAttended: 1, attendanceRate: 50 }),
+    ]);
+  });
+
+  it('shows a student with no account yet as unattended rather than dropping them', async () => {
+    const lecturer = await makeUser('LECTURER');
+    const unit = await makeUnit(lecturer);
+    await allocate(unit.id, null, 'Not Yet Registered');
+    const missed = await openSession(lecturer, unit.id);
+    await api(lecturer.auth).patch(`/sessions/${missed}/status`, { status: 'CLOSED' });
+
+    const students = body<Array<{ fullName: string; studentUserId: string | null; sessionsHeld: number; attendanceRate: number | null }>>(
+      await api(lecturer.auth).get('/lecturers/students'),
+    ).data;
+    expect(students).toEqual([
+      expect.objectContaining({ fullName: 'Not Yet Registered', studentUserId: null, sessionsHeld: 1, attendanceRate: 0 }),
+    ]);
+  });
+
+  it('is lecturer-only, and only ever shows the signed-in lecturer\'s own students', async () => {
+    const student = await makeUser('STUDENT');
+    expect((await api(student.auth).get('/lecturers/students')).status).toBe(403);
+
+    const owner = await makeUser('LECTURER');
+    const other = await makeUser('LECTURER');
+    const unit = await makeUnit(owner);
+    await allocate(unit.id, null, 'Owner Only');
+
+    expect(body<unknown[]>(await api(owner.auth).get('/lecturers/students')).data).toHaveLength(1);
+    expect(body<unknown[]>(await api(other.auth).get('/lecturers/students')).data).toEqual([]);
+  });
+
+  it('lists a student once per unit when the lecturer teaches them in more than one', async () => {
+    const lecturer = await makeUser('LECTURER');
+    const student = await makeUser('STUDENT');
+    const unitA = await makeUnit(lecturer);
+    const unitB = await makeUnit(lecturer);
+    await allocate(unitA.id, student.id, 'Two Units');
+    await allocate(unitB.id, student.id, 'Two Units');
+
+    const students = body<Array<{ unitCode: string }>>(await api(lecturer.auth).get('/lecturers/students')).data;
+    expect(students.map((s) => s.unitCode).sort()).toEqual([unitA.code, unitB.code].sort());
+  });
+});
+
 describe('the roster, synced from the ERP', () => {
   it('reflects who the ERP enrols, with their real names, and is read-only to the lecturer', async () => {
     const lecturer = await makeUser('LECTURER');
