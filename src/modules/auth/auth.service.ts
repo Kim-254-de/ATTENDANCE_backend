@@ -1,10 +1,9 @@
 import { isUniqueViolation } from '../../db/database.js';
 import type { AccountStatus } from '../../db/types.js';
-import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { hashPassword, verifyPassword } from '../../common/utils/password.js';
-import { expiresInHours, generateToken, hashToken } from '../../common/utils/tokens.js';
+import { hashToken } from '../../common/utils/tokens.js';
 import { erpClient } from '../../integrations/erp/index.js';
 import type { ErpLookupResult, ErpProvider } from '../../integrations/erp/index.js';
 import { auditService } from '../audit/index.js';
@@ -420,8 +419,8 @@ export async function verifyEmail(
   }
 
   // Confirming an email activates the account; there is no approval step.
-  // Only students get a verification link now (lecturers are active on
-  // registration), but a lecturer link issued before that change still works.
+  // Nobody is sent a verification link any more (everyone is active on
+  // registration), but a link issued before that change still works.
   const isStudent = stored.userRole === 'STUDENT';
   const nextStatus: AccountStatus = 'ACTIVE';
 
@@ -487,7 +486,8 @@ export interface StudentRegistrationResult {
   fullName: string;
   registrationNumber: string;
   status: AccountStatus;
-  nextStep: 'VERIFY_EMAIL';
+  /** The account is active at once: the student signs in next. */
+  nextStep: 'SIGN_IN';
   createdAt: Date;
 }
 
@@ -498,8 +498,9 @@ export interface StudentRegistrationResult {
  * holds one — must match it, and the gate fails CLOSED: if the directory
  * can't be reached nothing is created (503).
  *
- * The account starts PENDING_VERIFICATION and becomes ACTIVE when the email
- * is confirmed (verifyEmail); there is no admin approval for students.
+ * A student the directory verifies gets an ACTIVE account at once: no email
+ * confirmation, no admin approval — the student signs in straight after
+ * registering, just like a lecturer.
  */
 export async function registerStudent(
   input: StudentRegistrationInput,
@@ -562,7 +563,6 @@ export async function registerStudent(
 
   // 3. Create the account.
   const passwordHash = await hashPassword(password);
-  const verification = generateToken();
   let created: authRepository.CreatedStudent;
   try {
     created = await authRepository.createStudentAccount(
@@ -570,14 +570,13 @@ export async function registerStudent(
         email,
         fullName,
         passwordHash,
-        status: 'PENDING_VERIFICATION',
+        // Active at once: the directory check above is what proves a student is enrolled.
+        status: 'ACTIVE',
         registrationNumber,
         programme: record.programme,
         yearOfStudy: record.yearOfStudy,
         directorySource: record.source,
         directorySnapshot: record.raw,
-        emailVerificationTokenHash: verification.tokenHash,
-        emailVerificationExpiresAt: expiresInHours(env.EMAIL_VERIFICATION_TTL_HOURS),
       },
       async (tx, userId) => {
         await auditService.recordInTransaction(tx, {
@@ -603,22 +602,9 @@ export async function registerStudent(
     throw error;
   }
 
-  // 4. Verification email. A delivery failure doesn't undo the registration.
-  await notificationService
-    .sendEmailVerification({ to: created.email, fullName: created.fullName, token: verification.token, accountType: 'student' })
-    .then(() =>
-      auditService.record({ ...auditBase, userId: created.userId, action: 'EMAIL_VERIFICATION_SENT', outcome: 'SUCCESS' }),
-    )
-    .catch(async (error: unknown) => {
-      logger.error({ err: error, userId: created.userId }, 'verification email failed to send');
-      await auditService.record({
-        ...auditBase,
-        userId: created.userId,
-        action: 'EMAIL_VERIFICATION_SENT',
-        outcome: 'FAILURE',
-        reason: 'delivery failed',
-      });
-    });
+  // 4. Put them on every roster that already lists their number, so they can
+  //    check in as soon as they sign in.
+  await linkStudentToRosters(created.userId, context);
 
   logger.info({ userId: created.userId, registrationNumber, requestId: context.requestId }, 'student registered');
 
@@ -628,7 +614,7 @@ export async function registerStudent(
     fullName: created.fullName,
     registrationNumber: created.registrationNumber,
     status: created.status,
-    nextStep: 'VERIFY_EMAIL',
+    nextStep: 'SIGN_IN',
     createdAt: created.createdAt,
   };
 }

@@ -58,7 +58,7 @@ export async function registerStudent(req: Request, res: Response): Promise<void
     status: result.status,
     nextStep: result.nextStep,
     createdAt: result.createdAt.toISOString(),
-    message: 'Your registration number was verified. Check your email to confirm your address, then sign in.',
+    message: 'Your registration number was verified and your account is ready. You can now sign in.',
   });
 }
 

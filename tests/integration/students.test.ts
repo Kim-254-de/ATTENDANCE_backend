@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 /**
  * Student accounts end to end against a real Postgres database: registration
- * checked against SMARTTT (and the ERP fallback), email verification, sign-in,
+ * checked against SMARTTT (and the ERP fallback), sign-in straight after it,
  * /auth/me, refresh, password reset, a real QR check-in, and the student's
  * own units and attendance. SMARTTT and the ERP are stubbed at fetch.
  */
@@ -132,11 +132,10 @@ function knownStudent(overrides: Partial<{ fullName: string; email: string }> = 
   };
 }
 
-/** Register, confirm the email, sign in. Returns the cookie header and the user id. */
+/** Register, then sign in. Returns the cookie header and the user id. */
 async function activeStudent() {
   const s = knownStudent();
   expect((await register(s.form)).status).toBe(201);
-  expect((await request(app).post('/api/v1/auth/verify-email').send({ token: emailedTokens.at(-1) })).status).toBe(200);
   const res = await login(s.reg);
   expect(res.status).toBe(200);
   return { ...s, cookie: cookieHeader(res), id: body<{ id: string }>(res).data.id };
@@ -158,33 +157,28 @@ async function lecturerWithUnit(code = `COSC ${100 + uniq()} GR A`) {
 }
 
 describe('student registration', () => {
-  it('creates a pending account when SMARTTT knows the student, and emails a student-worded link', async () => {
+  it('creates an active account when SMARTTT knows the student, with no confirmation email', async () => {
     const s = knownStudent();
     const res = await register(s.form);
     expect(res.status).toBe(201);
-    expect(body(res).data).toMatchObject({ registrationNumber: s.reg, status: 'PENDING_VERIFICATION', nextStep: 'VERIFY_EMAIL' });
-    expect(emailedTokens).toHaveLength(1);
+    expect(body(res).data).toMatchObject({ registrationNumber: s.reg, status: 'ACTIVE', nextStep: 'SIGN_IN' });
+    expect(emailedTokens).toHaveLength(0);
 
     const { rows: [p] } = await pool.query<{ registration_number: string; programme: string; directory_source: string }>(`SELECT registration_number, programme, directory_source FROM student_profiles WHERE registration_number = $1`, [s.reg]);
     expect(p).toEqual({ registration_number: s.reg, programme: 'BSc Computer Science', directory_source: 'SMARTTT' });
 
-    // Not yet: the email isn't confirmed.
-    const early = await login(s.reg);
-    expect(early.status).toBe(403);
-    expect(body(early).error?.code).toBe('ACCOUNT_NOT_ACTIVE');
+    // No email to confirm and no approval: they sign in straight away.
+    expect((await login(s.reg)).status).toBe(200);
   });
 
-  it('activates on email confirmation and links the student to rosters that already list them', async () => {
+  it('links the student to rosters that already list them on registration', async () => {
     const s = knownStudent();
     const lec = await lecturerWithUnit();
     await pool.query(
       `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source) VALUES ($1, $2, 'Amina', 'ACTIVE', 'SMARTTT')`,
       [lec.unitId, s.reg]);
 
-    await register(s.form);
-    const verified = await request(app).post('/api/v1/auth/verify-email').send({ token: emailedTokens.at(-1) });
-    expect(verified.status).toBe(200);
-    expect(body(verified).data).toMatchObject({ status: 'ACTIVE', nextStep: 'SIGN_IN' }); // no admin approval for students
+    expect((await register(s.form)).status).toBe(201);
 
     const { rows: [a] } = await pool.query<{ student_user_id: string | null }>(`SELECT student_user_id FROM unit_allocations WHERE registration_number = $1`, [s.reg]);
     expect(a!.student_user_id).toEqual(expect.any(String));
@@ -352,5 +346,38 @@ describe("a student's units and attendance", () => {
       [lec.unitId, s.reg, s.id]);
     await lecturerWithUnit(); // someone else's unit entirely
     expect(body(await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie)).data).toEqual([]);
+  });
+});
+
+describe('migration 014', () => {
+  it('activates students stuck waiting for email confirmation and links them to their rosters', async () => {
+    const insertStudent = async (status: string) => {
+      const n = uniq();
+      const { rows: [u] } = await pool.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, 'x', 'Stuck Student', 'STUDENT', $2) RETURNING id`,
+        [`stuck${n}@students.tharaka.ac.ke`, status]);
+      const reg = `EBT1/${String(20000 + n)}/23`;
+      await pool.query(
+        `INSERT INTO student_profiles (user_id, registration_number, directory_source, directory_verified_at) VALUES ($1, $2, 'SMARTTT', NOW())`,
+        [u!.id, reg]);
+      return { id: u!.id, reg };
+    };
+    const pending = await insertStudent('PENDING_VERIFICATION');
+    const suspended = await insertStudent('SUSPENDED');
+    await pool.query(`INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 day')`, [pending.id, `h${uniq()}`]);
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source) VALUES ($1, $2, 'Stuck', 'ACTIVE', 'SMARTTT')`,
+      [lec.unitId, pending.reg]);
+
+    await pool.query(fs.readFileSync(new URL('../../db/migrations/014_students_active_on_registration.sql', import.meta.url), 'utf8'));
+
+    const status = async (id: string) => (await pool.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [id])).rows[0]!.status;
+    expect(await status(pending.id)).toBe('ACTIVE');
+    expect(await status(suspended.id)).toBe('SUSPENDED');
+    const { rows: [t] } = await pool.query<{ consumed: boolean }>('SELECT consumed_at IS NOT NULL AS consumed FROM email_verification_tokens WHERE user_id = $1', [pending.id]);
+    expect(t!.consumed).toBe(true);
+    const { rows: [a] } = await pool.query<{ student_user_id: string | null }>('SELECT student_user_id FROM unit_allocations WHERE registration_number = $1', [pending.reg]);
+    expect(a!.student_user_id).toBe(pending.id);
   });
 });

@@ -24,7 +24,7 @@ export const authRouter: Router = Router();
  * Rate limited before validation so a flood of malformed requests cannot be
  * used to drive outbound ERP traffic.
  *
- * 201 - account created, verification email sent
+ * 201 - account created and ACTIVE; the lecturer signs in next
  * 400 - payload failed validation
  * 403 - staff number absent, inactive, or identity mismatched (REVOKED)
  * 409 - email or staff number already registered
@@ -40,7 +40,7 @@ authRouter.post(
 /**
  * Student registration.
  *
- * 201 - account created, verification email sent (the account is ACTIVE once the email is confirmed)
+ * 201 - account created and ACTIVE; the student signs in next
  * 400 - payload failed validation
  * 403 - registration number not in the student records, not a current student, or name/email don't match
  * 409 - email or registration number already registered

@@ -332,8 +332,6 @@ export interface CreateStudentArgs {
   yearOfStudy: number | null;
   directorySource: 'SMARTTT' | 'ERP';
   directorySnapshot: unknown;
-  emailVerificationTokenHash: string;
-  emailVerificationExpiresAt: Date;
 }
 
 export interface CreatedStudent {
@@ -345,7 +343,7 @@ export interface CreatedStudent {
   createdAt: Date;
 }
 
-/** User, student profile and email verification token, in one transaction. */
+/** User and student profile, in one transaction. */
 export async function createStudentAccount(
   args: CreateStudentArgs,
   onCreated?: (client: PoolClient, userId: string) => Promise<void>,
@@ -372,12 +370,6 @@ export async function createStudentAccount(
         args.directorySource,
         JSON.stringify(args.directorySnapshot ?? null),
       ],
-      client,
-    );
-
-    await query(
-      `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-      [user.id, args.emailVerificationTokenHash, args.emailVerificationExpiresAt],
       client,
     );
 
