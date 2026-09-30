@@ -109,6 +109,7 @@ beforeAll(async () => {
   const testUrl = new URL(realUrl); testUrl.pathname = `/${TEST_DB}`;
   process.env.DATABASE_URL = testUrl.toString();
   process.env.ERP_MAX_RETRIES = '0';
+  process.env.SMARTTT_BASE_URL = ''; // these rosters come from the ERP, whatever .env says
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
   for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {

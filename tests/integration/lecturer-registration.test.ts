@@ -7,10 +7,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 /**
  * A lecturer creates an account and signs in straight away: no email
- * confirmation and no administrator approval. The ERP staff check is the only
- * gate. The ERP is stubbed at fetch; everything else runs against a real
- * Postgres database.
+ * confirmation and no administrator approval. The staff-records check is the
+ * only gate: SMARTTT's approved staff list, falling back to the ERP. Both are
+ * stubbed at fetch; everything else runs against a real Postgres database.
  */
+const SMARTTT = 'https://smarttt.test.local';
 const TEST_DB = 'attendance_lecturer_reg_test';
 const PASSWORD = 'Sup3rSecretPw9x';
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
@@ -24,10 +25,23 @@ const body = <T = Record<string, unknown>>(res: request.Response) => res.body as
 
 /** The ERP's staff records, keyed by staff number. */
 let erpStaff: Record<string, { fullName: string; email: string; status: string }> = {};
+/** SMARTTT's approved staff list, keyed by staff number. */
+let smartttStaff: Record<string, { full_name: string | null; department?: string } | 'DOWN'> = {};
+let env: { SMARTTT_BASE_URL?: string };
 
 function stubFetch() {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.origin === SMARTTT) {
+      const number = url.searchParams.get('staff_number') ?? '';
+      const entry = smartttStaff[number];
+      if (entry === 'DOWN') return Promise.resolve(new Response('asleep', { status: 503 }));
+      if (!entry) return Promise.resolve(new Response('{}', { status: 404 }));
+      return Promise.resolve(Response.json({
+        staff_number: number, full_name: entry.full_name, email: null, department: entry.department ?? null,
+        faculty: null, title: null, has_account: false, is_active: true,
+      }));
+    }
     const staffNumber = decodeURIComponent(url.pathname.split('/staff/')[1] ?? '');
     const found = erpStaff[staffNumber];
     if (!found) return Promise.resolve(new Response('{}', { status: 404 }));
@@ -62,15 +76,17 @@ beforeAll(async () => {
   process.env.DATABASE_URL = testUrl.toString();
   process.env.ERP_MAX_RETRIES = '0';
   process.env.SMARTTT_BASE_URL = '';
+  process.env.SMARTTT_API_KEY = 'k';
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
   for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {
     await pool.query(fs.readFileSync(new URL(`../../db/migrations/${f}`, import.meta.url), 'utf8'));
   }
   app = (await import('../../src/app.js')).createApp();
+  ({ env } = await import('../../src/config/env.js'));
 });
 
-beforeEach(() => { erpStaff = {}; stubFetch(); });
+beforeEach(() => { erpStaff = {}; smartttStaff = {}; env.SMARTTT_BASE_URL = undefined; stubFetch(); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 afterAll(async () => {
@@ -130,6 +146,58 @@ describe('lecturer registration', () => {
     const { form } = knownLecturer();
     expect((await register(form)).status).toBe(201);
     expect((await register(form)).status).toBe(409);
+  });
+});
+
+describe('lecturer registration against SMARTTT', () => {
+  beforeEach(() => { env.SMARTTT_BASE_URL = SMARTTT; });
+
+  /** A lecturer on SMARTTT's staff list only, not in the ERP. */
+  function smartttLecturer() {
+    const { staffNumber, form } = knownLecturer();
+    delete erpStaff[staffNumber];
+    smartttStaff[staffNumber] = { full_name: form.fullName, department: 'Computer Science' };
+    return { staffNumber, form };
+  }
+
+  const profileOf = async (staffNumber: string) =>
+    (await pool.query<{ department: string | null; erp_staff_id: string | null }>(
+      'SELECT department, erp_staff_id FROM lecturer_profiles WHERE staff_number = $1', [staffNumber])).rows[0];
+
+  it('registers a lecturer on SMARTTT\'s approved staff list who is not in the ERP', async () => {
+    const { staffNumber, form } = smartttLecturer();
+    const res = await register(form);
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ status: 'ACTIVE', nextStep: 'SIGN_IN' });
+    expect(await profileOf(staffNumber)).toEqual({ department: 'Computer Science', erp_staff_id: null });
+    expect((await login(staffNumber)).status).toBe(200);
+  });
+
+  it.each([
+    ['does not list the number', undefined],
+    ['is unreachable', 'DOWN' as const],
+  ])('falls back to the ERP when SMARTTT %s', async (_label, entry) => {
+    const { staffNumber, form } = knownLecturer();
+    if (entry) smartttStaff[staffNumber] = entry;
+    expect((await register(form)).status).toBe(201);
+    expect((await profileOf(staffNumber))?.erp_staff_id).toEqual(expect.any(String));
+  });
+
+  it('refuses a staff number in neither SMARTTT nor the ERP', async () => {
+    const { staffNumber, form } = knownLecturer();
+    delete erpStaff[staffNumber];
+    const res = await register(form);
+    expect(res.status).toBe(403);
+    expect(body(res).error?.code).toBe('ERP_STAFF_NOT_FOUND');
+  });
+
+  it('asks to retry rather than refusing when SMARTTT is down and the ERP does not list the number', async () => {
+    const { staffNumber, form } = knownLecturer();
+    delete erpStaff[staffNumber];
+    smartttStaff[staffNumber] = 'DOWN';
+    const res = await register(form);
+    expect(res.status).toBe(503);
+    expect(await profileOf(staffNumber)).toBeUndefined();
   });
 });
 

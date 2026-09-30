@@ -3,8 +3,12 @@
 SMARTTT is the university timetable system (Django, `Kim-254-de/SMARTTT_BACKEND`).
 This client asks it which units a lecturer is timetabled to teach this term,
 how many students are registered for each, and who they are (registration
-number and name) for each unit's roster. `unit.service.ts
-syncUnitsFromTimetable` is the only caller.
+number and name) for each unit's roster (`unit.service.ts
+syncUnitsFromTimetable`). It also checks staff and registration numbers at
+registration (`auth.service.ts`, `student.directory.ts`), and lists the
+classes a student is registered for (`student.service.ts
+syncMyUnitsFromTimetable`, `SMARTTT_STUDENT_UNITS_PATH`, see
+`src/modules/student/README.md`).
 
 ## Endpoint on the SMARTTT side
 

@@ -2,10 +2,11 @@ import { erpClient } from '../../integrations/erp/index.js';
 import { smartttClient } from '../../integrations/smarttt/index.js';
 
 /**
- * The student directory a registration is checked against: SMARTTT when it
- * is configured (it is where rosters come from too), otherwise the ERP (today
- * mock-erp/). Same fallback as unit rosters, so a deployment has one
- * authority for who its students are.
+ * The student directory a registration is checked against: SMARTTT first
+ * when it is configured (it is where rosters come from too), with the ERP
+ * (today mock-erp/) as the fallback — when SMARTTT is off, can't be reached,
+ * or doesn't list the number. A student SMARTTT reports as no longer current
+ * is refused without asking the ERP.
  */
 
 export interface DirectoryStudent {
@@ -26,24 +27,38 @@ export type DirectoryLookup =
   | { status: 'UNAVAILABLE'; reason: string };
 
 export async function lookupStudent(registrationNumber: string): Promise<DirectoryLookup> {
-  if (smartttClient.enabled) {
-    const result = await smartttClient.lookupStudent(registrationNumber);
-    if (result.status === 'NOT_FOUND') return { status: 'NOT_FOUND' };
-    if (result.status === 'UNAVAILABLE') return result;
-    if (result.status === 'DISABLED') return { status: 'UNAVAILABLE', reason: 'The student directory is not configured.' };
-    const r = result.record;
-    const record: DirectoryStudent = {
-      registrationNumber: r.registrationNumber,
-      fullName: r.fullName,
-      email: r.email,
-      programme: r.programme,
-      yearOfStudy: r.yearOfStudy,
-      source: 'SMARTTT',
-      raw: r.raw,
-    };
-    return r.isActive ? { status: 'FOUND', record } : { status: 'INACTIVE', record };
-  }
+  if (!smartttClient.enabled) return lookupInErp(registrationNumber);
 
+  const smarttt = await lookupInSmarttt(registrationNumber);
+  if (smarttt.status === 'FOUND' || smarttt.status === 'INACTIVE') return smarttt;
+
+  const erp = await lookupInErp(registrationNumber);
+  // Fail closed: "not found" is only definitive when both directories could
+  // answer. If SMARTTT was down and the ERP doesn't list the number, SMARTTT
+  // might have, so the student is asked to retry rather than refused.
+  if (erp.status === 'NOT_FOUND' && smarttt.status === 'UNAVAILABLE') return smarttt;
+  return erp;
+}
+
+async function lookupInSmarttt(registrationNumber: string): Promise<DirectoryLookup> {
+  const result = await smartttClient.lookupStudent(registrationNumber);
+  if (result.status === 'NOT_FOUND') return { status: 'NOT_FOUND' };
+  if (result.status === 'UNAVAILABLE') return result;
+  if (result.status === 'DISABLED') return { status: 'UNAVAILABLE', reason: 'The student directory is not configured.' };
+  const r = result.record;
+  const record: DirectoryStudent = {
+    registrationNumber: r.registrationNumber,
+    fullName: r.fullName,
+    email: r.email,
+    programme: r.programme,
+    yearOfStudy: r.yearOfStudy,
+    source: 'SMARTTT',
+    raw: r.raw,
+  };
+  return r.isActive ? { status: 'FOUND', record } : { status: 'INACTIVE', record };
+}
+
+async function lookupInErp(registrationNumber: string): Promise<DirectoryLookup> {
   const result = await erpClient.lookupStudent(registrationNumber);
   if (result.status === 'NOT_FOUND' || result.status === 'UNAVAILABLE') return result;
   const r = result.record;

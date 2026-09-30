@@ -120,6 +120,10 @@ const envSchema = z
     SMARTTT_API_KEY: emptyAsUnset(z.string().optional()),
     /** Student registration checks the registration number here (SMARTTT apps/integrations). */
     SMARTTT_STUDENT_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/students/'),
+    /** Lecturer registration checks the staff number here: SMARTTT's approved staff list. */
+    SMARTTT_STAFF_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/staff/'),
+    /** A student's units page lists the classes SMARTTT has them registered for this term. */
+    SMARTTT_STUDENT_UNITS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/student-units/'),
     SMARTTT_LECTURER_UNITS_PATH: z
       .string()
       .min(1)

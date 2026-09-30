@@ -1,4 +1,4 @@
-import { query } from '../../db/database.js';
+import { query, queryOne, transaction } from '../../db/database.js';
 
 /** All SQL for the student module. Every query is parameterised. */
 
@@ -79,6 +79,63 @@ export async function findAttendanceHistory(
       ORDER BY se.opens_at DESC
       LIMIT $3`,
     [studentUserId, options.unitId ?? null, options.limit],
+  );
+  return result.rows;
+}
+
+/** The registration number the student registered with; null for a user with no student profile. */
+export async function findRegistrationNumber(studentUserId: string): Promise<string | null> {
+  const row = await queryOne<{ registration_number: string }>(
+    `SELECT registration_number FROM student_profiles WHERE user_id = $1`,
+    [studentUserId],
+  );
+  return row?.registration_number ?? null;
+}
+
+export interface TimetableUnitInput {
+  code: string;
+  baseCode: string;
+  group: string | null;
+  name: string;
+  groupRequired: boolean;
+  lecturers: string[];
+  slots: { dayOfWeek: number; startTime: string; endTime: string; room: string | null }[];
+}
+
+export interface TimetableUnitRow {
+  code: string;
+  base_code: string;
+  class_group: string | null;
+  name: string | null;
+  group_required: boolean;
+  lecturer_names: string[];
+  slots: TimetableUnitInput['slots'];
+}
+
+/** Replaces the student's SMARTTT registrations with this list, in one go. */
+export async function replaceTimetableUnits(studentUserId: string, units: TimetableUnitInput[]): Promise<void> {
+  await transaction(async (client) => {
+    await query(`DELETE FROM student_timetable_units WHERE student_user_id = $1`, [studentUserId], client);
+    for (const u of units) {
+      await query(
+        `INSERT INTO student_timetable_units
+           (student_user_id, code, base_code, class_group, name, group_required, lecturer_names, slots)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [studentUserId, u.code, u.baseCode, u.group, u.name, u.groupRequired, u.lecturers, JSON.stringify(u.slots)],
+        client,
+      );
+    }
+  });
+}
+
+/** The student's SMARTTT registrations as last synced, by code. */
+export async function findTimetableUnits(studentUserId: string): Promise<TimetableUnitRow[]> {
+  const result = await query<TimetableUnitRow>(
+    `SELECT code, base_code, class_group, name, group_required, lecturer_names, slots
+       FROM student_timetable_units
+      WHERE student_user_id = $1
+      ORDER BY code`,
+    [studentUserId],
   );
   return result.rows;
 }

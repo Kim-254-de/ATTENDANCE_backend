@@ -1,7 +1,12 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { toLecturerUnits, toStudentRecord } from './smarttt.mapper.js';
-import type { SmartttLecturerUnitsResult, SmartttStudentLookupResult } from './smarttt.types.js';
+import { toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
+import type {
+  SmartttLecturerUnitsResult,
+  SmartttStaffLookupResult,
+  SmartttStudentLookupResult,
+  SmartttStudentUnitsResult,
+} from './smarttt.types.js';
 
 /**
  * HTTP client for SMARTTT, the university timetable system.
@@ -60,6 +65,42 @@ export class SmartttHttpClient {
       return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
     }
     return { status: 'FOUND', record };
+  }
+
+  /** The member of staff with this staff number, for checking a lecturer registration. */
+  async lookupStaff(staffNumber: string): Promise<SmartttStaffLookupResult> {
+    if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };
+    const normalised = staffNumber.trim().toUpperCase();
+
+    const result = await this.get(env.SMARTTT_STAFF_LOOKUP_PATH, { staff_number: normalised }, { staffNumber: normalised });
+    if (result.status !== 'OK') return result;
+
+    const record = toStaffRecord(result.body);
+    if (!record) {
+      logger.error({ staffNumber: normalised, body: result.body }, 'smarttt: staff member could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
+    }
+    return { status: 'FOUND', record };
+  }
+
+  /** The classes a student is registered for this term, for their units page. */
+  async listStudentUnits(registrationNumber: string): Promise<SmartttStudentUnitsResult> {
+    if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };
+    const normalised = registrationNumber.trim().toUpperCase();
+
+    const result = await this.get(
+      env.SMARTTT_STUDENT_UNITS_PATH,
+      { registration_number: normalised },
+      { registrationNumber: normalised },
+    );
+    if (result.status !== 'OK') return result;
+
+    const mapped = toStudentUnits(result.body);
+    if (!mapped) {
+      logger.error({ registrationNumber: normalised, body: result.body }, 'smarttt: student units could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
+    }
+    return { status: 'FOUND', ...mapped };
   }
 
   /** One GET with the shared key and timeout. Never throws. */

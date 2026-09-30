@@ -70,6 +70,26 @@ export interface SmartttStudentRecord {
   raw: unknown;
 }
 
+/** A member of staff on SMARTTT's approved staff list, for checking a lecturer registration. */
+export interface SmartttStaffRecord {
+  staffNumber: string;
+  /** From their SMARTTT account, else the name in the admin's staff-ID upload. */
+  fullName: string | null;
+  /** Lower-cased. Null until they have a SMARTTT account. */
+  email: string | null;
+  department: string | null;
+  faculty: string | null;
+  title: string | null;
+  isActive: boolean;
+  raw: unknown;
+}
+
+export type SmartttStaffLookupResult =
+  | { status: 'FOUND'; record: SmartttStaffRecord }
+  | { status: 'NOT_FOUND' }
+  | { status: 'UNAVAILABLE'; reason: string }
+  | { status: 'DISABLED' };
+
 export type SmartttStudentLookupResult =
   | { status: 'FOUND'; record: SmartttStudentRecord }
   | { status: 'NOT_FOUND' }
@@ -82,4 +102,27 @@ export type SmartttLecturerUnitsResult =
   | { status: 'NOT_FOUND' }
   | { status: 'UNAVAILABLE'; reason: string }
   /** SMARTTT_BASE_URL is not configured. */
+  | { status: 'DISABLED' };
+
+/**
+ * One class a student is registered for this term, per SMARTTT's
+ * GET /api/v1/integrations/attendance/student-units/. `code` is the same
+ * section code the lecturer-units sync gives the unit here.
+ */
+export interface SmartttStudentUnit {
+  /** "COSC 103 GR A", or "COSC 103" when not split; normalised like unit codes. */
+  code: string;
+  baseCode: string;
+  group: string | null;
+  name: string;
+  /** A split unit the student hasn't picked a group for yet: on no group's roster. */
+  groupRequired: boolean;
+  lecturers: string[];
+  slots: SmartttSlot[];
+}
+
+export type SmartttStudentUnitsResult =
+  | { status: 'FOUND'; term: SmartttTerm | null; units: SmartttStudentUnit[] }
+  | { status: 'NOT_FOUND' }
+  | { status: 'UNAVAILABLE'; reason: string }
   | { status: 'DISABLED' };

@@ -35,6 +35,8 @@ const surname = (n: number) => `K${String(n).split('').map((d) => 'abcdefghij'[N
 /** SMARTTT's student records, keyed by registration number. */
 type DirectoryEntry = { full_name: string | null; email: string | null; programme?: string; is_active?: boolean } | 'DOWN';
 let smartttStudents: Record<string, DirectoryEntry> = {};
+/** What SMARTTT's student-units endpoint returns, keyed by registration number. */
+let smartttStudentUnits: Record<string, unknown[] | 'DOWN'> = {};
 /** The ERP's, for the fallback when SMARTTT is off. */
 let erpStudents: Record<string, { fullName: string; status: string }> = {};
 
@@ -50,6 +52,11 @@ function stubFetch() {
         registration_number: reg, full_name: entry.full_name, email: entry.email,
         programme: entry.programme ?? 'BSc Computer Science', year_of_study: 3, is_active: entry.is_active ?? true,
       }));
+    }
+    if (url.origin === SMARTTT && url.pathname.endsWith('/student-units/')) {
+      const units = smartttStudentUnits[url.searchParams.get('registration_number') ?? ''] ?? [];
+      if (units === 'DOWN') return Promise.resolve(new Response('asleep', { status: 503 }));
+      return Promise.resolve(Response.json({ registration_number: 'X', term: { academic_year: '2025/2026', semester: 1 }, units }));
     }
     if (url.origin === SMARTTT) return Promise.resolve(Response.json({ term: null, units: [] })); // lecturer-units
     const reg = decodeURIComponent(url.pathname.split('/students/')[1] ?? '');
@@ -94,6 +101,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   smartttStudents = {};
+  smartttStudentUnits = {};
   erpStudents = {};
   emailedTokens = [];
   env.SMARTTT_BASE_URL = SMARTTT;
@@ -185,9 +193,9 @@ describe('student registration', () => {
   });
 
   it.each([
-    ['not in SMARTTT', () => ({ ...knownStudent().form, registrationNumber: 'EBT1/99999/23' }), 403, 'STUDENT_RECORD_NOT_FOUND'],
+    ['in neither SMARTTT nor the ERP', () => ({ ...knownStudent().form, registrationNumber: 'EBT1/99999/23' }), 403, 'STUDENT_RECORD_NOT_FOUND'],
     ['not a current student', () => { const s = knownStudent(); smartttStudents[s.reg] = { ...(smartttStudents[s.reg] as object), is_active: false } as DirectoryEntry; return s.form; }, 403, 'STUDENT_RECORD_INACTIVE'],
-    ['SMARTTT unreachable', () => { const s = knownStudent(); smartttStudents[s.reg] = 'DOWN'; return s.form; }, 503, 'STUDENT_DIRECTORY_UNAVAILABLE'],
+    ['unconfirmable: SMARTTT unreachable and not in the ERP', () => { const s = knownStudent(); smartttStudents[s.reg] = 'DOWN'; return s.form; }, 503, 'STUDENT_DIRECTORY_UNAVAILABLE'],
   ])('refuses a registration when the number is %s, creating nothing', async (_label, form, status, code) => {
     const f = form();
     const res = await register(f);
@@ -222,6 +230,29 @@ describe('student registration', () => {
     const res = await register({ ...s.form, password: pw, confirmPassword: pw });
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toMatch(/registration number/);
+  });
+
+  it.each([
+    ['does not list the number', undefined],
+    ['is unreachable', 'DOWN' as const],
+  ])('falls back to the ERP when SMARTTT %s', async (_label, smartttEntry) => {
+    const n = uniq();
+    const reg = `EBT1/${String(30000 + n)}/22`;
+    if (smartttEntry) smartttStudents[reg] = smartttEntry;
+    erpStudents[reg] = { fullName: 'Kevin Tuei Kiprono', status: 'active' };
+    const res = await register({ fullName: 'Kevin Tuei', email: `kevin${n}@gmail.com`, registrationNumber: reg, password: PASSWORD, confirmPassword: PASSWORD });
+    expect(res.status).toBe(201);
+    const { rows: [p] } = await pool.query<{ directory_source: string }>(`SELECT directory_source FROM student_profiles WHERE registration_number = $1`, [reg]);
+    expect(p!.directory_source).toBe('ERP');
+  });
+
+  it('does not ask the ERP about a student SMARTTT reports as no longer current', async () => {
+    const s = knownStudent();
+    smartttStudents[s.reg] = { ...(smartttStudents[s.reg] as object), is_active: false } as DirectoryEntry;
+    erpStudents[s.reg] = { fullName: 'Amina Wanjiku', status: 'active' };
+    const res = await register(s.form);
+    expect(res.status).toBe(403);
+    expect(body(res).error?.code).toBe('STUDENT_RECORD_INACTIVE');
   });
 
   it('checks against the ERP when SMARTTT is not configured (name only: the ERP holds no email)', async () => {
@@ -345,6 +376,54 @@ describe("a student's units and attendance", () => {
       [lec.unitId, s.reg, s.id]);
     await lecturerWithUnit(); // someone else's unit entirely
     expect(body(await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie)).data).toEqual([]);
+  });
+});
+
+describe("a student's units from SMARTTT", () => {
+  const slot = (day: number, start: string, end: string) =>
+    ({ day_of_week: day, start_time: start, end_time: end, room: 'LH1', class_group: 'MAIN', program: 'BSc CS' });
+
+  it('lists units SMARTTT has them registered for alongside the ones on a class list here, without duplicates', async () => {
+    const s = await activeStudent();
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, student_user_id, status, source) VALUES ($1, $2, $3, 'ACTIVE', 'SMARTTT')`,
+      [lec.unitId, s.reg, s.id]);
+    smartttStudentUnits[s.reg] = [
+      { code: lec.code.toLowerCase(), unit_code: 'COSC 103', group: 'GR A', name: 'Computer Applications',
+        group_required: false, lecturers: ['Jane Otieno'], slots: [slot(1, '08:00', '10:00')] },
+      { code: 'MATH 110', unit_code: 'MATH 110', group: null, name: 'Calculus I',
+        group_required: false, lecturers: ['Peter Kamami', 'Mary Wambui'], slots: [slot(3, '14:00', '16:00')] },
+      { code: 'EDFO 111', unit_code: 'EDFO 111', group: null, name: 'Foundations of Education',
+        group_required: true, lecturers: [], slots: [] },
+    ];
+
+    const res = await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie);
+    expect(res.status).toBe(200);
+    expect(body<unknown[]>(res).data).toEqual([
+      expect.objectContaining({ id: lec.unitId, code: lec.code, onRoster: true, groupRequired: false }),
+      {
+        id: null, code: 'EDFO 111', name: 'Foundations of Education', baseCode: 'EDFO 111', group: null,
+        lecturerName: null, schedule: null, sessionsHeld: 0, sessionsAttended: 0, attendanceRate: null,
+        onRoster: false, groupRequired: true,
+      },
+      expect.objectContaining({
+        id: null, code: 'MATH 110', lecturerName: 'Peter Kamami, Mary Wambui',
+        schedule: { dayOfWeek: 3, startTime: '14:00', endTime: '16:00' }, onRoster: false,
+      }),
+    ]);
+  });
+
+  it('keeps showing the last synced units when SMARTTT is down', async () => {
+    const s = await activeStudent();
+    smartttStudentUnits[s.reg] = [{ code: 'MATH 110', name: 'Calculus I', lecturers: [], slots: [] }];
+    const codes = async () =>
+      body<{ code: string }[]>(await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie)).data.map((u) => u.code);
+    expect(await codes()).toEqual(['MATH 110']);
+
+    smartttStudentUnits[s.reg] = 'DOWN';
+    (await import('../../src/modules/student/student.service.js')).resetStudentTimetableSyncState();
+    expect(await codes()).toEqual(['MATH 110']);
   });
 });
 

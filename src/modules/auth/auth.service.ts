@@ -5,7 +5,8 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { hashPassword, verifyPassword } from '../../common/utils/password.js';
 import { hashToken } from '../../common/utils/tokens.js';
 import { erpClient } from '../../integrations/erp/index.js';
-import type { ErpLookupResult, ErpProvider } from '../../integrations/erp/index.js';
+import type { ErpProvider } from '../../integrations/erp/index.js';
+import { smartttClient } from '../../integrations/smarttt/index.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
 import { lookupStudent, type DirectoryLookup } from '../student/student.directory.js';
@@ -23,13 +24,19 @@ import type {
 /**
  * Lecturer registration.
  *
- * The rule that drives this file: a staff number absent from the ERP means the
- * registration is REVOKED — no account is created, nothing is left behind
- * except an audit entry explaining the rejection. A staff number the ERP
- * verifies gets an ACTIVE account at once: no email confirmation, no admin
- * approval — the lecturer signs in straight after registering.
+ * The rule that drives this file: a staff number absent from the staff
+ * records means the registration is REVOKED — no account is created, nothing
+ * is left behind except an audit entry explaining the rejection. A staff
+ * number the records verify gets an ACTIVE account at once: no email
+ * confirmation, no admin approval — the lecturer signs in straight after
+ * registering.
  *
- * The ERP gate fails CLOSED. If the ERP cannot be reached we refuse the
+ * The staff records are SMARTTT's approved staff list (the admin's staff-ID
+ * uploads) when SMARTTT is configured, with the ERP as the fallback — when
+ * SMARTTT is off, can't be reached, or doesn't list the number. See
+ * lookupStaff.
+ *
+ * The gate fails CLOSED. If the records cannot be reached we refuse the
  * registration (503) rather than admitting an unverified lecturer, because a
  * directory outage must not become a way in.
  */
@@ -56,6 +63,66 @@ let erpProvider: ErpProvider = erpClient;
 
 export function setErpProvider(provider: ErpProvider): void {
   erpProvider = provider;
+}
+
+/** A staff record from whichever directory verified the number. */
+interface StaffRecord {
+  source: 'SMARTTT' | 'ERP';
+  /** The ERP's own key for the person; null when SMARTTT verified them. */
+  erpStaffId: string | null;
+  title: string | null;
+  department: string | null;
+  faculty: string | null;
+  raw: unknown;
+}
+
+type StaffLookup =
+  | { status: 'VERIFIED'; record: StaffRecord }
+  | { status: 'NOT_FOUND' }
+  | { status: 'INACTIVE'; record: StaffRecord }
+  | { status: 'UNAVAILABLE'; reason: string };
+
+/**
+ * SMARTTT's approved staff list first, then the ERP. Same fallback rules as
+ * student registration (student.directory.ts): a lecturer SMARTTT reports as
+ * no longer serving is refused without asking the ERP, and "not found" is only
+ * definitive when both directories could answer.
+ */
+async function lookupStaff(staffNumber: string): Promise<StaffLookup> {
+  if (!smartttClient.enabled) return lookupStaffInErp(staffNumber);
+
+  const smarttt = await smartttClient.lookupStaff(staffNumber);
+  if (smarttt.status === 'FOUND') {
+    const r = smarttt.record;
+    const record: StaffRecord = {
+      source: 'SMARTTT',
+      erpStaffId: null,
+      title: r.title,
+      department: r.department,
+      faculty: r.faculty,
+      raw: r.raw,
+    };
+    return r.isActive ? { status: 'VERIFIED', record } : { status: 'INACTIVE', record };
+  }
+
+  const erp = await lookupStaffInErp(staffNumber);
+  if (erp.status === 'NOT_FOUND' && smarttt.status === 'UNAVAILABLE') return smarttt;
+  return erp;
+}
+
+async function lookupStaffInErp(staffNumber: string): Promise<StaffLookup> {
+  const result = await erpProvider.verifyStaffNumber(staffNumber);
+  if (result.status === 'NOT_FOUND' || result.status === 'UNAVAILABLE') return result;
+  const r = result.record;
+  const record: StaffRecord = {
+    source: 'ERP',
+    erpStaffId: r.erpStaffId,
+    title: r.title,
+    department: r.department,
+    faculty: r.faculty,
+    raw: r.raw,
+  };
+  return result.status === 'VERIFIED' ? { status: 'VERIFIED', record } : { status: 'INACTIVE', record };
 }
 
 export async function registerLecturer(
@@ -99,23 +166,23 @@ export async function registerLecturer(
   }
 
   // ---------------------------------------------------------------------
-  // 2. The ERP gate.
+  // 2. The staff-records gate.
   // ---------------------------------------------------------------------
-  const lookup = await erpProvider.verifyStaffNumber(staffNumber);
+  const lookup = await lookupStaff(staffNumber);
 
   if (lookup.status !== 'VERIFIED') {
     await revokeRegistration(lookup, auditBase);
   }
 
   // Narrowed by revokeRegistration, which always throws.
-  const record = (lookup as Extract<ErpLookupResult, { status: 'VERIFIED' }>).record;
+  const record = (lookup as Extract<StaffLookup, { status: 'VERIFIED' }>).record;
 
   // ---------------------------------------------------------------------
   // 3. Create the account.
   // ---------------------------------------------------------------------
   const passwordHash = await hashPassword(password);
 
-  // Active at once: the ERP check above is what proves a lecturer is staff.
+  // Active at once: the staff-records check above is what proves a lecturer is staff.
   // There is no email confirmation and no administrator approval step, so the
   // lecturer can sign in as soon as the account exists.
   const status: AccountStatus = 'ACTIVE';
@@ -144,7 +211,7 @@ export async function registerLecturer(
           action: 'LECTURER_REGISTRATION_COMPLETED',
           outcome: 'SUCCESS',
           erpOutcome: 'VERIFIED',
-          metadata: { erpStaffId: record.erpStaffId, department: record.department },
+          metadata: { directory: record.source, erpStaffId: record.erpStaffId, department: record.department },
         });
       },
     );
@@ -307,7 +374,7 @@ export async function removeAvatar(
  * Always throws — the return type tells TypeScript that too.
  */
 async function revokeRegistration(
-  lookup: ErpLookupResult,
+  lookup: StaffLookup,
   auditBase: {
     subjectEmail: string;
     subjectStaffNumber: string;
@@ -350,7 +417,7 @@ interface Revocation {
   retryAfterSeconds?: number;
 }
 
-function describeRevocation(lookup: ErpLookupResult): Revocation {
+function describeRevocation(lookup: StaffLookup): Revocation {
   switch (lookup.status) {
     case 'NOT_FOUND':
       return {
@@ -358,7 +425,7 @@ function describeRevocation(lookup: ErpLookupResult): Revocation {
         code: ErrorCode.ERP_STAFF_NOT_FOUND,
         message:
           'Registration was not completed. This staff number is not listed in the institutional staff records. Please contact the HR or ICT office.',
-        auditReason: 'staff number not present in ERP',
+        auditReason: 'staff number not in the staff records (SMARTTT or ERP)',
       };
 
     case 'INACTIVE':
@@ -367,7 +434,7 @@ function describeRevocation(lookup: ErpLookupResult): Revocation {
         code: ErrorCode.ERP_STAFF_INACTIVE,
         message:
           'Registration was not completed. This staff number is not currently active in the institutional staff records. Please contact the HR office.',
-        auditReason: 'ERP record is not active',
+        auditReason: 'staff record is not active',
       };
 
     case 'UNAVAILABLE':
