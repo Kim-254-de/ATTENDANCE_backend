@@ -110,7 +110,6 @@ const envSchema = z
     ERP_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(5000),
     ERP_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     ERP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).default(300),
-    ERP_ENFORCE_IDENTITY_MATCH: booleanish.default('true'),
 
     // --- SMARTTT (the university timetable system) ---
     // Source of the units a lecturer is timetabled to teach and how many

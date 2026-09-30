@@ -2,9 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { toCourseRecord, toEnrollmentRecords, toStaffRecord, toStudentRecord } from './erp.mapper.js';
-import { compareIdentity } from './erp.identity.js';
 import type {
-  ClaimedIdentity,
   ErpCourseLookupResult,
   ErpEnrollmentsResult,
   ErpLookupResult,
@@ -92,10 +90,7 @@ function isRetryableStatus(status: number): boolean {
 export class ErpHttpClient implements ErpProvider {
   private readonly cache = new StaffCache();
 
-  async verifyStaffNumber(
-    staffNumber: string,
-    claimed: ClaimedIdentity,
-  ): Promise<ErpLookupResult> {
+  async verifyStaffNumber(staffNumber: string): Promise<ErpLookupResult> {
     const normalised = staffNumber.trim().toUpperCase();
 
     const cached = this.cache.get(normalised);
@@ -111,13 +106,6 @@ export class ErpHttpClient implements ErpProvider {
 
     if (!record.isActive) {
       return { status: 'INACTIVE', record };
-    }
-
-    if (env.ERP_ENFORCE_IDENTITY_MATCH) {
-      const mismatchedFields = compareIdentity(record, claimed);
-      if (mismatchedFields.length > 0) {
-        return { status: 'IDENTITY_MISMATCH', record, mismatchedFields };
-      }
     }
 
     return { status: 'VERIFIED', record };

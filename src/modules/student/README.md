@@ -22,9 +22,10 @@ rosters come from.
 |---|---|
 | Not found | 403 `STUDENT_RECORD_NOT_FOUND`, nothing created |
 | Not a current student (graduated, withdrawn, suspended…) | 403 `STUDENT_RECORD_INACTIVE` |
-| Name doesn't match, or email doesn't match where the directory holds one | 403 `STUDENT_IDENTITY_MISMATCH` (field names only, never the directory's values) |
 | Unreachable | 503 `STUDENT_DIRECTORY_UNAVAILABLE`: fails closed |
-| Match | 201; account `PENDING_VERIFICATION` until the emailed link is used |
+| Found and current | 201; account `ACTIVE`, the student signs in straight away |
+
+Only the registration number is checked: the name and email typed are not compared with the directory record.
 
 Every attempt is audited (`STUDENT_REGISTRATION_*`, `audit_logs.subject_registration_number`).
 

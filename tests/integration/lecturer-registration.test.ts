@@ -119,6 +119,13 @@ describe('lecturer registration', () => {
     expect((await login(staffNumber)).status).toBe(401);
   });
 
+  it('checks only the staff number: a name and email unlike the ERP record still register', async () => {
+    const { staffNumber, form } = knownLecturer();
+    const res = await register({ ...form, fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ staffNumber, fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
+  });
+
   it('refuses a second account for the same staff number', async () => {
     const { form } = knownLecturer();
     expect((await register(form)).status).toBe(201);

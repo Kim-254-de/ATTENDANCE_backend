@@ -1,4 +1,4 @@
-import { erpClient, namesMatch } from '../../integrations/erp/index.js';
+import { erpClient } from '../../integrations/erp/index.js';
 import { smartttClient } from '../../integrations/smarttt/index.js';
 
 /**
@@ -57,24 +57,4 @@ export async function lookupStudent(registrationNumber: string): Promise<Directo
     raw: r.raw,
   };
   return result.status === 'FOUND' ? { status: 'FOUND', record } : { status: 'INACTIVE', record };
-}
-
-/**
- * The fields that don't match the directory — empty means the person
- * registering is who the registration number belongs to. Stops someone
- * registering with a classmate's number.
- *
- * The name is always compared (formatting-forgiving: see namesMatch); the
- * email only when the directory holds one. A record with neither can't be
- * checked, so is reported as both mismatching rather than waved through.
- */
-export function mismatchedIdentityFields(
-  record: DirectoryStudent,
-  claimed: { fullName: string; email: string },
-): string[] {
-  if (!record.fullName && !record.email) return ['fullName', 'email'];
-  const mismatched: string[] = [];
-  if (record.fullName && !namesMatch(record.fullName, claimed.fullName)) mismatched.push('fullName');
-  if (record.email && record.email !== claimed.email.trim().toLowerCase()) mismatched.push('email');
-  return mismatched;
 }

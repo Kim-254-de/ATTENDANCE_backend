@@ -78,29 +78,23 @@ export type ErpLookupStatus =
   | 'VERIFIED'
   | 'NOT_FOUND'
   | 'INACTIVE'
-  | 'IDENTITY_MISMATCH'
   | 'UNAVAILABLE';
 
 export type ErpLookupResult =
   | { status: 'VERIFIED'; record: ErpStaffRecord }
   | { status: 'NOT_FOUND' }
   | { status: 'INACTIVE'; record: ErpStaffRecord }
-  | { status: 'IDENTITY_MISMATCH'; record: ErpStaffRecord; mismatchedFields: string[] }
   | { status: 'UNAVAILABLE'; reason: string };
-
-/** What the caller claims, checked against what the ERP holds. */
-export interface ClaimedIdentity {
-  fullName: string;
-  email: string;
-}
 
 export interface ErpProvider {
   /**
-   * Looks a staff number up in the ERP.
+   * Looks a staff number up in the ERP. Only the number is checked: it must
+   * exist and be active. The name and email typed at registration are not
+   * compared with the ERP record.
    *
    * Never throws for a business outcome — a missing or inactive record is a
    * returned status, not an exception. It only rejects if something truly
    * unexpected happens, and even transport failures come back as UNAVAILABLE.
    */
-  verifyStaffNumber(staffNumber: string, claimed: ClaimedIdentity): Promise<ErpLookupResult>;
+  verifyStaffNumber(staffNumber: string): Promise<ErpLookupResult>;
 }

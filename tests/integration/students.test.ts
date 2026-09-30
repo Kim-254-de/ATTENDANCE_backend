@@ -187,8 +187,6 @@ describe('student registration', () => {
   it.each([
     ['not in SMARTTT', () => ({ ...knownStudent().form, registrationNumber: 'EBT1/99999/23' }), 403, 'STUDENT_RECORD_NOT_FOUND'],
     ['not a current student', () => { const s = knownStudent(); smartttStudents[s.reg] = { ...(smartttStudents[s.reg] as object), is_active: false } as DirectoryEntry; return s.form; }, 403, 'STUDENT_RECORD_INACTIVE'],
-    ['someone else’s name', () => knownStudent({ fullName: 'Brian Otieno' }).form, 403, 'STUDENT_IDENTITY_MISMATCH'],
-    ['someone else’s email', () => knownStudent({ email: 'intruder@gmail.com' }).form, 403, 'STUDENT_IDENTITY_MISMATCH'],
     ['SMARTTT unreachable', () => { const s = knownStudent(); smartttStudents[s.reg] = 'DOWN'; return s.form; }, 503, 'STUDENT_DIRECTORY_UNAVAILABLE'],
   ])('refuses a registration when the number is %s, creating nothing', async (_label, form, status, code) => {
     const f = form();
@@ -202,10 +200,11 @@ describe('student registration', () => {
     expect(audit).toHaveLength(1);
   });
 
-  it('names only the mismatched fields, never the record’s values', async () => {
-    const res = await register(knownStudent({ email: 'intruder@gmail.com' }).form);
-    expect(body(res).error?.details).toEqual({ mismatchedFields: ['email'] });
-    expect(JSON.stringify(res.body)).not.toMatch(/students\.tharaka\.ac\.ke|Wanjiku/);
+  it('checks only the registration number: a name and email unlike the record still register', async () => {
+    const s = knownStudent({ fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
+    const res = await register(s.form);
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ registrationNumber: s.reg, fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
   });
 
   it('refuses a second account for the same registration number or email', async () => {

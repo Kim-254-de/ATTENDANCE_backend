@@ -224,7 +224,6 @@ registered before this).
 | `400` | `VALIDATION_FAILED` | Payload rejected |
 | `403` | `ERP_STAFF_NOT_FOUND` | **Not in the ERP — revoked** |
 | `403` | `ERP_STAFF_INACTIVE` | Retired or suspended — revoked |
-| `403` | `ERP_IDENTITY_MISMATCH` | Details do not match the ERP record |
 | `409` | `ACCOUNT_ALREADY_EXISTS` | Email or staff number already registered |
 | `429` | `RATE_LIMITED` | Too many attempts |
 | `503` | `ERP_UNAVAILABLE` | ERP unreachable — nothing created |

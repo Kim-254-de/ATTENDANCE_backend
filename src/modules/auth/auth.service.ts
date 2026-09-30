@@ -8,7 +8,7 @@ import { erpClient } from '../../integrations/erp/index.js';
 import type { ErpLookupResult, ErpProvider } from '../../integrations/erp/index.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
-import { lookupStudent, mismatchedIdentityFields, type DirectoryLookup } from '../student/student.directory.js';
+import { lookupStudent, type DirectoryLookup } from '../student/student.directory.js';
 import { linkAllocationsToStudent } from '../unit/index.js';
 import * as authRepository from './auth.repository.js';
 import { revokeOtherSessions, toLecturerPublic, type LecturerPublic } from './auth.session.repository.js';
@@ -101,7 +101,7 @@ export async function registerLecturer(
   // ---------------------------------------------------------------------
   // 2. The ERP gate.
   // ---------------------------------------------------------------------
-  const lookup = await erpProvider.verifyStaffNumber(staffNumber, { fullName, email });
+  const lookup = await erpProvider.verifyStaffNumber(staffNumber);
 
   if (lookup.status !== 'VERIFIED') {
     await revokeRegistration(lookup, auditBase);
@@ -370,18 +370,6 @@ function describeRevocation(lookup: ErpLookupResult): Revocation {
         auditReason: 'ERP record is not active',
       };
 
-    case 'IDENTITY_MISMATCH':
-      return {
-        statusCode: 403,
-        code: ErrorCode.ERP_IDENTITY_MISMATCH,
-        message:
-          'Registration was not completed. The details entered do not match the staff records held for this staff number. Please check your name and email address, or contact the HR office.',
-        auditReason: `identity mismatch on: ${lookup.mismatchedFields.join(', ')}`,
-        // The fields that disagreed, but never the ERP's stored values —
-        // that would leak a colleague's details to whoever typed the number.
-        details: { mismatchedFields: lookup.mismatchedFields },
-      };
-
     case 'UNAVAILABLE':
       return {
         statusCode: 503,
@@ -494,9 +482,9 @@ export interface StudentRegistrationResult {
 /**
  * Student registration. Same shape as the lecturer flow: the registration
  * number must belong to a current student in the directory (SMARTTT, or the
- * ERP when SMARTTT is off), the name — and the email, where the directory
- * holds one — must match it, and the gate fails CLOSED: if the directory
- * can't be reached nothing is created (503).
+ * ERP when SMARTTT is off). Only the number is checked — the name and email
+ * typed are not compared with the directory record. The gate fails CLOSED:
+ * if the directory can't be reached nothing is created (503).
  *
  * A student the directory verifies gets an ACTIVE account at once: no email
  * confirmation, no admin approval — the student signs in straight after
@@ -540,26 +528,6 @@ export async function registerStudent(
   const lookup = await lookupStudent(registrationNumber);
   if (lookup.status !== 'FOUND') await revokeStudentRegistration(lookup, auditBase);
   const record = (lookup as Extract<DirectoryLookup, { status: 'FOUND' }>).record;
-
-  const mismatched = mismatchedIdentityFields(record, { fullName, email });
-  if (mismatched.length > 0) {
-    await auditService.record({
-      ...auditBase,
-      action: 'STUDENT_REGISTRATION_REVOKED',
-      outcome: 'FAILURE',
-      erpOutcome: 'IDENTITY_MISMATCH',
-      reason: `identity mismatch on: ${mismatched.join(', ')}`,
-      metadata: { directory: record.source },
-    });
-    // Which fields disagreed, never the directory's values: that would leak a
-    // classmate's details to whoever typed their number.
-    throw new AppError(
-      403,
-      ErrorCode.STUDENT_IDENTITY_MISMATCH,
-      'Registration was not completed. The details entered do not match the student records for this registration number. Check your name and email address, or contact the registrar.',
-      { details: { mismatchedFields: mismatched } },
-    );
-  }
 
   // 3. Create the account.
   const passwordHash = await hashPassword(password);

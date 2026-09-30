@@ -9,10 +9,9 @@ explained later.
 
 | ERP result | HTTP | Error code | Account created? |
 |---|---|---|---|
-| Staff number found, active, identity matches | 201 | — | Yes |
+| Staff number found and active | 201 | — | Yes |
 | Staff number not in ERP | 403 | `ERP_STAFF_NOT_FOUND` | **No — revoked** |
 | Found but retired/suspended | 403 | `ERP_STAFF_INACTIVE` | **No — revoked** |
-| Found but name/email disagree | 403 | `ERP_IDENTITY_MISMATCH` | **No — revoked** |
 | ERP unreachable, timing out, or 5xx | 503 | `ERP_UNAVAILABLE` | **No — refused** |
 
 ## The gate fails closed
@@ -74,16 +73,8 @@ The cache is per-process. With several instances behind a load balancer each
 keeps its own; that is fine for a short TTL. Move it to Redis if the ERP starts
 complaining about request volume.
 
-## Identity matching
+## Only the staff number is checked
 
-Controlled by `ERP_ENFORCE_IDENTITY_MATCH` (default on). This stops someone
-registering with a colleague's staff number, which the ERP would otherwise
-happily confirm as valid.
-
-Matching tolerates honorifics (`Dr`, `Prof`), accents, punctuation, reordered
-names and a dropped middle name, but requires at least two shared name tokens
-so a common surname alone is not enough. Email is only compared when the ERP
-holds one.
-
-Turn the check off only if your ERP's name data is too inconsistent to match
-reliably — and note that doing so removes the protection described above.
+Registration is gated on the staff number alone: it must exist in the ERP and
+be active. The name and email the lecturer types are not compared with the ERP
+record.
