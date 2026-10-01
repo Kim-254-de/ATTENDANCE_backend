@@ -219,11 +219,15 @@ describe('GET /units syncs from SMARTTT', () => {
     expect(await roomOf('GEO 100')).toBe('LH9');
     expect(await roomOf('GEO 200')).toBeNull();
 
-    // Two slots: no schedule is written, so the last known room is left alone too.
+    // Two weekly meetings: each is kept with its own room, and the single-slot
+    // display row goes rather than staying at a time the class no longer meets.
     resetTimetableSyncState();
-    smarttt[lec.staffNumber] = { units: [unit('GEO 100', 10, [inRoom('LH7', 1), inRoom('LH7', 3)])] };
+    smarttt[lec.staffNumber] = { units: [unit('GEO 100', 10, [inRoom('LH7', 1), inRoom('LAB 3', 3)])] };
     await getUnits(lec);
-    expect(await roomOf('GEO 100')).toBe('LH9');
+    expect(await roomOf('GEO 100')).toBeUndefined();
+    const { rows } = await pool.query<{ day_of_week: number; room_code: string | null }>(
+      `SELECT s.day_of_week, s.room_code FROM unit_slots s JOIN units u ON u.id = s.unit_id WHERE u.code = 'GEO 100' ORDER BY 1`);
+    expect(rows).toEqual([{ day_of_week: 1, room_code: 'LH7' }, { day_of_week: 3, room_code: 'LAB 3' }]);
   });
 
   it('holds back units SMARTTT only matches by name until an admin verifies them', async () => {
@@ -514,5 +518,67 @@ describe('GET /units/current syncs from SMARTTT too', () => {
 
     const res = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
     expect((res.body as { data: { code: string } | null }).data).toMatchObject({ code: 'RESCH 104' });
+  });
+});
+
+describe('a unit that meets more than once a week', () => {
+  const campusNow = () => campusClock(new Date(), 'Africa/Nairobi');
+  /** A meeting on campus today spanning the current hour, so it is on now. */
+  const meetingNow = (room: string | null = 'LH1') => {
+    const hour = Number(campusNow().timeOfDay.slice(0, 2));
+    return { ...slot(campusNow().dayOfWeek, `${String(hour).padStart(2, '0')}:00`, `${String(hour).padStart(2, '0')}:59`), room };
+  };
+  /** A meeting on another day of the week. */
+  const otherDay = (room: string | null = 'LH1') => ({ ...slot((campusNow().dayOfWeek + 2) % 7, '08:00', '10:00'), room });
+
+  const current = async (lec: { auth: string }) =>
+    (await request(app).get('/api/v1/units/current').set('Authorization', lec.auth)).body as
+      { data: { id: string; code: string; schedule: { startTime: string; endTime: string } | null; room: { code: string } | null } | null };
+  const activate = (lec: { auth: string }, unitId: string) =>
+    request(app).post('/api/v1/sessions').set('Authorization', lec.auth).send({ unitId, geofence: 'OFF' });
+
+  it('can be activated during any of its meetings, closing at that meeting\'s end in that meeting\'s room', async () => {
+    const lec = await makeLecturer();
+    const now = meetingNow('LAB 2');
+    smarttt[lec.staffNumber] = { units: [unit('MULTI 101', 30, [otherDay('LH1'), now])] };
+    await getUnits(lec);
+
+    const { data } = await current(lec);
+    expect(data).toMatchObject({ code: 'MULTI 101', schedule: { startTime: now.start_time, endTime: now.end_time }, room: { code: 'LAB 2' } });
+
+    const res = await activate(lec, data!.id);
+    expect(res.status).toBe(201);
+    const session = (res.body as { data: { id: string; closesAt: string; geofence: { roomCode: string | null } } }).data;
+    expect(campusClock(new Date(session.closesAt), 'Africa/Nairobi').timeOfDay).toBe(now.end_time);
+    expect(session.geofence.roomCode).toBe('LAB 2');
+  });
+
+  it('follows a reschedule of one programme\'s copy of a shared class (the class is then at two times)', async () => {
+    const lec = await makeLecturer();
+    // Before: one meeting, printed once per programme sharing it.
+    smarttt[lec.staffNumber] = { units: [unit('MULTI 102', 30, [otherDay(), otherDay()])] };
+    await getUnits(lec);
+    expect((await current(lec)).data).toBeNull();
+
+    // The lecturer moves one programme's row to now: SMARTTT now lists the class at both times.
+    smarttt[lec.staffNumber] = { units: [unit('MULTI 102', 30, [otherDay(), meetingNow()])] };
+    const pushed = await request(app).post('/api/v1/integrations/smarttt/timetable-changes')
+      .set('X-API-Key', KEY).send({ staff_number: lec.staffNumber, unit_codes: ['MULTI 102'] });
+    expect(pushed.status).toBe(200);
+
+    const { data } = await current(lec);
+    expect(data).toMatchObject({ code: 'MULTI 102' });
+    expect((await activate(lec, data!.id)).status).toBe(201);
+  });
+
+  it('refuses outside every meeting, and says when the meetings are', async () => {
+    const lec = await makeLecturer();
+    smarttt[lec.staffNumber] = { units: [unit('MULTI 103', 30, [otherDay()])] };
+    const units = (await getUnits(lec)).body as { data: Array<{ id: string; code: string }> };
+    const unitId = units.data.find((u) => u.code === 'MULTI 103')!.id;
+
+    const res = await activate(lec, unitId);
+    expect(res.status).toBe(403);
+    expect((res.body as { error: { message: string } }).error.message).toMatch(/not scheduled for today \(\w{3} 08:00–10:00\)/);
   });
 });

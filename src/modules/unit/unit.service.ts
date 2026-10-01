@@ -36,7 +36,10 @@ export interface UnitDto {
   studentCount: number;
   pendingCount: number;
   createdAt: string;
+  /** The single weekly slot, or (for /units/current) the meeting on now; null for a unit meeting several times a week. */
   schedule: UnitSummary['schedule'];
+  /** Every weekly meeting, Monday first, each with its room. */
+  slots: UnitSummary['slots'];
   status: UnitSummary['status'];
   /** The unit this class belongs to ("COSC 103" for "COSC 103 GR A"); null for units only added by code. */
   baseCode: string | null;
@@ -187,6 +190,31 @@ function singleSlot(unit: SmartttUnit): Pick<unitRepository.TimetableUnit, 'sche
   };
 }
 
+/**
+ * Every distinct weekly meeting SMARTTT lists for the unit, for unit_slots.
+ *
+ * The same meeting can come back several times (once per class group or
+ * programme sharing it), each naming its room; the room is kept only when
+ * they agree, as for singleSlot.
+ */
+function weeklySlots(unit: SmartttUnit): unitRepository.UnitSlot[] {
+  const byMeeting = new Map<string, { slot: SmartttUnit['slots'][number]; rooms: Set<string | null> }>();
+  for (const slot of unit.slots) {
+    const key = `${slot.dayOfWeek}|${slot.startTime}|${slot.endTime}`;
+    const entry = byMeeting.get(key) ?? { slot, rooms: new Set<string | null>() };
+    entry.rooms.add(slot.room);
+    byMeeting.set(key, entry);
+  }
+  return [...byMeeting.values()]
+    .filter(({ slot }) => slot.endTime > slot.startTime)
+    .map(({ slot, rooms }) => ({
+      dayOfWeek: slot.dayOfWeek,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      roomCode: rooms.size === 1 ? slot.room : null,
+    }));
+}
+
 async function runTimetableSync(lecturerUserId: string, staffNumber: string, name: string): Promise<void> {
   const result = await smartttClient.listLecturerUnits(staffNumber, name);
   if (result.status !== 'FOUND') {
@@ -206,6 +234,7 @@ async function runTimetableSync(lecturerUserId: string, staffNumber: string, nam
       studentsWithoutGroup: unit.studentsWithoutGroup,
       status,
       ...singleSlot(unit),
+      slots: weeklySlots(unit),
     });
 
     if (!upserted) {
@@ -240,10 +269,10 @@ async function runTimetableSync(lecturerUserId: string, staffNumber: string, nam
 async function notifyAdminsIfScheduled(unitId: string, lecturerName: string): Promise<void> {
   const unit = await unitRepository.findUnitSummary(unitId);
   if (!unit) return;
-  if (!unit.schedule) {
+  if (!unit.schedule && unit.slots.length === 0) {
     logger.warn(
       { unitId, unitCode: unit.code },
-      'unit synced from smarttt is pending verification but has no single slot to put in the admin notice',
+      'unit synced from smarttt is pending verification but has no slot to put in the admin notice',
     );
     return;
   }
@@ -355,13 +384,14 @@ export async function createUnit(
 }
 
 async function notifyAdminsOfPendingUnit(unit: UnitSummary, lecturerName: string): Promise<void> {
-  if (!unit.schedule) throw new Error('unit has no schedule immediately after insert');
+  // The notice names one meeting; a unit meeting several times a week is named by its first.
+  const schedule = unit.schedule ?? unit.slots[0];
+  if (!schedule) throw new Error('unit has no schedule immediately after insert');
   const admins = await unitRepository.findAdminRecipients();
   if (admins.length === 0) {
     logger.warn({ unitId: unit.id }, 'unit pending verification but no ADMIN users exist to notify');
     return;
   }
-  const schedule = unit.schedule;
   await Promise.all(
     admins.map((admin) =>
       notificationService.sendUnitVerificationRequest({

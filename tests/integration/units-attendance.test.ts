@@ -491,6 +491,7 @@ describe('geofence', () => {
   async function placeInRoom(unitId: string, surveyed: boolean) {
     const code = `LH${uniq()}`;
     await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [unitId, code]);
+    await pool.query(`UPDATE unit_slots SET room_code = $2 WHERE unit_id = $1`, [unitId, code]);
     if (surveyed) {
       await pool.query(
         `INSERT INTO rooms (code, latitude, longitude, surveyed_accuracy_m, surveyed_at) VALUES ($1, $2, $3, 4, NOW())`,
@@ -524,7 +525,7 @@ describe('geofence', () => {
 
       // Also a surveyed room with no reading at all, e.g. activating from a laptop.
       const unit2 = await makeUnit(lecturer);
-      await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [unit2.id, room]);
+      await pool.query(`UPDATE unit_slots SET room_code = $2 WHERE unit_id = $1`, [unit2.id, room]);
       expect(fence(await activate(lecturer, unit2.id))).toMatchObject({ mode: 'ROOM' });
     });
 
@@ -945,7 +946,7 @@ describe('geofence', () => {
       // so ask as a lecturer with only the surveyed one.
       const solo = await makeUser('LECTURER');
       const only = await makeUnit(solo);
-      await pool.query(`UPDATE unit_schedule SET room_code = $2 WHERE unit_id = $1`, [only.id, surveyedRoom]);
+      await pool.query(`UPDATE unit_slots SET room_code = $2 WHERE unit_id = $1`, [only.id, surveyedRoom]);
       const current = body<{ id: string; room: unknown }>(await api(solo.auth).get('/units/current')).data;
       expect(current).toMatchObject({ id: only.id, room: { code: surveyedRoom, surveyed: true } });
     });

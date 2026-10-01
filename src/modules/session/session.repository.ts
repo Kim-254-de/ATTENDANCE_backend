@@ -23,7 +23,7 @@ export interface SessionForQr {
   opensAt: Date;
   closesAt: Date;
   rotationSeconds: number;
-  /** Where the unit's slot is taught, per SMARTTT (unit_schedule.room_code). Null when unknown. */
+  /** The room of the meeting this session was activated for (unit_slots.room_code), fixed at activation. Null when unknown. */
   roomCode: string | null;
   geofence: SessionGeofence;
 }
@@ -82,15 +82,13 @@ const toSession = (row: SessionRow): SessionForQr => ({
   },
 });
 
-// unit_schedule is one row per unit, so the LEFT JOIN never multiplies rows.
 const SELECT_SESSION = `
   SELECT s.id, s.unit_id, s.lecturer_user_id, s.qr_secret, s.status, s.title,
-         s.opens_at, s.closes_at, s.rotation_seconds,
+         s.opens_at, s.closes_at, s.rotation_seconds, s.room_code,
          s.geofence_mode, s.geofence_lat, s.geofence_lng, s.geofence_radius_m, s.geofence_anchor_accuracy_m,
-         u.code AS unit_code, u.name AS unit_name, sch.room_code
+         u.code AS unit_code, u.name AS unit_name
     FROM attendance_sessions s
     JOIN units u ON u.id = s.unit_id
-    LEFT JOIN unit_schedule sch ON sch.unit_id = s.unit_id
 `;
 
 export async function findSessionById(sessionId: string): Promise<SessionForQr | null> {
@@ -121,6 +119,8 @@ export interface CreateSessionArgs {
   opensAt: Date;
   closesAt: Date;
   rotationSeconds: number;
+  /** The room of the meeting being activated; null when the timetable names none. */
+  roomCode: string | null;
   geofence: SessionGeofence;
 }
 
@@ -128,8 +128,8 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
   const created = await queryOne<{ id: string }>(
     `INSERT INTO attendance_sessions
        (unit_id, lecturer_user_id, qr_secret, title, opens_at, closes_at, rotation_seconds, status,
-        geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12)
+        geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m, room_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12, $13)
      RETURNING id`,
     [
       args.unitId,
@@ -144,6 +144,7 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
       args.geofence.longitude,
       args.geofence.radiusMetres,
       args.geofence.anchorAccuracyMetres,
+      args.roomCode,
     ],
   );
 
@@ -201,30 +202,22 @@ export interface UnitRoom {
 }
 
 /**
- * The room a unit is taught in and, if someone has surveyed it, its centre.
- * Null when the unit has no schedule at all.
+ * A room and, if someone has surveyed it, its centre. With no room code (the
+ * timetable names none) or an unsurveyed room, the coordinates are null and
+ * the fence falls back to the lecturer's device (chooseCentre).
  */
-export async function findUnitRoom(unitId: string): Promise<UnitRoom | null> {
-  const row = await queryOne<{
-    room_code: string | null;
-    latitude: number | null;
-    longitude: number | null;
-    surveyed_accuracy_m: number | null;
-  }>(
-    `SELECT sch.room_code, r.latitude, r.longitude, r.surveyed_accuracy_m
-       FROM unit_schedule sch
-       LEFT JOIN rooms r ON r.code = sch.room_code
-      WHERE sch.unit_id = $1`,
-    [unitId],
+export async function findRoom(roomCode: string | null): Promise<UnitRoom> {
+  if (!roomCode) return { roomCode: null, latitude: null, longitude: null, surveyedAccuracyMetres: null };
+  const row = await queryOne<{ latitude: number | null; longitude: number | null; surveyed_accuracy_m: number | null }>(
+    `SELECT latitude, longitude, surveyed_accuracy_m FROM rooms WHERE code = $1`,
+    [roomCode],
   );
-  return row
-    ? {
-        roomCode: row.room_code,
-        latitude: row.latitude,
-        longitude: row.longitude,
-        surveyedAccuracyMetres: row.surveyed_accuracy_m,
-      }
-    : null;
+  return {
+    roomCode,
+    latitude: row?.latitude ?? null,
+    longitude: row?.longitude ?? null,
+    surveyedAccuracyMetres: row?.surveyed_accuracy_m ?? null,
+  };
 }
 
 export interface LecturerUnit {

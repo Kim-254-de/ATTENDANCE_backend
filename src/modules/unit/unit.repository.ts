@@ -10,6 +10,12 @@ export interface UnitSchedule {
   endTime: string;
 }
 
+/** One weekly meeting of a unit (unit_slots), with the room it is taught in. */
+export interface UnitSlot extends UnitSchedule {
+  /** rooms.code, as SMARTTT names it; null when the timetable names none. */
+  roomCode: string | null;
+}
+
 /** A lecturer-added unit starts PENDING_VERIFICATION; an admin verifies it against the issued timetable. */
 export type UnitVerificationStatus = 'PENDING_VERIFICATION' | 'VERIFIED';
 
@@ -22,8 +28,13 @@ export interface UnitSummary {
   /** Self-enrolment requests waiting for the lecturer. */
   pendingCount: number;
   createdAt: Date;
-  /** Every unit has exactly one issued slot; null only for rows created before schedules existed. */
+  /**
+   * The unit's weekly slot when it has exactly one; null when it meets more than once a week (see
+   * `slots`). For the current unit (findCurrentUnitForLecturer), the meeting happening now.
+   */
   schedule: UnitSchedule | null;
+  /** Every weekly meeting, Monday first. What activation checks against. */
+  slots: UnitSlot[];
   status: UnitVerificationStatus;
   /** The unit this class belongs to ("COSC 103" for "COSC 103 GR A"). Null for units only added by code. */
   baseCode: string | null;
@@ -61,6 +72,7 @@ interface UnitSummaryRow {
   timetable_synced_at: Date | null;
   room_code: string | null;
   room_surveyed: boolean;
+  slots: UnitSlot[];
 }
 
 const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
@@ -81,6 +93,7 @@ const toUnitSummary = (row: UnitSummaryRow): UnitSummary => ({
   studentsWithoutGroup: row.students_without_group,
   timetableSyncedAt: row.timetable_synced_at,
   room: row.room_code === null ? null : { code: row.room_code, surveyed: row.room_surveyed },
+  slots: row.slots,
 });
 
 const SELECT_UNIT_SUMMARY = `
@@ -89,7 +102,14 @@ const SELECT_UNIT_SUMMARY = `
          COUNT(a.id) FILTER (WHERE a.status = 'ACTIVE')::int  AS student_count,
          COUNT(a.id) FILTER (WHERE a.status = 'PENDING')::int AS pending_count,
          s.day_of_week, s.start_time, s.end_time, s.room_code,
-         EXISTS (SELECT 1 FROM rooms r WHERE r.code = s.room_code AND r.latitude IS NOT NULL) AS room_surveyed
+         EXISTS (SELECT 1 FROM rooms r WHERE r.code = s.room_code AND r.latitude IS NOT NULL) AS room_surveyed,
+         (SELECT COALESCE(json_agg(json_build_object(
+                   'dayOfWeek', us.day_of_week,
+                   'startTime', to_char(us.start_time, 'HH24:MI'),
+                   'endTime', to_char(us.end_time, 'HH24:MI'),
+                   'roomCode', us.room_code)
+                 ORDER BY (us.day_of_week + 6) % 7, us.start_time), '[]'::json)
+            FROM unit_slots us WHERE us.unit_id = u.id) AS slots
     FROM units u
     LEFT JOIN unit_allocations a ON a.unit_id = u.id
     LEFT JOIN unit_schedule s ON s.unit_id = u.id
@@ -115,44 +135,62 @@ export async function findUnitSummary(unitId: string): Promise<UnitSummary | nul
 }
 
 /**
- * The unit whose issued slot covers this moment, for this lecturer — the one
- * `ActivateClass` shows, if any.
+ * The unit with a meeting on now, for this lecturer — the one `ActivateClass`
+ * shows, if any — with `schedule` (and `room`) set to that meeting.
+ *
+ * Any of the unit's weekly meetings counts (unit_slots), not only a unit with
+ * a single slot: most units meet more than once a week, and a class SMARTTT
+ * has rescheduled for one programme but not another sits at two times.
  *
  * Excludes a unit still `PENDING_VERIFICATION`: `session.service.ts` would
  * refuse to activate a class for it anyway, so surfacing it here would only
  * hand the lecturer a button that 403s.
  *
- * `dayOfWeek`/`timeOfDay` are computed by the caller from a JS `Date` (server
- * local time — the same convention `startTime`/`endTime` were entered in),
- * rather than cast inside SQL: `unit_schedule.start_time`/`end_time` are
- * timezone-naive `TIME` values, and casting a `timestamptz` to `time` inside
- * Postgres uses the *session's* timezone, which need not match the server's —
- * comparing two values in the same (JS) timezone up front avoids that mismatch.
+ * `dayOfWeek`/`timeOfDay` are campus time, computed by the caller
+ * (campusClock): slot times are timezone-naive `TIME` values in campus time,
+ * and the database session's zone is usually UTC.
  */
 export async function findCurrentUnitForLecturer(
   lecturerUserId: string,
   dayOfWeek: number,
   timeOfDay: string,
 ): Promise<UnitSummary | null> {
-  const row = await queryOne<UnitSummaryRow>(
-    `${SELECT_UNIT_SUMMARY}
+  const slot = await queryOne<{ unit_id: string; start_time: string; end_time: string; room_code: string | null; room_surveyed: boolean }>(
+    `SELECT us.unit_id, us.start_time, us.end_time, us.room_code,
+            EXISTS (SELECT 1 FROM rooms r WHERE r.code = us.room_code AND r.latitude IS NOT NULL) AS room_surveyed
+       FROM unit_slots us
+       JOIN units u ON u.id = us.unit_id
       WHERE u.lecturer_user_id = $1
         AND u.status = 'VERIFIED'
-        AND s.day_of_week = $2
-        AND $3::time BETWEEN s.start_time AND s.end_time
-      ${GROUP_BY_UNIT_SUMMARY}`,
+        AND us.day_of_week = $2
+        AND $3::time BETWEEN us.start_time AND us.end_time
+      ORDER BY us.start_time, u.code
+      LIMIT 1`,
     [lecturerUserId, dayOfWeek, timeOfDay],
   );
-  return row ? toUnitSummary(row) : null;
+  if (!slot) return null;
+  const unit = await findUnitSummary(slot.unit_id);
+  if (!unit) return null;
+  return {
+    ...unit,
+    schedule: { dayOfWeek, startTime: slot.start_time.slice(0, 5), endTime: slot.end_time.slice(0, 5) },
+    room: slot.room_code === null ? null : { code: slot.room_code, surveyed: slot.room_surveyed },
+  };
 }
 
-/** The issued slot for one unit, for the session-activation time gate. */
-export async function findUnitSchedule(unitId: string): Promise<UnitSchedule | null> {
-  const row = await queryOne<{ day_of_week: number; start_time: string; end_time: string }>(
-    `SELECT day_of_week, start_time, end_time FROM unit_schedule WHERE unit_id = $1`,
+/** Every weekly meeting of one unit, for the session-activation time gate. Empty for a unit with none. */
+export async function findUnitSlots(unitId: string): Promise<UnitSlot[]> {
+  const { rows } = await query<{ day_of_week: number; start_time: string; end_time: string; room_code: string | null }>(
+    `SELECT day_of_week, start_time, end_time, room_code FROM unit_slots
+      WHERE unit_id = $1 ORDER BY (day_of_week + 6) % 7, start_time`,
     [unitId],
   );
-  return row ? { dayOfWeek: row.day_of_week, startTime: row.start_time.slice(0, 5), endTime: row.end_time.slice(0, 5) } : null;
+  return rows.map((r) => ({
+    dayOfWeek: r.day_of_week,
+    startTime: r.start_time.slice(0, 5),
+    endTime: r.end_time.slice(0, 5),
+    roomCode: r.room_code,
+  }));
 }
 
 export interface UnitOwner {
@@ -211,6 +249,11 @@ export async function createUnit(
       [row.id, schedule.dayOfWeek, schedule.startTime, schedule.endTime],
       client,
     );
+    await query(
+      `INSERT INTO unit_slots (unit_id, day_of_week, start_time, end_time) VALUES ($1, $2, $3, $4)`,
+      [row.id, schedule.dayOfWeek, schedule.startTime, schedule.endTime],
+      client,
+    );
     return row.id;
   });
 }
@@ -261,6 +304,8 @@ export interface TimetableUnit {
   schedule: UnitSchedule | null;
   /** Where that slot is taught (rooms.code). Only written alongside `schedule`. */
   roomCode: string | null;
+  /** Every distinct weekly meeting SMARTTT lists, each with its room. Empty = SMARTTT names no times. */
+  slots: UnitSlot[];
 }
 
 export interface TimetableUpsertResult {
@@ -281,9 +326,14 @@ export interface TimetableUpsertResult {
  *   quietly take a unit (and its attendance history) off someone else.
  * - Status only ever moves up. A unit an admin already verified stays
  *   VERIFIED even if SMARTTT now only matches it by name.
- * - A null `schedule` leaves any existing unit_schedule row untouched, room included.
- * - Otherwise the room is overwritten, null included: a room SMARTTT stops
- *   naming must not keep fencing the class to where it used to be taught.
+ * - `slots` replace the unit's unit_slots whenever SMARTTT lists any: they are
+ *   what activation checks, so a meeting SMARTTT moved or dropped must not
+ *   linger at its old time. No slots at all leaves everything untouched.
+ * - unit_schedule (display only) is the one slot when there is exactly one,
+ *   and is removed when SMARTTT lists several, rather than left at a time the
+ *   class may no longer meet.
+ * - Rooms are overwritten, null included: a room SMARTTT stops naming must
+ *   not keep fencing the class to where it used to be taught.
  */
 export async function upsertUnitFromTimetable(
   lecturerUserId: string,
@@ -317,6 +367,19 @@ export async function upsertUnitFromTimetable(
       client,
     );
     if (!row) return null;
+
+    if (unit.slots.length > 0) {
+      await query(`DELETE FROM unit_slots WHERE unit_id = $1`, [row.id], client);
+      for (const slot of unit.slots) {
+        await query(
+          `INSERT INTO unit_slots (unit_id, day_of_week, start_time, end_time, room_code) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (unit_id, day_of_week, start_time, end_time) DO NOTHING`,
+          [row.id, slot.dayOfWeek, slot.startTime, slot.endTime, slot.roomCode],
+          client,
+        );
+      }
+      if (!unit.schedule) await query(`DELETE FROM unit_schedule WHERE unit_id = $1`, [row.id], client);
+    }
 
     if (unit.schedule) {
       await query(

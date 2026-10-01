@@ -199,6 +199,7 @@ row here and nothing else, however many times the code rotates.
 | `geofence_lat` / `geofence_lng` | `double precision` null | The fence's centre, fixed at activation. Kept when the fence is switched `OFF` so it can be switched back on |
 | `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
 | `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
+| `room_code` | `varchar(80)` null | The room of the meeting the session was activated for (`unit_slots.room_code`), fixed at activation (`017_unit_slots.sql`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | Unless `geofence_mode` is `OFF` or `AWAITING_LOCATION`, the centre and radius are set (CHECK constraint) |
 
@@ -259,8 +260,8 @@ what actually stops a double record.
 
 ### `unit_schedule`
 
-Each unit's issued weekly slot (`db/migrations/007_unit_schedule.sql`). A class
-can only be activated while `now` falls inside it.
+The unit's weekly slot **when it has exactly one** (`db/migrations/007_unit_schedule.sql`), for display. Activation
+uses `unit_slots`, below.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -270,6 +271,22 @@ can only be activated while `now` falls inside it.
 | `start_time` / `end_time` | `time` | |
 | `room_code` | `varchar(80)` null | Where the slot is taught, as SMARTTT names it. Looked up in `rooms` by code; not a foreign key, since SMARTTT may name a room nobody has surveyed |
 | `created_at` / `updated_at` | `timestamptz` | |
+
+### `unit_slots`
+
+Every weekly meeting of a unit (`db/migrations/017_unit_slots.sql`), replaced on each SMARTTT sync. A class can only
+be activated while `now` (campus time, `CAMPUS_TIMEZONE`) falls inside one of them; the session closes at that
+meeting's end and is fenced to its room.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | FK -> `units(id)`, ON DELETE CASCADE |
+| `day_of_week` | `smallint` | 0=Sun..6=Sat |
+| `start_time` / `end_time` | `time` | `end_time > start_time` |
+| `room_code` | `varchar(80)` null | As SMARTTT names it, like `unit_schedule.room_code` |
+| `created_at` | `timestamptz` | |
+| | | UNIQUE (`unit_id`, `day_of_week`, `start_time`, `end_time`) |
 
 ### `rooms`
 

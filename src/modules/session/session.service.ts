@@ -3,7 +3,7 @@ import { atCampusTime, campusClock } from '../../common/utils/campus-time.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { auditService } from '../audit/index.js';
-import { findUnitSchedule } from '../unit/index.js';
+import { findUnitSlots, type UnitSlot } from '../unit/index.js';
 import * as sessionRepository from './session.repository.js';
 import type { SessionForQr, SessionGeofence, UnitRoom } from './session.repository.js';
 import {
@@ -117,8 +117,8 @@ export async function createSession(
   }
 
   const opensAt = input.opensAt ?? new Date();
-  const closesAt = await resolveClosesAt(input.unitId, opensAt, input.closesAt);
-  const room = await sessionRepository.findUnitRoom(input.unitId);
+  const { closesAt, roomCode } = await resolveWindow(input.unitId, opensAt, input.closesAt);
+  const room = await sessionRepository.findRoom(roomCode);
   const geofence = resolveInitialGeofence(input.geofence, room, input.location);
 
   const session = await sessionRepository.createSession({
@@ -129,6 +129,7 @@ export async function createSession(
     opensAt,
     closesAt,
     rotationSeconds: input.rotationSeconds ?? env.QR_ROTATION_SECONDS,
+    roomCode,
     geofence,
   });
 
@@ -212,45 +213,57 @@ function anchorUnavailable(choice: Extract<CentreChoice, { ok: false }>): AppErr
 }
 
 /**
- * A class may only be activated inside its issued timetable slot — this is
- * the server-side enforcement of "the activate button is only active within
- * the time allocated on the timetable" (the frontend's own gating is just a
- * convenience; this is what actually stops it). `closesAt` is derived from
- * the slot's end time rather than trusted from the client, so a session can
- * never outlive its scheduled window.
+ * A class may only be activated during one of its weekly meetings on the
+ * timetable — the server-side enforcement of "the activate button is only
+ * active within the time allocated on the timetable" (the frontend's own
+ * gating is just a convenience; this is what actually stops it).
  *
- * A unit with no issued slot (legacy data, before schedules existed) falls
+ * Any of the unit's meetings counts (unit_slots): most units meet more than
+ * once a week, and a class rescheduled for one programme sharing it but not
+ * another sits at two times. The session closes at the end of the meeting it
+ * was activated in, rather than at a time trusted from the client, and is
+ * fenced to that meeting's room.
+ *
+ * Slot times are campus time (CAMPUS_TIMEZONE); the server's clock is usually UTC.
+ *
+ * A unit with no slots at all (legacy data, before schedules existed) falls
  * back to the client-supplied `closesAt` — there is no window to derive one from.
  */
-async function resolveClosesAt(
+async function resolveWindow(
   unitId: string,
   opensAt: Date,
   clientClosesAt: Date | undefined,
-): Promise<Date> {
-  const schedule = await findUnitSchedule(unitId);
-  if (!schedule) {
+): Promise<{ closesAt: Date; roomCode: string | null }> {
+  const slots = await findUnitSlots(unitId);
+  if (slots.length === 0) {
     if (!clientClosesAt) {
       throw AppError.badRequest('This unit has no issued schedule; closesAt is required.');
     }
-    return clientClosesAt;
+    return { closesAt: clientClosesAt, roomCode: null };
   }
 
-  // Slots are campus time; the server's clock is usually UTC.
-  if (campusClock(opensAt, env.CAMPUS_TIMEZONE).dayOfWeek !== schedule.dayOfWeek) {
-    throw AppError.forbidden(
-      `This class is not scheduled for today (window: ${schedule.startTime}–${schedule.endTime}).`,
-    );
+  const { dayOfWeek } = campusClock(opensAt, env.CAMPUS_TIMEZONE);
+  const today = slots.filter((slot) => slot.dayOfWeek === dayOfWeek);
+  const now = today.find((slot) => {
+    const start = atCampusTime(opensAt, slot.startTime, env.CAMPUS_TIMEZONE);
+    const end = atCampusTime(opensAt, slot.endTime, env.CAMPUS_TIMEZONE);
+    return opensAt >= start && opensAt <= end;
+  });
+  if (now) {
+    return { closesAt: atCampusTime(opensAt, now.endTime, env.CAMPUS_TIMEZONE), roomCode: now.roomCode };
   }
 
-  const slotStart = atCampusTime(opensAt, schedule.startTime, env.CAMPUS_TIMEZONE);
-  const slotEnd = atCampusTime(opensAt, schedule.endTime, env.CAMPUS_TIMEZONE);
-  if (opensAt < slotStart || opensAt > slotEnd) {
-    throw AppError.forbidden(
-      `You can only activate this class during its scheduled time (${schedule.startTime}–${schedule.endTime}).`,
-    );
+  if (today.length === 0) {
+    throw AppError.forbidden(`This class is not scheduled for today (${describeSlots(slots)}).`);
   }
+  throw AppError.forbidden(`You can only activate this class during its scheduled time (${describeSlots(today)}).`);
+}
 
-  return slotEnd;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "Mon 08:00–10:00, Thu 14:00–16:00", for telling a lecturer when they can activate. */
+function describeSlots(slots: UnitSlot[]): string {
+  return slots.map((slot) => `${DAY_NAMES[slot.dayOfWeek]} ${slot.startTime}–${slot.endTime}`).join(', ');
 }
 
 export interface CurrentQr {
@@ -601,7 +614,7 @@ export async function setSessionGeofence(
     if (previous.mode === 'OFF') return toSummary(session);
     next = { ...previous, mode: 'OFF' };
   } else {
-    const room = await sessionRepository.findUnitRoom(session.unitId);
+    const room = await sessionRepository.findRoom(session.roomCode);
     const choice = chooseCentre(room, input.location);
     const radiusMetres = previous.radiusMetres ?? env.GEOFENCE_RADIUS_METRES;
 
