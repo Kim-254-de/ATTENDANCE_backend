@@ -436,3 +436,68 @@ describe('units split into groups taught by different lecturers', () => {
     expect(byCode(await getUnits(lec))[long]).toMatchObject({ baseCode: 'EDFO 111' });
   });
 });
+
+describe('POST /integrations/smarttt/timetable-changes (SMARTTT pushes a reschedule)', () => {
+  const push = (data: object, key: string | null = KEY) => {
+    const req = request(app).post('/api/v1/integrations/smarttt/timetable-changes');
+    return (key === null ? req : req.set('X-API-Key', key)).send(data);
+  };
+  const scheduleOf = async (code: string) =>
+    (await pool.query<{ day_of_week: number; start_time: string; end_time: string; room_code: string | null }>(
+      `SELECT s.day_of_week, s.start_time, s.end_time, s.room_code FROM unit_schedule s JOIN units u ON u.id = s.unit_id WHERE u.code = $1`,
+      [code])).rows[0];
+
+  it('re-syncs the lecturer at once, skipping the throttle, so the class moves here too', async () => {
+    const lec = await makeLecturer();
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 101', 30, [slot(1, '08:00', '10:00')])] };
+    await getUnits(lec);
+    expect(await scheduleOf('RESCH 101')).toMatchObject({ day_of_week: 1, start_time: '08:00:00', room_code: 'LH1' });
+
+    // The lecturer moves the class in SMARTTT; well inside the sync throttle.
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 101', 30, [{ ...slot(3, '14:00', '16:00'), room: 'LAB 2' }])] };
+    const res = await push({ staff_number: lec.staffNumber.toLowerCase(), unit_codes: ['resch  101'] });
+    expect(res.status).toBe(200);
+    expect((res.body as { data: unknown }).data).toEqual({ lecturersResynced: 1 });
+    expect(await scheduleOf('RESCH 101')).toMatchObject({ day_of_week: 3, start_time: '14:00:00', end_time: '16:00:00', room_code: 'LAB 2' });
+    expect(smartttCalls).toHaveLength(2);
+  });
+
+  it('finds the lecturer by the class code when SMARTTT names no staff number', async () => {
+    const lec = await makeLecturer();
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 102', 5, [slot(1)])] };
+    await getUnits(lec);
+
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 102', 5, [slot(5)])] };
+    expect((await push({ staff_number: null, unit_codes: ['RESCH 102'] })).body).toMatchObject({ data: { lecturersResynced: 1 } });
+    expect(await scheduleOf('RESCH 102')).toMatchObject({ day_of_week: 5 });
+  });
+
+  it('does nothing for a lecturer with no account here', async () => {
+    const res = await push({ staff_number: 'STF/NOBODY', unit_codes: ['NOPE 999'] });
+    expect(res.status).toBe(200);
+    expect((res.body as { data: unknown }).data).toEqual({ lecturersResynced: 0 });
+    expect(smartttCalls).toHaveLength(0);
+  });
+
+  it('needs the shared key and a lecturer or class to act on', async () => {
+    expect((await push({ staff_number: 'STF/1' }, null)).status).toBe(401);
+    expect((await push({ staff_number: 'STF/1' }, 'wrong-key')).status).toBe(401);
+    expect((await push({ unit_codes: [] })).status).toBe(400);
+    expect(smartttCalls).toHaveLength(0);
+  });
+});
+
+describe('GET /units/current syncs from SMARTTT too', () => {
+  it('picks up a rescheduled class without the lecturer opening their units page', async () => {
+    const lec = await makeLecturer();
+    const now = new Date();
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot((now.getDay() + 1) % 7, '00:00', '23:59')])] };
+    const before = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
+    expect((before.body as { data: unknown }).data).toBeNull();
+
+    resetTimetableSyncState(); // skip the throttle
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot(now.getDay(), '00:00', '23:59')])] };
+    const after = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
+    expect((after.body as { data: { code: string } | null }).data).toMatchObject({ code: 'RESCH 103' });
+  });
+});

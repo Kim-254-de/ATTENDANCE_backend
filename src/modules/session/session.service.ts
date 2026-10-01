@@ -155,10 +155,14 @@ export async function createSession(
 /**
  * The fence a new session starts with. See chooseCentre for which point wins.
  *
- * ON with no usable centre refuses the activation outright rather than
- * quietly opening an unfenced session: the lecturer asked for a fence and
- * should know they are not getting one. They can activate from a phone, or
- * switch the fence off themselves.
+ * ON with no reading at all (activated from a laptop, which has no GPS) in an
+ * unsurveyed room opens AWAITING_LOCATION: the laptop shows the class, and
+ * the lecturer sends the room's position from their phone, signed in to the
+ * same account (setSessionGeofence). Scans are held until then, so this is
+ * never a quietly unfenced class.
+ *
+ * ON with a reading that is too vague still refuses the activation: the
+ * lecturer sent a location and should know it was not good enough.
  *
  * OFF still records a centre when one is available, so switching the fence
  * on partway through the class needs no fresh reading.
@@ -176,7 +180,12 @@ function resolveInitialGeofence(
       : { mode: 'OFF', latitude: null, longitude: null, radiusMetres: null, anchorAccuracyMetres: null };
   }
 
-  if (!choice.ok) throw anchorUnavailable(choice);
+  if (!choice.ok) {
+    if (choice.reason === 'NO_READING') {
+      return { mode: 'AWAITING_LOCATION', latitude: null, longitude: null, radiusMetres: null, anchorAccuracyMetres: null };
+    }
+    throw anchorUnavailable(choice);
+  }
   return fenceAt(choice);
 }
 
@@ -296,6 +305,15 @@ export async function getCurrentQr(sessionId: string, lecturerUserId: string): P
     enrolled,
     refusedOutsideFence,
   };
+}
+
+/**
+ * The lecturer's classes still open for check-in, newest first. A phone
+ * signed in to the same account uses this to find the class a laptop opened,
+ * and send its location if the class is AWAITING_LOCATION.
+ */
+export async function listLiveSessions(lecturerUserId: string): Promise<SessionSummary[]> {
+  return (await sessionRepository.findLiveSessionsForLecturer(lecturerUserId)).map(toSummary);
 }
 
 /**
@@ -466,6 +484,7 @@ type GeofenceOutcome =
 function checkGeofence(session: SessionForQr, location: StudentReading | undefined): GeofenceOutcome {
   const { mode, latitude, longitude, radiusMetres } = session.geofence;
   if (mode === 'OFF') return { checked: false, accepted: true };
+  if (mode === 'AWAITING_LOCATION') throw awaitingLocation();
   // The CHECK constraint guarantees these when the mode is not OFF.
   if (latitude === null || longitude === null || radiusMetres === null) {
     throw new Error(`session ${session.id} is geofenced (${mode}) but has no centre`);
@@ -501,6 +520,19 @@ function geofenceRejected(check: Extract<ReadingCheck, { accepted: false }>, ses
       accuracyMetres: check.accuracyMetres === undefined ? null : Math.round(check.accuracyMetres),
     },
   });
+}
+
+/**
+ * 409: the class is live, but the lecturer has not sent its location from
+ * their phone yet. Nothing the student can fix; scanning again shortly works.
+ * Not audited as a refusal: the student did nothing wrong.
+ */
+function awaitingLocation(): AppError {
+  return new AppError(
+    409,
+    ErrorCode.GEOFENCE_AWAITING_LOCATION,
+    "Your lecturer hasn't shared the class location yet. Scan again in a moment.",
+  );
 }
 
 /** One decimal place: finer than GPS can measure, coarse enough to read. */
@@ -547,7 +579,8 @@ export async function setSessionStatus(
  * always wins, so a lecturer cannot drag the fence off a surveyed room), with
  * one addition: with no room and no new reading, the centre the session
  * already had is reused. Sending a location is how a lecturer re-captures
- * their position, e.g. after activating from the corridor.
+ * their position, e.g. after activating from the corridor, and how their phone
+ * sets the centre of a class a laptop opened AWAITING_LOCATION.
  *
  * Every change is audited with the lecturer, because switching the fence off
  * is exactly what a lecturer covering for absent students would do.

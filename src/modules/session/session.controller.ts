@@ -32,6 +32,12 @@ export async function createSession(req: Request, res: Response): Promise<void> 
   sendCreated(res, session);
 }
 
+/** GET /api/v1/sessions/live — the lecturer's classes still open, for a second device (their phone) to find. */
+export async function listLiveSessions(req: Request, res: Response): Promise<void> {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  sendSuccess(res, await sessionService.listLiveSessions(userId(req)));
+}
+
 /** GET /api/v1/sessions/:sessionId/qr — the code to display right now. */
 export async function getCurrentQr(req: Request, res: Response): Promise<void> {
   const { sessionId } = req.params as unknown as SessionIdParam;

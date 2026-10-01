@@ -31,7 +31,7 @@ export async function listUnits(req: Request, res: Response): Promise<void> {
 
 /** GET /api/v1/units/current — the unit ActivateClass may open a session for right now, or null. */
 export async function getCurrentUnit(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await unitService.getCurrentUnit(userId(req)));
+  sendSuccess(res, await unitService.getCurrentUnit(userId(req), lecturerIdentity(req)));
 }
 
 /** POST /api/v1/units */

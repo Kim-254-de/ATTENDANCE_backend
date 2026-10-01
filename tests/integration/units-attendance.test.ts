@@ -554,13 +554,15 @@ describe('geofence', () => {
       expect(rows).toHaveLength(0);
     });
 
-    it('refuses to activate with no room and no reading', async () => {
+    it('opens a laptop activation with no reading AWAITING_LOCATION', async () => {
       const lecturer = await makeUser('LECTURER');
       const unit = await makeUnit(lecturer);
 
       const res = await activate(lecturer, unit.id);
-      expect(res.status).toBe(422);
-      expect(body(res).error).toMatchObject({ code: 'GEOFENCE_ANCHOR_UNAVAILABLE' });
+      expect(res.status).toBe(201);
+      expect(fence(res)).toEqual({ mode: 'AWAITING_LOCATION', radiusMetres: null, roomCode: null, anchorAccuracyMetres: null, hasCentre: false });
+      expect(await storedCentre(body<{ id: string }>(res).data.id))
+        .toEqual({ geofence_mode: 'AWAITING_LOCATION', geofence_lat: null, geofence_lng: null });
     });
 
     it('lets the lecturer switch the fence off, and still keeps a centre for later when there is one', async () => {
@@ -687,6 +689,92 @@ describe('geofence', () => {
       const { lecturer, sessionId, patch } = await deviceSession();
       await api(lecturer.auth).patch(`/sessions/${sessionId}/status`, { status: 'CLOSED' });
       expect((await patch({ mode: 'OFF' })).status).toBe(409);
+    });
+  });
+
+  describe('laptop shows the code, phone sends the location', () => {
+    /** A second sign-in to the same lecturer account, as their phone would have. */
+    async function signInAgain(user: { id: string }) {
+      const sessionId = randomUUID();
+      await pool.query(
+        `INSERT INTO auth_sessions (id, user_id, refresh_token_hash, expires_at) VALUES ($1, $2, 'x', NOW() + INTERVAL '1 hour')`,
+        [sessionId, user.id]);
+      const { signAccessToken } = await import('../../src/modules/auth/auth.session.js');
+      return { auth: `Bearer ${await signAccessToken({ userId: user.id, sessionId, role: 'LECTURER' })}` };
+    }
+
+    async function laptopClass() {
+      const laptop = await makeUser('LECTURER');
+      const phone = await signInAgain(laptop);
+      const student = await makeUser('STUDENT');
+      const unit = await makeUnit(laptop);
+      const room = await placeInRoom(unit.id, false);
+      await pool.query(
+        `INSERT INTO unit_allocations (unit_id, student_user_id, registration_number, full_name, status, source)
+         VALUES ($1, $2, $3, 'Test Student', 'ACTIVE', 'ERP')`, [unit.id, student.id, `REG/P${uniq()}`]);
+      const sessionId = body<{ id: string }>(await activate(laptop, unit.id)).data.id;
+      const checkIn = async (location: object) => {
+        const { payload } = body<{ payload: string }>(await api(laptop.auth).get(`/sessions/${sessionId}/qr`)).data;
+        return api(student.auth).post('/attendance/check-in', { payload, location });
+      };
+      return { laptop, phone, student, unit, room, sessionId, checkIn };
+    }
+
+    it('holds scans until the phone, signed in to the same account, sends the room\'s location', async () => {
+      const { laptop, phone, room, sessionId, checkIn } = await laptopClass();
+      const near = { latitude: PHONE.latitude, longitude: PHONE.longitude, accuracy: 8, capturedAt: Date.now() };
+
+      const held = await checkIn(near);
+      expect(held.status).toBe(409);
+      expect(body(held).error).toMatchObject({ code: 'GEOFENCE_AWAITING_LOCATION' });
+      const { rows: refused } = await pool.query(
+        `SELECT 1 FROM audit_logs WHERE action = 'ATTENDANCE_SCAN_REJECTED' AND metadata->>'sessionId' = $1`, [sessionId]);
+      expect(refused).toHaveLength(0); // the student did nothing wrong
+
+      // The phone finds the class the laptop opened...
+      const live = await api(phone.auth).get('/sessions/live');
+      expect(live.status).toBe(200);
+      const found = body<Array<{ id: string; geofence: Geofence }>>(live).data;
+      expect(found.map((s) => [s.id, s.geofence.mode, s.geofence.roomCode])).toEqual([[sessionId, 'AWAITING_LOCATION', room]]);
+
+      // ...and sends its location.
+      const shared = await api(phone.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'ON', location: PHONE });
+      expect(shared.status).toBe(200);
+      expect(fence(shared)).toEqual({ mode: 'LECTURER_DEVICE', radiusMetres: 20, roomCode: room, anchorAccuracyMetres: 12, hasCentre: true });
+      expect(await storedCentre(sessionId)).toEqual({ geofence_mode: 'LECTURER_DEVICE', geofence_lat: PHONE.latitude, geofence_lng: PHONE.longitude });
+      expect((await geofenceAudits(sessionId)).map((a) => [a.user_id, a.metadata['from'], a.metadata['to'], a.metadata['recaptured']]))
+        .toEqual([[laptop.id, 'AWAITING_LOCATION', 'LECTURER_DEVICE', true]]);
+
+      // The laptop's next poll shows it, and students can check in.
+      const qr = body<{ session: { geofence: Geofence } }>(await api(laptop.auth).get(`/sessions/${sessionId}/qr`)).data;
+      expect(qr.session.geofence.mode).toBe('LECTURER_DEVICE');
+      expect((await checkIn({ ...near, capturedAt: Date.now() })).status).toBe(201);
+    });
+
+    it('refuses a vague phone reading and keeps waiting', async () => {
+      const { phone, sessionId } = await laptopClass();
+      const vague = await api(phone.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'ON', location: { ...PHONE, accuracy: 90 } });
+      expect(vague.status).toBe(422);
+      expect(body(vague).error).toMatchObject({ code: 'GEOFENCE_ANCHOR_UNAVAILABLE' });
+      expect((await api(phone.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'ON' })).status).toBe(422);
+      expect(await storedCentre(sessionId)).toMatchObject({ geofence_mode: 'AWAITING_LOCATION' });
+    });
+
+    it('lets the lecturer open the class without a location check instead', async () => {
+      const { phone, sessionId, checkIn } = await laptopClass();
+      const off = await api(phone.auth).patch(`/sessions/${sessionId}/geofence`, { mode: 'OFF' });
+      expect(fence(off)).toMatchObject({ mode: 'OFF', hasCentre: false });
+      expect((await checkIn({ latitude: 0.5, longitude: 30, accuracy: 8, capturedAt: Date.now() })).status).toBe(201);
+    });
+
+    it('lists only the lecturer\'s own sessions that are still open', async () => {
+      const { laptop, phone, sessionId } = await laptopClass();
+      const other = await makeUser('LECTURER');
+      expect(body<unknown[]>(await api(other.auth).get('/sessions/live')).data).toEqual([]);
+      expect((await api((await makeUser('STUDENT')).auth).get('/sessions/live')).status).toBe(403);
+
+      await api(laptop.auth).patch(`/sessions/${sessionId}/status`, { status: 'CLOSED' });
+      expect(body<unknown[]>(await api(phone.auth).get('/sessions/live')).data).toEqual([]);
     });
   });
 

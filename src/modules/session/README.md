@@ -50,7 +50,29 @@ Each session is fenced to a centre point chosen at activation
 2. the lecturer's device reading sent with `POST /sessions` as
    `location: { latitude, longitude, accuracy }`, if accurate to
    `GEOFENCE_MAX_ANCHOR_ACCURACY_METRES` (30 m), else
-3. activation is refused with `422 GEOFENCE_ANCHOR_UNAVAILABLE`.
+3. with **no** reading (activated from a laptop), the session opens with
+   mode `AWAITING_LOCATION` and no centre. Scans are refused with
+   `409 GEOFENCE_AWAITING_LOCATION` until the lecturer sends the room's
+   position from their phone (below), else
+4. a reading that was sent but is too vague refuses activation with
+   `422 GEOFENCE_ANCHOR_UNAVAILABLE`.
+
+### Laptop shows the code, phone sends the location
+
+A laptop has no GPS, so its location is too vague to fence a room. The
+lecturer signs in to the same account on the laptop and on their phone (each
+sign-in is its own `auth_sessions` row; neither signs the other out):
+
+1. The laptop activates the class with no `location`. In an unsurveyed room
+   it opens `AWAITING_LOCATION`.
+2. The phone calls `GET /sessions/live`: the lecturer's sessions that are not
+   closed and not past `closes_at`, newest first, each with `geofence`.
+3. The phone sends `PATCH /sessions/:id/geofence { mode: 'ON', location }`.
+   The session becomes `LECTURER_DEVICE`, centred on the phone, and the
+   laptop's next `GET /sessions/:id/qr` shows it.
+
+The phone can re-send at any time to re-centre (audited, as below). In a
+surveyed room the room's point wins and nothing waits for the phone.
 
 `geofence: 'OFF'` on `POST /sessions` opens the class unfenced.
 `PATCH /sessions/:id/geofence` takes `{ mode: 'OFF' }` or
@@ -129,6 +151,8 @@ the class meeting.
 | `GET` | `/api/v1/sessions/:id/qr.image?format=png\|svg` | Lecturer | Rendered image; `X-QR-Expires-In` header carries the countdown |
 | `POST` | `/api/v1/sessions/scan` | Student | Verify a scanned code without recording it (dry run — use `/attendance/check-in`) |
 | `PATCH` | `/api/v1/sessions/:id/status` | Lecturer | Pause, resume or close |
+| `GET` | `/api/v1/sessions/live` | Lecturer | Their sessions still open, for their phone to find |
+| `PATCH` | `/api/v1/sessions/:id/geofence` | Lecturer | Fence off / on, or (re-)centre it on the device's location |
 
 Lecturers cannot scan and students cannot mint — a lecturer who could do both
 could mark a hall present from their desk.

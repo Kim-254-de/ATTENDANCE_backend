@@ -61,3 +61,28 @@ students with no registration number, since they can't be put on a roster.
 
 No retries: a lecturer is waiting on the units page, and the sync falls back
 to the units already on file.
+
+## The other way: SMARTTT tells us a class moved
+
+A lecturer (or admin) rescheduling a slot in SMARTTT
+(`POST /api/v1/timetable/slots/{id}/reschedule/`) changes the day, time or
+room that this service gates activation on and fences check-ins to. Our own
+sync only re-reads the timetable when a lecturer loads their units (or the
+Activate Class card), at most every `SMARTTT_SYNC_INTERVAL_SECONDS`, so
+SMARTTT pushes the change straight away
+(`apps/integrations/attendance_push.py` there):
+
+```
+POST /api/v1/integrations/smarttt/timetable-changes
+X-API-Key: {SMARTTT_API_KEY}
+{ "staff_number": "STF/0001", "unit_codes": ["COSC 103 GR A"] }
+```
+
+Served by `src/modules/integration`. Every lecturer it names (by staff
+number, or as the holder of one of the classes) is re-synced at once,
+skipping the throttle; the answer is `{ "lecturersResynced": n }`. Same
+shared key both ways. On the SMARTTT side set `ATTENDANCE_BASE_URL` to this
+service's URL; unset, the push is off and the periodic sync still catches up.
+The push is best effort: it never blocks or fails the reschedule.
+
+A running session is not moved: it keeps the window and fence it opened with.

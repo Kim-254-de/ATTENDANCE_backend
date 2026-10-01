@@ -98,6 +98,21 @@ export async function findSessionById(sessionId: string): Promise<SessionForQr |
   return row ? toSession(row) : null;
 }
 
+/**
+ * The lecturer's sessions still able to take check-ins: not closed and not
+ * past their end. This is what lets a second device signed in to the same
+ * account (the lecturer's phone) find the class their laptop opened.
+ */
+export async function findLiveSessionsForLecturer(lecturerUserId: string): Promise<SessionForQr[]> {
+  const { rows } = await query<SessionRow>(
+    `${SELECT_SESSION}
+      WHERE s.lecturer_user_id = $1 AND s.status <> 'CLOSED' AND s.closes_at > NOW()
+      ORDER BY s.opens_at DESC`,
+    [lecturerUserId],
+  );
+  return rows.map(toSession);
+}
+
 export interface CreateSessionArgs {
   unitId: string;
   lecturerUserId: string;

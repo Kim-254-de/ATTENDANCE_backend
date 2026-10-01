@@ -133,6 +133,32 @@ export async function syncUnitsFromTimetable(lecturerUserId: string, lecturer: L
   return sync;
 }
 
+/**
+ * SMARTTT reports that a class moved (a lecturer or admin rescheduled a slot):
+ * re-sync every lecturer it affects straight away, skipping the throttle, so
+ * the new day, time and room are what ActivateClass and the activation time
+ * gate see, without waiting for the lecturer to open their units page.
+ *
+ * A sync already running may have read the timetable before the change, so it
+ * is waited for and then run again. Like every sync, this never throws: a
+ * failure is logged and the next page load retries.
+ */
+export async function resyncAfterTimetableChange(
+  change: { staffNumber: string | null; unitCodes: string[] },
+): Promise<{ lecturersResynced: number }> {
+  if (!smartttClient.enabled) return { lecturersResynced: 0 };
+  const lecturers = await unitRepository.findLecturersForTimetableChange(change.staffNumber, change.unitCodes);
+
+  await Promise.all(lecturers.map(async (lecturer) => {
+    await syncInFlight.get(lecturer.userId);
+    lastSyncAttempt.delete(lecturer.userId);
+    await syncUnitsFromTimetable(lecturer.userId, { name: lecturer.fullName, staffNumber: lecturer.staffNumber });
+  }));
+
+  logger.info({ ...change, lecturersResynced: lecturers.length }, 'smarttt reported a timetable change; lecturers re-synced');
+  return { lecturersResynced: lecturers.length };
+}
+
 /** Test seam: forget throttling state between cases. */
 export function resetTimetableSyncState(): void {
   lastSyncAttempt.clear();
@@ -225,8 +251,13 @@ async function notifyAdminsIfScheduled(unitId: string, lecturerName: string): Pr
   });
 }
 
-/** The unit ActivateClass may open a session for right now, or null if nothing is scheduled. */
-export async function getCurrentUnit(lecturerUserId: string): Promise<UnitDto | null> {
+/**
+ * The unit ActivateClass may open a session for right now, or null if nothing is scheduled.
+ * Synced first (throttled), so a class rescheduled in SMARTTT shows at its new time even if
+ * SMARTTT's push to us was missed.
+ */
+export async function getCurrentUnit(lecturerUserId: string, lecturer?: LecturerIdentity): Promise<UnitDto | null> {
+  if (lecturer) await syncUnitsFromTimetable(lecturerUserId, lecturer);
   const now = new Date();
   const timeOfDay = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const unit = await unitRepository.findCurrentUnitForLecturer(lecturerUserId, now.getDay(), timeOfDay);

@@ -37,6 +37,10 @@ export const ErrorCode = {
   LOCATION_MOCKED: 'LOCATION_MOCKED',
   OUTSIDE_GEOFENCE: 'OUTSIDE_GEOFENCE',
   GEOFENCE_ANCHOR_UNAVAILABLE: 'GEOFENCE_ANCHOR_UNAVAILABLE',
+  GEOFENCE_AWAITING_LOCATION: 'GEOFENCE_AWAITING_LOCATION',
+
+  // SMARTTT pushing a timetable change
+  INVALID_API_KEY: 'INVALID_API_KEY',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

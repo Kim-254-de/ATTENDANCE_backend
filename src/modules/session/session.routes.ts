@@ -31,6 +31,12 @@ sessionRouter.post(
   asyncHandler(sessionController.createSession),
 );
 
+/**
+ * The lecturer's classes still open. Lets their phone, signed in to the same
+ * account, find the class their laptop activated and send its location.
+ */
+sessionRouter.get('/live', requireAuth('LECTURER'), asyncHandler(sessionController.listLiveSessions));
+
 /** The code to display right now, as JSON, with its countdown. */
 sessionRouter.get(
   '/:sessionId/qr',
@@ -68,7 +74,10 @@ sessionRouter.patch(
   asyncHandler(sessionController.setStatus),
 );
 
-/** Switch the location check off or on, or re-centre it on the lecturer's device. */
+/**
+ * Switch the location check off or on, or re-centre it on the lecturer's device.
+ * Also how the lecturer's phone sets the centre of a class opened AWAITING_LOCATION.
+ */
 sessionRouter.patch(
   '/:sessionId/geofence',
   requireAuth('LECTURER'),

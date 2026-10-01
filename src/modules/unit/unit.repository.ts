@@ -219,6 +219,34 @@ export async function createUnit(
 // Sync from SMARTTT (the university timetable)
 // ---------------------------------------------------------------------------
 
+export interface TimetableLecturer {
+  userId: string;
+  staffNumber: string;
+  fullName: string;
+}
+
+/**
+ * Who to re-sync when SMARTTT reports a class moved: the lecturer with that
+ * staff number, plus whoever holds any of the named classes here (which
+ * covers a unit tied to its lecturer only by name in SMARTTT). Active
+ * lecturers with a staff number only, since the sync is keyed on it.
+ */
+export async function findLecturersForTimetableChange(
+  staffNumber: string | null,
+  unitCodes: string[],
+): Promise<TimetableLecturer[]> {
+  const { rows } = await query<{ id: string; staff_number: string; full_name: string }>(
+    `SELECT DISTINCT u.id, p.staff_number, u.full_name
+       FROM users u
+       JOIN lecturer_profiles p ON p.user_id = u.id
+      WHERE u.role = 'LECTURER' AND u.status = 'ACTIVE' AND p.staff_number IS NOT NULL
+        AND (UPPER(p.staff_number) = UPPER($1)
+             OR u.id IN (SELECT lecturer_user_id FROM units WHERE code = ANY($2::text[])))`,
+    [staffNumber, unitCodes],
+  );
+  return rows.map((r) => ({ userId: r.id, staffNumber: r.staff_number, fullName: r.full_name }));
+}
+
 export interface TimetableUnit {
   /** The class: "COSC 103 GR A", or "COSC 103" when not split into groups. */
   code: string;

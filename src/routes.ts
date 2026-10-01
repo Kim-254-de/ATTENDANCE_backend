@@ -6,6 +6,7 @@ import { unitRouter } from './modules/unit/index.js';
 import { attendanceRouter } from './modules/attendance/index.js';
 import { reportingRouter } from './modules/reporting/index.js';
 import { studentRouter } from './modules/student/index.js';
+import { integrationRouter } from './modules/integration/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -24,3 +25,5 @@ apiRouter.use('/units', unitRouter);
 apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/reports', reportingRouter);
 apiRouter.use('/students', studentRouter);
+/** Calls from SMARTTT (API key, not a user session). */
+apiRouter.use('/integrations', integrationRouter);

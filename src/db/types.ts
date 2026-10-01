@@ -64,6 +64,11 @@ export const GeofenceMode = {
   ROOM: 'ROOM',
   /** The lecturer's device location at activation, for a room not yet surveyed. */
   LECTURER_DEVICE: 'LECTURER_DEVICE',
+  /**
+   * Activated with no reading (e.g. from a laptop) in an unsurveyed room. No centre yet:
+   * scans are held until the lecturer sends one from their phone.
+   */
+  AWAITING_LOCATION: 'AWAITING_LOCATION',
   /** No location check; the lecturer switched it off. */
   OFF: 'OFF',
 } as const;

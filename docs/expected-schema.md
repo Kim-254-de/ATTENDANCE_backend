@@ -195,12 +195,12 @@ row here and nothing else, however many times the code rotates.
 | `opens_at` | `timestamptz` | Scans before this are refused |
 | `closes_at` | `timestamptz` | Scans after this are refused even if status is OPEN |
 | `rotation_seconds` | `integer` | Per-session override of `QR_ROTATION_SECONDS` |
-| `geofence_mode` | text | `ROOM` / `LECTURER_DEVICE` / `OFF` (CHECK constraint, default `OFF`). Where the fence is centred; see `session.geofence.ts` (`db/migrations/012_geofence.sql`) |
+| `geofence_mode` | text | `ROOM` / `LECTURER_DEVICE` / `AWAITING_LOCATION` / `OFF` (CHECK constraint, default `OFF`). Where the fence is centred; see `session.geofence.ts` (`db/migrations/012_geofence.sql`, `016_geofence_awaiting_location.sql`). `AWAITING_LOCATION`: activated with no reading in an unsurveyed room, waiting for the lecturer's phone; scans are held |
 | `geofence_lat` / `geofence_lng` | `double precision` null | The fence's centre, fixed at activation. Kept when the fence is switched `OFF` so it can be switched back on |
 | `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
 | `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
 | `created_at` / `updated_at` | `timestamptz` | |
-| | | Unless `geofence_mode` is `OFF`, the centre and radius are set (CHECK constraint) |
+| | | Unless `geofence_mode` is `OFF` or `AWAITING_LOCATION`, the centre and radius are set (CHECK constraint) |
 
 `qr_secret` is credential material. It should never be selected into a
 response, logged, or exposed through any admin screen — anyone holding it can
