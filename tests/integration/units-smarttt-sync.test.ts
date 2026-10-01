@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { campusClock } from '../../src/common/utils/campus-time.js';
 
 /**
  * GET /units pulling a lecturer's units and registered-student counts from
@@ -488,16 +489,30 @@ describe('POST /integrations/smarttt/timetable-changes (SMARTTT pushes a resched
 });
 
 describe('GET /units/current syncs from SMARTTT too', () => {
+  /** Today on campus (EAT), whatever zone the server or test machine runs in. */
+  const campusToday = () => campusClock(new Date(), 'Africa/Nairobi').dayOfWeek;
+
   it('picks up a rescheduled class without the lecturer opening their units page', async () => {
     const lec = await makeLecturer();
-    const now = new Date();
-    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot((now.getDay() + 1) % 7, '00:00', '23:59')])] };
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot((campusToday() + 1) % 7, '00:00', '23:59')])] };
     const before = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
     expect((before.body as { data: unknown }).data).toBeNull();
 
     resetTimetableSyncState(); // skip the throttle
-    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot(now.getDay(), '00:00', '23:59')])] };
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 103', 5, [slot(campusToday(), '00:00', '23:59')])] };
     const after = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
     expect((after.body as { data: { code: string } | null }).data).toMatchObject({ code: 'RESCH 103' });
+  });
+
+  it('reads the slot in campus time, not the server clock (a UTC server is 3 hours behind EAT)', async () => {
+    const lec = await makeLecturer();
+    // A one-hour window around now on campus. Read in UTC, it is three hours in the future.
+    const hour = Number(campusClock(new Date(), 'Africa/Nairobi').timeOfDay.slice(0, 2));
+    const hh = (h: number) => `${String(Math.min(23, Math.max(0, h))).padStart(2, '0')}`;
+    const window = slot(campusToday(), `${hh(hour)}:00`, `${hh(hour)}:59`);
+    smarttt[lec.staffNumber] = { units: [unit('RESCH 104', 5, [window])] };
+
+    const res = await request(app).get('/api/v1/units/current').set('Authorization', lec.auth);
+    expect((res.body as { data: { code: string } | null }).data).toMatchObject({ code: 'RESCH 104' });
   });
 });

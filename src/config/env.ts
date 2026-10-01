@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { isValidTimeZone } from '../common/utils/campus-time.js';
 
 /**
  * Environment is validated once, at boot. A malformed or missing variable
@@ -179,6 +180,14 @@ const envSchema = z
     // A cached fix from the corridor or the bus stop is not evidence of being
     // in the room now.
     GEOFENCE_MAX_FIX_AGE_SECONDS: z.coerce.number().int().min(5).max(600).default(60),
+
+    // The zone timetable slots are written in. The server's own clock is usually
+    // UTC, so "is this class on now?" is always answered in this zone instead
+    // (src/common/utils/campus-time.ts). IANA name, e.g. Africa/Nairobi.
+    CAMPUS_TIMEZONE: z
+      .string()
+      .default('Africa/Nairobi')
+      .refine(isValidTimeZone, { message: 'is not a known IANA time zone, e.g. Africa/Nairobi' }),
 
     LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),

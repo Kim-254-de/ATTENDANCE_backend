@@ -1,6 +1,7 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { isUniqueViolation } from '../../db/database.js';
 import { logger } from '../../config/logger.js';
+import { campusClock } from '../../common/utils/campus-time.js';
 import { env } from '../../config/env.js';
 import { erpClient } from '../../integrations/erp/index.js';
 import { smartttClient } from '../../integrations/smarttt/index.js';
@@ -258,9 +259,9 @@ async function notifyAdminsIfScheduled(unitId: string, lecturerName: string): Pr
  */
 export async function getCurrentUnit(lecturerUserId: string, lecturer?: LecturerIdentity): Promise<UnitDto | null> {
   if (lecturer) await syncUnitsFromTimetable(lecturerUserId, lecturer);
-  const now = new Date();
-  const timeOfDay = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  const unit = await unitRepository.findCurrentUnitForLecturer(lecturerUserId, now.getDay(), timeOfDay);
+  // Slots are campus time; the server's clock is usually UTC.
+  const { dayOfWeek, timeOfDay } = campusClock(new Date(), env.CAMPUS_TIMEZONE);
+  const unit = await unitRepository.findCurrentUnitForLecturer(lecturerUserId, dayOfWeek, timeOfDay);
   return unit ? toUnitDto(unit) : null;
 }
 

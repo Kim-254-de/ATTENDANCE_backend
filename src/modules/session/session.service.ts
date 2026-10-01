@@ -1,4 +1,5 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
+import { atCampusTime, campusClock } from '../../common/utils/campus-time.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { auditService } from '../audit/index.js';
@@ -234,14 +235,15 @@ async function resolveClosesAt(
     return clientClosesAt;
   }
 
-  if (opensAt.getDay() !== schedule.dayOfWeek) {
+  // Slots are campus time; the server's clock is usually UTC.
+  if (campusClock(opensAt, env.CAMPUS_TIMEZONE).dayOfWeek !== schedule.dayOfWeek) {
     throw AppError.forbidden(
       `This class is not scheduled for today (window: ${schedule.startTime}–${schedule.endTime}).`,
     );
   }
 
-  const slotStart = atTimeOfDay(opensAt, schedule.startTime);
-  const slotEnd = atTimeOfDay(opensAt, schedule.endTime);
+  const slotStart = atCampusTime(opensAt, schedule.startTime, env.CAMPUS_TIMEZONE);
+  const slotEnd = atCampusTime(opensAt, schedule.endTime, env.CAMPUS_TIMEZONE);
   if (opensAt < slotStart || opensAt > slotEnd) {
     throw AppError.forbidden(
       `You can only activate this class during its scheduled time (${schedule.startTime}–${schedule.endTime}).`,
@@ -249,14 +251,6 @@ async function resolveClosesAt(
   }
 
   return slotEnd;
-}
-
-/** `date`'s calendar day, at the given "HH:MM" time. */
-function atTimeOfDay(date: Date, hhmm: string): Date {
-  const [hh, mm] = hhmm.split(':');
-  const result = new Date(date);
-  result.setHours(Number(hh), Number(mm), 0, 0);
-  return result;
 }
 
 export interface CurrentQr {

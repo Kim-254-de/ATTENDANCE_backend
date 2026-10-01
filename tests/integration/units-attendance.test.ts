@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { campusClock } from '../../src/common/utils/campus-time.js';
 
 /**
  * Units, allocations and check-in against a real Postgres database, with the
@@ -144,7 +145,7 @@ const api = (auth: string) => ({
  * activating a class inside it. Spanning today's whole day keeps tests free
  * to run at any time of day without tripping that gate.
  */
-const SCHEDULE = { dayOfWeek: new Date().getDay(), startTime: '00:00', endTime: '23:59' };
+const SCHEDULE = { dayOfWeek: campusClock(new Date(), 'Africa/Nairobi').dayOfWeek, startTime: '00:00', endTime: '23:59' };
 
 /** A real admin verifies a unit before it can activate a class; these tests stand in for that. */
 async function verifyUnit(unitId: string) {
