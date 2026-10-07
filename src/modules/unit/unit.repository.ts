@@ -511,6 +511,22 @@ export async function syncRosterAllocations(
       [unitId, SYNCED_SOURCES, entries.map((e) => e.registrationNumber)],
       client,
     );
+    // A student who already has an account is attached here: linkAllocationsToStudent
+    // only runs once, at registration, so a roster synced after that would
+    // otherwise leave them unlinked and every scan "not registered" for the unit.
+    await query(
+      `UPDATE unit_allocations a
+          SET student_user_id = p.user_id, updated_at = NOW()
+         FROM student_profiles p
+        WHERE a.unit_id = $1
+          AND a.student_user_id IS NULL
+          AND p.registration_number = a.registration_number
+          AND NOT EXISTS (
+            SELECT 1 FROM unit_allocations b WHERE b.unit_id = a.unit_id AND b.student_user_id = p.user_id
+          )`,
+      [unitId],
+      client,
+    );
   });
 }
 
