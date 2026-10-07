@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authRouter } from './modules/auth/index.js';
+import { authRouter, passkeyRouter } from './modules/auth/index.js';
 import { sessionRouter } from './modules/session/index.js';
 import { lecturerRouter } from './modules/lecturer/lecturer.routes.js';
 import { unitRouter } from './modules/unit/index.js';
@@ -19,6 +19,7 @@ import { integrationRouter } from './modules/integration/index.js';
 export const apiRouter: Router = Router();
 
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/auth/passkeys', passkeyRouter);
 apiRouter.use('/sessions', sessionRouter);
 apiRouter.use('/lecturers', lecturerRouter);
 apiRouter.use('/units', unitRouter);
