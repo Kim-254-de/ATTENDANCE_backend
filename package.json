@@ -19,11 +19,13 @@
     "test:watch": "vitest",
     "db:migrate": "node db/migrate.mjs",
     "dev:verify-unit": "node scripts/dev-verify-unit.mjs",
+    "dev:enrol-card": "node scripts/dev-enrol-card.mjs",
     "dev:seed-attendance": "node scripts/dev-seed-attendance.mjs",
     "dev:set-room": "node scripts/dev-set-room.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
+    "@simplewebauthn/server": "^14.0.3",
     "compression": "^1.7.5",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

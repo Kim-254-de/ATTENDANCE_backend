@@ -49,7 +49,7 @@ describe('resetPasswordSchema', () => {
   it('applies the same password policy as registration', () => {
     // Too short.
     expect(
-      resetPasswordSchema.safeParse({ ...valid, password: 'Short1aa', confirmPassword: 'Short1aa' })
+      resetPasswordSchema.safeParse({ ...valid, password: 'Shr1a', confirmPassword: 'Shr1a' })
         .success,
     ).toBe(false);
     // No digit.

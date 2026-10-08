@@ -218,7 +218,7 @@ export async function identifyFace(
   image: string,
   context: RequestContext,
 ): Promise<IdentifyResult> {
-  const session = await sessionService.getLiveOwnedSession(sessionId, lecturerUserId);
+  const session = await sessionService.getLiveOwnedSession(sessionId, lecturerUserId, 'FACE');
   const embedded = await embedOrThrow(image);
   const face = usableFace(embedded, { allowOthersInFrame: true });
 
@@ -281,7 +281,7 @@ export async function confirmFace(
   matchToken: string,
   context: RequestContext,
 ): Promise<attendanceService.FaceCheckInResult & { fullName: string }> {
-  const session = await sessionService.getLiveOwnedSession(sessionId, lecturerUserId);
+  const session = await sessionService.getLiveOwnedSession(sessionId, lecturerUserId, 'FACE');
 
   const verdict = verifyMatchToken(matchToken, session.id, session.secret);
   if (!verdict.valid) {

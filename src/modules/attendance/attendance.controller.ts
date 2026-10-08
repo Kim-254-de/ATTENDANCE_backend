@@ -3,7 +3,7 @@ import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as attendanceService from './attendance.service.js';
-import type { CheckInInput, SessionIdParam } from './attendance.schema.js';
+import type { CardCheckInInput, CheckInInput, SessionIdParam } from './attendance.schema.js';
 
 /** HTTP in, HTTP out. */
 
@@ -22,6 +22,22 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
     { ...clientFingerprint(req), requestId: req.requestId },
     location,
   );
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/card-check-in
+ *
+ * Called by a card terminal, authenticated by its shared key rather than as a
+ * student, so there is no `req.auth` to read a user id from: the card names
+ * the student.
+ */
+export async function cardCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, cardUid } = req.body as CardCheckInInput;
+  const result = await attendanceService.checkInByCard(sessionId, cardUid, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
   sendCreated(res, result);
 }
 

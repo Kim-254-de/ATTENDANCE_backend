@@ -200,6 +200,7 @@ row here and nothing else, however many times the code rotates.
 | `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
 | `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
 | `room_code` | `varchar(80)` null | The room of the meeting the session was activated for (`unit_slots.room_code`), fixed at activation (`017_unit_slots.sql`) |
+| `verification_methods` | `text[]` | Which of `QR` / `CARD` / `FINGERPRINT` / `FACE` this class accepts, as the lecturer ticked them. Non-empty, and a subset of the four (CHECK constraint, default `{QR,FACE}` since `020_unify_verification_method.sql`). A check-in by a method not listed is refused (`019_card_verification.sql`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | Unless `geofence_mode` is `OFF` or `AWAITING_LOCATION`, the centre and radius are set (CHECK constraint) |
 
@@ -243,13 +244,13 @@ module to reject a second one.
 | `student_user_id` | `uuid` | FK -> `users(id)` |
 | `allocation_id` | `uuid` null | FK -> `unit_allocations(id)` |
 | `recorded_at` | `timestamptz` | Defaults to `NOW()` |
-| `qr_age_seconds` | `integer` null | How old the scanned code was |
+| `qr_age_seconds` | `integer` null | How old the scanned code was. Null for a method with no rotating code, e.g. a card swipe |
+| `verification_method` | text | `QR` / `CARD` / `FINGERPRINT` / `FACE` (CHECK constraint, default `QR`). What proved the student was present; every row predating `019_card_verification.sql` was a QR scan |
 | `ip_address` / `user_agent` | text null | |
 | `distance_m` | `double precision` null | How far the student's reading was from the fence's centre |
 | `location_accuracy_m` | `double precision` null | The reading's reported accuracy |
 | `geofence_result` | text | `INSIDE` / `NOT_CHECKED` (CHECK constraint, default `NOT_CHECKED`). `INSIDE` requires both columns above |
-| `method` | text | `QR` / `FACE` (CHECK constraint, default `QR`). How the student was recorded (`db/migrations/019_face_recognition.sql`) |
-| `face_score` | `real` null | Cosine similarity of the confirmed face match. Required when `method = 'FACE'` |
+| `face_score` | `real` null | Cosine similarity of the confirmed face match. Required when `verification_method = 'FACE'` (`020_unify_verification_method.sql` replaced the face branch's own `method` column with `verification_method`) |
 | `confirmed_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who confirmed a face match on the terminal |
 | | | **UNIQUE (session_id, student_user_id)** -- load-bearing. Also what makes QR and face each other's fallback: whichever comes first is the record |
 
@@ -325,6 +326,39 @@ lecturer, who could otherwise move the fence to wherever their absent students a
 | `surveyed_by_user_id` | `uuid` null | FK -> `users(id)` |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | `latitude`, `longitude` and `surveyed_at` are all set or all null (CHECK constraint) |
+
+---
+
+### `student_cards`
+
+A student's ID card, for check-in at a terminal
+([`docs/card-check-in.md`](card-check-in.md)). Written by
+`scripts/dev-enrol-card.mjs` until there is an administrator interface; read on
+every swipe by `src/modules/attendance/card.repository.ts`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `student_user_id` | `uuid` | FK -> `users(id)`, cascade |
+| `card_uid_hmac` | `varchar(64)` | **HMAC-SHA256 hex of the UID, keyed with `CARD_UID_SECRET`.** Unique. The UID itself is never stored |
+| `label` | `varchar(64)` null | Free text for whoever has to find a physical card, e.g. "re-issued Oct 2026" |
+| `status` | text | `ACTIVE` / `REVOKED` (CHECK constraint) |
+| `issued_at` | `timestamptz` | Defaults to `NOW()` |
+| `revoked_at` | `timestamptz` null | Set exactly when status is `REVOKED` (CHECK constraint) |
+| `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`, set null |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | **UNIQUE (student_user_id) WHERE status = 'ACTIVE'** -- load-bearing: one usable card each |
+
+A card UID is only 32-56 bits, so unlike the 256-bit tokens above a plain
+SHA-256 of one could be enumerated from a dump in seconds and written onto a
+blank card. The HMAC key lives in the environment, not the database — see
+[`src/common/utils/card-uid.ts`](../src/common/utils/card-uid.ts). Rotating
+`CARD_UID_SECRET` invalidates every enrolled card, which is the recovery path
+if this table leaks.
+
+Rows are never deleted. A lost card is `REVOKED` so the attendance it already
+recorded keeps its meaning, and the partial unique index exempts revoked rows
+so a replacement can be enrolled alongside the history.
 
 ---
 

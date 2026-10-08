@@ -118,12 +118,14 @@ async function addToUnit(unitId: string, studentId: string) {
     [unitId, `REG/F${uniq()}`, studentId]);
 }
 
-async function openSession(unitId: string, lecturerId: string, status = 'OPEN') {
+/** A class taking check-ins now. Without `methods`, the column default applies: QR and face. */
+async function openSession(unitId: string, lecturerId: string, status = 'OPEN', methods?: string[]) {
   const { generateSessionSecret } = await import('../../src/modules/session/session.token.js');
   const { rows: [s] } = await pool.query<{ id: string; qr_secret: string }>(
     `INSERT INTO attendance_sessions (unit_id, lecturer_user_id, qr_secret, status, opens_at, closes_at, rotation_seconds)
      VALUES ($1, $2, $3, $4, NOW() - INTERVAL '5 minutes', NOW() + INTERVAL '1 hour', 60) RETURNING id, qr_secret`,
     [unitId, lecturerId, generateSessionSecret(), status]);
+  if (methods) await pool.query(`UPDATE attendance_sessions SET verification_methods = $2 WHERE id = $1`, [s!.id, methods]);
   return { id: s!.id, secret: s!.qr_secret };
 }
 
@@ -357,14 +359,14 @@ describe('identify and confirm', () => {
       .post(`/sessions/${c.session.id}/face/confirm`, { matchToken: match.matchToken }).expect(201);
     expect(body(confirmed).data).toMatchObject({ studentUserId: c.students[1]!.id, fullName: match.student.fullName });
 
-    const { rows: [record] } = await pool.query<{ method: string; face_score: number; confirmed_by_user_id: string; geofence_result: string }>(
-      `SELECT method, face_score, confirmed_by_user_id, geofence_result FROM attendance_records WHERE session_id = $1`, [c.session.id]);
-    expect(record).toMatchObject({ method: 'FACE', confirmed_by_user_id: c.lecturer.id, geofence_result: 'NOT_CHECKED' });
+    const { rows: [record] } = await pool.query<{ verification_method: string; face_score: number; confirmed_by_user_id: string; geofence_result: string }>(
+      `SELECT verification_method, face_score, confirmed_by_user_id, geofence_result FROM attendance_records WHERE session_id = $1`, [c.session.id]);
+    expect(record).toMatchObject({ verification_method: 'FACE', confirmed_by_user_id: c.lecturer.id, geofence_result: 'NOT_CHECKED' });
     expect(record!.face_score).toBeCloseTo(match.score, 3);
 
-    const list = body<{ attendees: Array<{ studentUserId: string; method: string }> }>(
+    const list = body<{ attendees: Array<{ studentUserId: string; verificationMethod: string }> }>(
       await api(c.lecturer.auth).get(`/attendance/sessions/${c.session.id}`).expect(200)).data;
-    expect(list.attendees).toEqual([expect.objectContaining({ studentUserId: c.students[1]!.id, method: 'FACE' })]);
+    expect(list.attendees).toEqual([expect.objectContaining({ studentUserId: c.students[1]!.id, verificationMethod: 'FACE' })]);
 
     // Confirming the same match again is the one-record rule, like a double scan.
     await api(c.lecturer.auth).post(`/sessions/${c.session.id}/face/confirm`, { matchToken: match.matchToken }).expect(409);
@@ -449,6 +451,21 @@ describe('identify and confirm', () => {
     const paused = await openSession(c.unitId, c.lecturer.id, 'PAUSED');
     await api(c.lecturer.auth).post(`/sessions/${paused.id}/face/identify`, { image }).expect(409);
     expect(faceCalls).toHaveLength(0);
+  });
+
+  it("is refused in a class whose lecturer didn't tick face, and a class gets QR and face by default", async () => {
+    const c = await classroom(1);
+    await enroll(c, c.students[0]!, nextPerson()).expect(201);
+    const { rows: [byDefault] } = await pool.query<{ verification_methods: string[] }>(
+      `SELECT verification_methods FROM attendance_sessions WHERE id = $1`, [c.session.id]);
+    expect(byDefault!.verification_methods).toEqual(['QR', 'FACE']);
+
+    const qrOnly = await openSession(c.unitId, c.lecturer.id, 'OPEN', ['QR']);
+    const callsBefore = faceCalls.length;
+    const res = await api(c.lecturer.auth)
+      .post(`/sessions/${qrOnly.id}/face/identify`, { image: photo(`qr-only-${uniq()}`, one(faceOf(nextPerson()))) }).expect(409);
+    expect(body(res).error?.message).toBe('This class is not taking face check-ins.');
+    expect(faceCalls).toHaveLength(callsBefore); // refused before the photo reaches face-service
   });
 
   it('confirms only a genuine, current match for this session', async () => {
