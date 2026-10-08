@@ -5,7 +5,7 @@ import { query, queryOne } from '../../db/database.js';
  *
  * Every query here takes a `department_id` as `$1` and is scoped through
  * `lecturer_profiles.department_id`. A unit has no department column of its own
- * on purpose (`db/migrations/020_departments.sql`): its department is its
+ * on purpose (`db/migrations/021_departments.sql`): its department is its
  * lecturer's, so `units.lecturer_user_id -> lecturer_profiles.user_id` is the
  * only route in, and nothing can drift out of agreement with it.
  *
@@ -394,7 +394,7 @@ export interface TimekeepingRow {
  *
  * Sessions with no `scheduled_start_at` are excluded rather than reported as
  * on time: there is no schedule behind them, so nothing to be late against —
- * see `db/migrations/020_departments.sql`. `scheduledStartAt` is therefore
+ * see `db/migrations/021_departments.sql`. `scheduledStartAt` is therefore
  * never null on these rows.
  */
 export async function listTimekeeping(

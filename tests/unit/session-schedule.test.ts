@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * `resolveWindow` decides when a session closes, which room it is fenced to,
- * and — since db/migrations/020_departments.sql — what its meeting was *due*
+ * and — since db/migrations/021_departments.sql — what its meeting was *due*
  * to start, which is the whole basis of the department module's lecturer
  * punctuality figures. Getting `scheduledStartAt` wrong would silently mark
  * every lecturer late (or every lecturer punctual), so it is asserted against

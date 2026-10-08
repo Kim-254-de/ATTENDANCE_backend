@@ -43,13 +43,13 @@ const fullNameSchema = z
   .transform((value) => value.replace(/\s+/g, ' '));
 
 /**
- * Password policy. Length does more for strength than character-class rules,
- * so the minimum is 12 with a light composition requirement rather than a
- * short password forced through four character classes.
+ * Password policy: at least 6 characters with a lowercase letter, an
+ * uppercase letter and a digit. Kept short at the institution's request; the
+ * sign-in lockout (LOGIN_MAX_FAILED_ATTEMPTS) is what limits guessing.
  */
 export const passwordSchema = z
   .string()
-  .min(12, 'Password must be at least 12 characters.')
+  .min(6, 'Password must be at least 6 characters.')
   // Argon2 has no practical input limit, but capping the length stops a
   // megabyte-sized password being used to burn CPU.
   .max(128, 'Password must be at most 128 characters.')

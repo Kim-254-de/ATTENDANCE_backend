@@ -1,5 +1,5 @@
 import { query, queryOne } from '../../db/database.js';
-import type { AttendanceSessionStatus, GeofenceMode } from '../../db/types.js';
+import type { AttendanceSessionStatus, GeofenceMode, VerificationMethod } from '../../db/types.js';
 
 /**
  * All SQL for the session module. Every query is parameterised.
@@ -32,6 +32,8 @@ export interface SessionForQr {
    */
   scheduledStartAt: Date | null;
   geofence: SessionGeofence;
+  /** Which of the four the lecturer ticked when activating. Never empty. */
+  verificationMethods: VerificationMethod[];
 }
 
 /**
@@ -65,6 +67,7 @@ interface SessionRow {
   geofence_lng: number | null;
   geofence_radius_m: number | null;
   geofence_anchor_accuracy_m: number | null;
+  verification_methods: VerificationMethod[];
 }
 
 const toSession = (row: SessionRow): SessionForQr => ({
@@ -88,12 +91,14 @@ const toSession = (row: SessionRow): SessionForQr => ({
     radiusMetres: row.geofence_radius_m,
     anchorAccuracyMetres: row.geofence_anchor_accuracy_m,
   },
+  verificationMethods: row.verification_methods,
 });
 
 const SELECT_SESSION = `
   SELECT s.id, s.unit_id, s.lecturer_user_id, s.qr_secret, s.status, s.title,
          s.opens_at, s.closes_at, s.rotation_seconds, s.room_code, s.scheduled_start_at,
          s.geofence_mode, s.geofence_lat, s.geofence_lng, s.geofence_radius_m, s.geofence_anchor_accuracy_m,
+         s.verification_methods,
          u.code AS unit_code, u.name AS unit_name
     FROM attendance_sessions s
     JOIN units u ON u.id = s.unit_id
@@ -132,6 +137,8 @@ export interface CreateSessionArgs {
   /** When that meeting was due to start; null when the unit has no schedule (session.service.ts resolveWindow). */
   scheduledStartAt: Date | null;
   geofence: SessionGeofence;
+  /** The methods the lecturer ticked. Validated non-empty by the schema. */
+  verificationMethods: VerificationMethod[];
 }
 
 export async function createSession(args: CreateSessionArgs): Promise<SessionForQr> {
@@ -139,8 +146,8 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
     `INSERT INTO attendance_sessions
        (unit_id, lecturer_user_id, qr_secret, title, opens_at, closes_at, rotation_seconds, status,
         geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m, room_code,
-        scheduled_start_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12, $13, $14)
+        scheduled_start_at, verification_methods)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12, $13, $14, $15::text[])
      RETURNING id`,
     [
       args.unitId,
@@ -157,6 +164,7 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
       args.geofence.anchorAccuracyMetres,
       args.roomCode,
       args.scheduledStartAt,
+      args.verificationMethods,
     ],
   );
 

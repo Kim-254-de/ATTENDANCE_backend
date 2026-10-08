@@ -12,7 +12,7 @@ parameter anywhere in this module to tamper with.
 
 A unit's department is derived, not stored —
 `units.lecturer_user_id → lecturer_profiles.user_id → department_id`
-(`db/migrations/020_departments.sql`). `units` deliberately has no
+(`db/migrations/021_departments.sql`). `units` deliberately has no
 `department_id` column: a second copy could disagree with the first the moment
 a unit changes hands. Every query here therefore starts from
 `lecturer_profiles WHERE department_id = $1`.

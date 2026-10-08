@@ -28,13 +28,22 @@ describe('lecturerRegistrationSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a password shorter than 12 characters', () => {
+  it('rejects a password shorter than 6 characters', () => {
     const result = lecturerRegistrationSchema.safeParse({
       ...valid,
-      password: 'Short1aa',
-      confirmPassword: 'Short1aa',
+      password: 'Shr1a',
+      confirmPassword: 'Shr1a',
     });
     expect(result.success).toBe(false);
+  });
+
+  it('accepts a 6-character password with a lowercase letter, an uppercase letter and a digit', () => {
+    const result = lecturerRegistrationSchema.safeParse({
+      ...valid,
+      password: 'Abcde1',
+      confirmPassword: 'Abcde1',
+    });
+    expect(result.success).toBe(true);
   });
 
   it('rejects a password containing the staff number', () => {

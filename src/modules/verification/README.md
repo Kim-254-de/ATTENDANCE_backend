@@ -3,9 +3,25 @@
 **Face check-in**: QR's fallback, and QR is face's. Plan, decisions and
 phases: [`docs/face-recognition.md`](../../../docs/face-recognition.md).
 
-A student is recorded **once** per session, by QR or by face, whichever comes
-first. The second attempt gets the usual *"already been recorded"* 409 from the
-`UNIQUE (session_id, student_user_id)` constraint on `attendance_records`.
+How a student proves they are the one present. Four methods are in scope, and
+a lecturer ticks any combination when activating a class
+(`verificationMethods` on `POST /sessions`; **QR code and face** when none are
+chosen). A check-in by a method the class did not enable is refused with a 409.
+
+| Method | Status |
+|---|---|
+| Rotating QR code | **Built**: `src/modules/session/session.token.ts`, `POST /attendance/check-in`, and `docs/student-app-checkin.md` |
+| Facial recognition | **Built**: this module, on the lecturer's phone as the terminal |
+| Student ID card swipe | **Built**: `POST /attendance/card-check-in`, `src/modules/attendance/card.repository.ts`, `docs/card-check-in.md`. Only the hardware is outstanding: a terminal has to read a card and post its UID |
+| Fingerprint | Not implemented |
+
+Whichever enabled method comes first records the student; the second attempt
+gets the usual *"already been recorded"* 409 from the
+`UNIQUE (session_id, student_user_id)` constraint on `attendance_records`, and
+each record keeps the method that produced it in `verification_method`.
+`FINGERPRINT` is accepted in a session's method list so the lecturer's
+interface can offer it, but the schema refuses a class that enables *only*
+fingerprint: nobody could check in to it.
 
 ## How it fits together
 
@@ -14,7 +30,7 @@ lecturer's phone ──photo──► verification ──image──► face-ser
                                  │  ◄──template────┘
                                  │  compares against the unit's enrolled students
                                  ▼
-                       attendance.recordFaceCheckIn ──► attendance_records (method FACE)
+                       attendance.recordFaceCheckIn ──► attendance_records (verification_method FACE)
 ```
 
 face-service (`face-service/`) only turns a photo into a template. Which
@@ -33,7 +49,7 @@ the model can be swapped without touching data.
    session's unit** who still consent. A clear winner comes back with a
    **match token**. Nothing is recorded.
 4. **Confirm.** The lecturer checks the face against the person and sends the
-   token back. The student is recorded with `method = 'FACE'`, the score, and
+   token back. The student is recorded with `verification_method = 'FACE'`, the score, and
    who confirmed.
 
 ## The match token
@@ -67,7 +83,7 @@ similarity. A match needs:
 
 The session must be open and inside its window, as for QR. The unit roster
 (`GET /units/:unitId/students`) shows `faceConsent` and `faceEnrolled` for each
-student, and the attendance list shows each record's `method`.
+student, and the attendance list shows each record's `verificationMethod`.
 
 ## Errors
 
