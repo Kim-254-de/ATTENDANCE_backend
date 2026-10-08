@@ -52,12 +52,11 @@ describe('email delivery', () => {
     await notificationService.sendPasswordReset(reset);
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]![0]).toMatchObject({
-      from: 'Smart Attendance <no-reply@test.local>',
-      to: reset.to,
-      subject: expect.stringMatching(/password/i),
-      text: expect.stringContaining('plain-token'),
-    });
+    const sent = send.mock.calls[0]![0] as { from: string; to: string; subject: string; text: string };
+    expect(sent.from).toBe('Smart Attendance <no-reply@test.local>');
+    expect(sent.to).toBe(reset.to);
+    expect(sent.subject).toMatch(/password/i);
+    expect(sent.text).toContain('plain-token');
   });
 
   it('treats a refusal reported in the body as a failure', async () => {

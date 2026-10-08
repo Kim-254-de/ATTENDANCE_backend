@@ -12,6 +12,18 @@ student portal: `ATTENDANCE_fronted`.
 
 ---
 
+## Merged with card check-in (9 October 2026)
+
+The card branch (`origin/PK`) let a lecturer tick which methods a class
+accepts and recorded each check-in's `verification_method`. Merging it:
+
+- **Methods per class:** the lecturer's ticks now apply to face too, and a
+  class activated without a choice accepts **QR and face**. A lecturer can
+  untick face, or add card.
+- **One column:** `attendance_records.verification_method` (QR / FINGERPRINT /
+  FACE / CARD) replaces face's `method`; migration 020 copies face records
+  across, moves the face evidence rule onto it, and drops `method`.
+
 ## Decisions
 
 | Question | Decision |
@@ -105,8 +117,9 @@ Builds out `src/modules/verification`.
 - `face_enrollments`: student, embeddings, model version, enrolled by,
   timestamps. One per student.
 - `users.face_consent_at`.
-- `attendance_records`: `method` (`QR` / `FACE`, default `QR`), `face_score`,
-  `confirmed_by_user_id`.
+- `attendance_records`: `face_score`, `confirmed_by_user_id`, and a `method`
+  column that migration 020 later merged into the card branch's
+  `verification_method` (see "Merged with card check-in" above).
 
 **Endpoints**
 
@@ -130,7 +143,7 @@ JSON size limit (like `/auth/me/avatar`).
 `FACE_SERVICE_URL` unset, face check-in is off (503) and QR is unaffected.
 
 As built, also: the unit roster shows `faceConsent` / `faceEnrolled` per
-student, and the attendance list shows each record's `method`. Error codes and
+student, and the attendance list shows each record's `verificationMethod`. Error codes and
 the full contract: the module README.
 
 Tests use a fake engine behind the same interface, so they do not need the

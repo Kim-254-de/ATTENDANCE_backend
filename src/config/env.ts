@@ -172,6 +172,18 @@ const envSchema = z
     // Pixel width of a rendered PNG. Large enough to scan from the back row.
     QR_IMAGE_SIZE: z.coerce.number().int().min(128).max(2048).default(512),
 
+    // --- Student ID card check-in ---
+    // The shared key every card terminal presents as X-API-Key. Unset = card
+    // check-in is refused outright, which is the right default: a terminal
+    // endpoint that anyone can post to would mark a hall present.
+    CARD_TERMINAL_API_KEY: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
+    // Keys the HMAC that card UIDs are stored under. A card UID is only 32-56
+    // bits, so a plain hash of it could be enumerated from a database dump and
+    // written onto blank cards; an HMAC a dump does not contain cannot be.
+    // Changing this invalidates every enrolled card, which is the escape hatch
+    // if the table ever leaks.
+    CARD_UID_SECRET: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
+
     // --- Geofenced check-in (session.geofence.ts) ---
     // How far from the room's centre a student may be. Accuracy counts in the
     // student's favour, so the effective reach is radius + reported accuracy.
@@ -253,6 +265,15 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['FACE_SERVICE_KEY'],
         message: 'is required when FACE_SERVICE_URL is set',
+      });
+    }
+    // A terminal key without the secret would accept swipes it can never match
+    // a card to: every one would 404. Fail at boot instead of at the door.
+    if (env.CARD_TERMINAL_API_KEY && !env.CARD_UID_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CARD_UID_SECRET'],
+        message: 'is required when CARD_TERMINAL_API_KEY is set',
       });
     }
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
