@@ -135,6 +135,11 @@ const envSchema = z
     // Per lecturer. Stops every units-page load from calling SMARTTT.
     SMARTTT_SYNC_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
 
+    // --- WebAuthn / phone biometrics ---
+    WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),
+    WEBAUTHN_RP_NAME: z.string().min(1).default('Smart Attendance'),
+    WEBAUTHN_ORIGIN: z.string().url().default('http://localhost:5173'),
+
     // --- Rate limiting ---
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),

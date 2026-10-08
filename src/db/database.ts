@@ -143,7 +143,15 @@ export function isUniqueViolation(error: unknown): error is PostgresError {
  * rather than as a 500 on the first registration.
  */
 export async function verifyDatabaseConnection(): Promise<void> {
-  const required = ['users', 'lecturer_profiles', 'student_profiles', 'email_verification_tokens', 'audit_logs'];
+  const required = [
+    'users',
+    'lecturer_profiles',
+    'student_profiles',
+    'email_verification_tokens',
+    'audit_logs',
+    'webauthn_credentials',
+    'webauthn_challenges',
+  ];
 
   const result = await query<{ table_name: string }>(
     `SELECT table_name
