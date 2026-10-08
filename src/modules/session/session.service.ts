@@ -117,7 +117,7 @@ export async function createSession(
   }
 
   const opensAt = input.opensAt ?? new Date();
-  const { closesAt, roomCode } = await resolveWindow(input.unitId, opensAt, input.closesAt);
+  const { closesAt, roomCode, scheduledStartAt } = await resolveWindow(input.unitId, opensAt, input.closesAt);
   const room = await sessionRepository.findRoom(roomCode);
   const geofence = resolveInitialGeofence(input.geofence, room, input.location);
 
@@ -130,6 +130,7 @@ export async function createSession(
     closesAt,
     rotationSeconds: input.rotationSeconds ?? env.QR_ROTATION_SECONDS,
     roomCode,
+    scheduledStartAt,
     geofence,
   });
 
@@ -228,18 +229,23 @@ function anchorUnavailable(choice: Extract<CentreChoice, { ok: false }>): AppErr
  *
  * A unit with no slots at all (legacy data, before schedules existed) falls
  * back to the client-supplied `closesAt` — there is no window to derive one from.
+ *
+ * `scheduledStartAt` is the matched meeting's own start, kept so a department
+ * can see how late a class actually began (`opensAt - scheduledStartAt`). It is
+ * null on the fallback path on purpose: with no schedule there is nothing to be
+ * late against, and a zero there would read as "started exactly on time".
  */
-async function resolveWindow(
+export async function resolveWindow(
   unitId: string,
   opensAt: Date,
   clientClosesAt: Date | undefined,
-): Promise<{ closesAt: Date; roomCode: string | null }> {
+): Promise<{ closesAt: Date; roomCode: string | null; scheduledStartAt: Date | null }> {
   const slots = await findUnitSlots(unitId);
   if (slots.length === 0) {
     if (!clientClosesAt) {
       throw AppError.badRequest('This unit has no issued schedule; closesAt is required.');
     }
-    return { closesAt: clientClosesAt, roomCode: null };
+    return { closesAt: clientClosesAt, roomCode: null, scheduledStartAt: null };
   }
 
   const { dayOfWeek } = campusClock(opensAt, env.CAMPUS_TIMEZONE);
@@ -250,7 +256,11 @@ async function resolveWindow(
     return opensAt >= start && opensAt <= end;
   });
   if (now) {
-    return { closesAt: atCampusTime(opensAt, now.endTime, env.CAMPUS_TIMEZONE), roomCode: now.roomCode };
+    return {
+      closesAt: atCampusTime(opensAt, now.endTime, env.CAMPUS_TIMEZONE),
+      roomCode: now.roomCode,
+      scheduledStartAt: atCampusTime(opensAt, now.startTime, env.CAMPUS_TIMEZONE),
+    };
   }
 
   if (today.length === 0) {

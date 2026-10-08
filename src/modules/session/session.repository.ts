@@ -25,6 +25,12 @@ export interface SessionForQr {
   rotationSeconds: number;
   /** The room of the meeting this session was activated for (unit_slots.room_code), fixed at activation. Null when unknown. */
   roomCode: string | null;
+  /**
+   * When the meeting this session was activated inside was due to start.
+   * Null when there was no schedule to compare against; `opensAt - this` is
+   * how late the class actually started (department.repository.ts).
+   */
+  scheduledStartAt: Date | null;
   geofence: SessionGeofence;
 }
 
@@ -53,6 +59,7 @@ interface SessionRow {
   closes_at: Date;
   rotation_seconds: number;
   room_code: string | null;
+  scheduled_start_at: Date | null;
   geofence_mode: GeofenceMode;
   geofence_lat: number | null;
   geofence_lng: number | null;
@@ -73,6 +80,7 @@ const toSession = (row: SessionRow): SessionForQr => ({
   closesAt: row.closes_at,
   rotationSeconds: row.rotation_seconds,
   roomCode: row.room_code,
+  scheduledStartAt: row.scheduled_start_at,
   geofence: {
     mode: row.geofence_mode,
     latitude: row.geofence_lat,
@@ -84,7 +92,7 @@ const toSession = (row: SessionRow): SessionForQr => ({
 
 const SELECT_SESSION = `
   SELECT s.id, s.unit_id, s.lecturer_user_id, s.qr_secret, s.status, s.title,
-         s.opens_at, s.closes_at, s.rotation_seconds, s.room_code,
+         s.opens_at, s.closes_at, s.rotation_seconds, s.room_code, s.scheduled_start_at,
          s.geofence_mode, s.geofence_lat, s.geofence_lng, s.geofence_radius_m, s.geofence_anchor_accuracy_m,
          u.code AS unit_code, u.name AS unit_name
     FROM attendance_sessions s
@@ -121,6 +129,8 @@ export interface CreateSessionArgs {
   rotationSeconds: number;
   /** The room of the meeting being activated; null when the timetable names none. */
   roomCode: string | null;
+  /** When that meeting was due to start; null when the unit has no schedule (session.service.ts resolveWindow). */
+  scheduledStartAt: Date | null;
   geofence: SessionGeofence;
 }
 
@@ -128,8 +138,9 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
   const created = await queryOne<{ id: string }>(
     `INSERT INTO attendance_sessions
        (unit_id, lecturer_user_id, qr_secret, title, opens_at, closes_at, rotation_seconds, status,
-        geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m, room_code)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12, $13)
+        geofence_mode, geofence_lat, geofence_lng, geofence_radius_m, geofence_anchor_accuracy_m, room_code,
+        scheduled_start_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9, $10, $11, $12, $13, $14)
      RETURNING id`,
     [
       args.unitId,
@@ -145,6 +156,7 @@ export async function createSession(args: CreateSessionArgs): Promise<SessionFor
       args.geofence.radiusMetres,
       args.geofence.anchorAccuracyMetres,
       args.roomCode,
+      args.scheduledStartAt,
     ],
   );
 

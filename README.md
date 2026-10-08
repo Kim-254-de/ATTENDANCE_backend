@@ -43,6 +43,20 @@ npm run dev:set-room -- LH1 -0.3031 36.0800 8 --by STF/0001      # code, latitud
 Readings vaguer than `GEOFENCE_MAX_ANCHOR_ACCURACY_METRES` (30 m) are refused. Every survey is audited as
 `ROOM_SURVEYED`, with the previous point. A class in an unsurveyed room is fenced around the lecturer's device instead.
 
+## Department oversight: provisioning an officer
+
+A department officer gets read-only oversight of one department's teaching (`src/modules/department/`). There is
+deliberately **no self-registration** for this role: an officer has no ERP staff record to verify against, so an open
+sign-up form would have nothing to check. Accounts are provisioned directly, and until there is an admin interface:
+
+```bash
+npm run dev:seed-department                                            # defaults, prints the credentials
+npm run dev:seed-department -- "Faculty of Science" "Computer Science" dept.cs@test.local
+```
+
+That creates the faculty, the department and one ACTIVE officer, and attaches any lecturer the ERP had already filed
+under that department name. Sign-in is by email only — an officer has no staff or registration number.
+
 ## Local development with the mock ERP
 
 The real university ERP is not available yet, so `mock-erp/` stands in for it. It is a separate

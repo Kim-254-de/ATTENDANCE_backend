@@ -11,6 +11,8 @@ export const UserRole = {
   LECTURER: 'LECTURER',
   STUDENT: 'STUDENT',
   ADMIN: 'ADMIN',
+  /** A department officer: read-only oversight of one department's teaching (db/migrations/020_departments.sql). */
+  DEPARTMENT: 'DEPARTMENT',
 } as const;
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
@@ -172,6 +174,43 @@ export interface LecturerProfileRow {
   erp_staff_id: string | null;
   erp_verified_at: Date;
   erp_snapshot: unknown;
+  /**
+   * The normalised department (`020_departments.sql`). `department` above stays
+   * the ERP's free text; this is the key everything department-scoped joins on.
+   */
+  department_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** A row of `faculties`. The level above a department; a faculty role is not built yet. */
+export interface FacultyRow {
+  id: string;
+  name: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** A row of `departments`. `faculty_id` is null for a department the ERP named no faculty for. */
+export interface DepartmentRow {
+  id: string;
+  name: string;
+  faculty_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * A row of `department_profiles` — one department officer. Mirrors
+ * `LecturerProfileRow` minus the ERP columns: officers are provisioned
+ * directly, not verified against a staff record, so there is nothing to snapshot.
+ */
+export interface DepartmentProfileRow {
+  id: string;
+  user_id: string;
+  department_id: string;
+  title: string | null;
+  phone: string | null;
   created_at: Date;
   updated_at: Date;
 }
