@@ -15,5 +15,10 @@ simultaneous scans both being recorded; the loser gets a 409.
 | `POST` | `/api/v1/attendance/check-in` | Student | `{ payload }` from the scanned code. 201 with the record |
 | `GET` | `/api/v1/attendance/sessions/:sessionId` | Lecturer (owner) | Who has checked in, newest first |
 
+Face check-in (`src/modules/verification`) records through
+`recordFaceCheckIn`, with `method = 'FACE'`, after the lecturer confirms a
+match. The same constraint applies, so QR and face are each other's fallback,
+never both. The attendee list shows each record's `method`.
+
 `POST /api/v1/sessions/scan` still exists as a dry run: it verifies without
 recording. Clients should use `check-in`.

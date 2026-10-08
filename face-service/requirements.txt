@@ -1,0 +1,5 @@
+# Runtime. opencv is held below 5: FaceDetectorYN / FaceRecognizerSF are the 4.x API.
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+numpy==2.5.3
+opencv-python-headless==4.14.0.94

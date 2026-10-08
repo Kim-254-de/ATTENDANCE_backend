@@ -181,6 +181,32 @@ const envSchema = z
     // in the room now.
     GEOFENCE_MAX_FIX_AGE_SECONDS: z.coerce.number().int().min(5).max(600).default(60),
 
+    // --- Face check-in (src/modules/verification, docs/face-recognition.md) ---
+    // The Python service that turns photos into face templates. Unset = face
+    // check-in is off: its endpoints answer 503 and QR works as before.
+    FACE_SERVICE_URL: emptyAsUnset(z.string().url().optional()),
+    /** Sent as X-Face-Service-Key; must equal FACE_SERVICE_KEY on the service. */
+    FACE_SERVICE_KEY: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
+    FACE_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(10_000),
+    // Cosine similarity a face must reach to be offered as a match. OpenCV's
+    // published figure for SFace is 0.363; higher is stricter. The lecturer
+    // confirms every match, so this trades "not recognised" retries against
+    // offering the wrong name. Tune with real photos (docs/face-recognition.md phase 4).
+    FACE_MATCH_THRESHOLD: z.coerce.number().min(0.2).max(0.95).default(0.4),
+    // How far the best match must lead the runner-up. Below this the terminal
+    // says "not sure" rather than guess between two similar-looking students.
+    FACE_MATCH_MARGIN: z.coerce.number().min(0).max(0.5).default(0.05),
+    // How long the lecturer has to tap Confirm after a match.
+    FACE_MATCH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
+    // Frames whose face is smaller (in pixels, width) or blurrier (Laplacian
+    // variance of the aligned crop) than this are refused as unusable.
+    FACE_MIN_FACE_PX: z.coerce.number().int().min(20).max(1000).default(80),
+    FACE_MIN_SHARPNESS: z.coerce.number().min(0).default(40),
+    // Per lecturer, in the CHECKIN_RATE_LIMIT_WINDOW_MS window. A terminal takes
+    // about two requests per student (identify, confirm), plus retries, for the
+    // biggest class.
+    FACE_RATE_LIMIT_PER_LECTURER: z.coerce.number().int().positive().default(1500),
+
     // The zone timetable slots are written in. The server's own clock is usually
     // UTC, so "is this class on now?" is always answered in this zone instead
     // (src/common/utils/campus-time.ts). IANA name, e.g. Africa/Nairobi.
@@ -215,6 +241,13 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['SMARTTT_API_KEY'],
         message: 'is required when SMARTTT_BASE_URL is set',
+      });
+    }
+    if (env.FACE_SERVICE_URL && !env.FACE_SERVICE_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FACE_SERVICE_KEY'],
+        message: 'is required when FACE_SERVICE_URL is set',
       });
     }
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {

@@ -74,6 +74,14 @@ export const GeofenceMode = {
 } as const;
 export type GeofenceMode = (typeof GeofenceMode)[keyof typeof GeofenceMode];
 
+/** How a student was recorded present (db/migrations/019_face_recognition.sql). */
+export const CheckInMethod = {
+  QR: 'QR',
+  /** Recognised on the lecturer's terminal, and confirmed by the lecturer. */
+  FACE: 'FACE',
+} as const;
+export type CheckInMethod = (typeof CheckInMethod)[keyof typeof CheckInMethod];
+
 /** What a check-in's location proved. Rejected scans are never recorded, so there is no OUTSIDE. */
 export const GeofenceResult = {
   INSIDE: 'INSIDE',
@@ -114,6 +122,14 @@ export const AuditAction = {
   PASSWORD_RESET_COMPLETED: 'PASSWORD_RESET_COMPLETED',
   PASSWORD_CHANGED: 'PASSWORD_CHANGED',
   AVATAR_UPDATED: 'AVATAR_UPDATED',
+  FACE_CONSENT_GIVEN: 'FACE_CONSENT_GIVEN',
+  /** Also deletes the student's enrolled face. */
+  FACE_CONSENT_WITHDRAWN: 'FACE_CONSENT_WITHDRAWN',
+  FACE_ENROLLED: 'FACE_ENROLLED',
+  FACE_ENROLLMENT_REJECTED: 'FACE_ENROLLMENT_REJECTED',
+  FACE_ENROLLMENT_REMOVED: 'FACE_ENROLLMENT_REMOVED',
+  /** A terminal frame matched nobody, or two students too closely to choose. */
+  ATTENDANCE_FACE_NOT_MATCHED: 'ATTENDANCE_FACE_NOT_MATCHED',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

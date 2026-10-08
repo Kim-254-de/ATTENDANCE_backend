@@ -248,7 +248,10 @@ module to reject a second one.
 | `distance_m` | `double precision` null | How far the student's reading was from the fence's centre |
 | `location_accuracy_m` | `double precision` null | The reading's reported accuracy |
 | `geofence_result` | text | `INSIDE` / `NOT_CHECKED` (CHECK constraint, default `NOT_CHECKED`). `INSIDE` requires both columns above |
-| | | **UNIQUE (session_id, student_user_id)** -- load-bearing |
+| `method` | text | `QR` / `FACE` (CHECK constraint, default `QR`). How the student was recorded (`db/migrations/019_face_recognition.sql`) |
+| `face_score` | `real` null | Cosine similarity of the confirmed face match. Required when `method = 'FACE'` |
+| `confirmed_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who confirmed a face match on the terminal |
+| | | **UNIQUE (session_id, student_user_id)** -- load-bearing. Also what makes QR and face each other's fallback: whichever comes first is the record |
 
 The student's raw coordinates are deliberately never stored; the distance is
 all attendance needs.
@@ -257,6 +260,23 @@ The `UNIQUE (session_id, student_user_id)` index is not cosmetic. The service
 checks for an existing record before writing, but that check cannot be atomic
 on its own: two simultaneous scans would both pass it. The unique violation is
 what actually stops a double record.
+
+### `face_enrollments`
+
+A student's enrolled face (`db/migrations/019_face_recognition.sql`). One row
+per student, used for all their units. See
+[`face-recognition.md`](face-recognition.md).
+
+| Column | Type | Notes |
+|---|---|---|
+| `student_user_id` | `uuid` | Primary key, FK -> `users(id)` ON DELETE CASCADE |
+| `model` | text | The face-service model that produced the templates, e.g. `sface-2021dec` |
+| `embeddings` | `jsonb` | Array of templates, each an array of numbers. The photos are never stored |
+| `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who captured the photos |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+`users.face_consent_at` (`timestamptz` null) is when the student opted in.
+Without it no lecturer can enroll them; withdrawing it deletes their row here.
 
 ### `unit_schedule`
 

@@ -53,6 +53,10 @@ export function createApp(): Express {
   // re-parsing a body it already parsed) so the tight ceiling below still
   // applies everywhere else.
   app.use('/api/v1/auth/me/avatar', express.json({ limit: '300kb' }));
+  // Face photos (verification.schema.ts MAX_IMAGE_CHARS each): one for the
+  // terminal, three for an enrollment.
+  app.use('/api/v1/sessions/:sessionId/face/identify', express.json({ limit: '450kb' }));
+  app.use('/api/v1/units/:unitId/students/:studentUserId/face', express.json({ limit: '1300kb' }));
 
   // A registration payload is a few hundred bytes; a generous cap here would
   // only widen the memory-exhaustion surface.
