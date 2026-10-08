@@ -82,6 +82,33 @@ export const GeofenceResult = {
 } as const;
 export type GeofenceResult = (typeof GeofenceResult)[keyof typeof GeofenceResult];
 
+/**
+ * How a student proves they are the one present. A lecturer ticks any
+ * combination when activating a class; a check-in by a method the class did
+ * not enable is refused. Only QR and CARD are built — FINGERPRINT and FACE are
+ * accepted in the session's list so the UI can offer all four, but nothing can
+ * check in with them yet (src/modules/verification/README.md).
+ */
+export const VerificationMethod = {
+  QR: 'QR',
+  CARD: 'CARD',
+  FINGERPRINT: 'FINGERPRINT',
+  FACE: 'FACE',
+} as const;
+export type VerificationMethod = (typeof VerificationMethod)[keyof typeof VerificationMethod];
+
+/** The methods a check-in can actually arrive by today. */
+export const IMPLEMENTED_VERIFICATION_METHODS: readonly VerificationMethod[] = [
+  VerificationMethod.QR,
+  VerificationMethod.CARD,
+];
+
+export const CardStatus = {
+  ACTIVE: 'ACTIVE',
+  REVOKED: 'REVOKED',
+} as const;
+export type CardStatus = (typeof CardStatus)[keyof typeof CardStatus];
+
 export const AuditAction = {
   LECTURER_REGISTRATION_SUBMITTED: 'LECTURER_REGISTRATION_SUBMITTED',
   LECTURER_REGISTRATION_REVOKED: 'LECTURER_REGISTRATION_REVOKED',
@@ -107,6 +134,11 @@ export const AuditAction = {
   ROOM_SURVEYED: 'ROOM_SURVEYED',
   ATTENDANCE_SCAN_ACCEPTED: 'ATTENDANCE_SCAN_ACCEPTED',
   ATTENDANCE_SCAN_REJECTED: 'ATTENDANCE_SCAN_REJECTED',
+  /** A card was presented at a terminal and refused. Unknown cards are audited without a user id. */
+  ATTENDANCE_CARD_REJECTED: 'ATTENDANCE_CARD_REJECTED',
+  /** A card was bound to a student, or taken out of use (scripts/dev-enrol-card.mjs until there is an admin interface). */
+  STUDENT_CARD_ENROLLED: 'STUDENT_CARD_ENROLLED',
+  STUDENT_CARD_REVOKED: 'STUDENT_CARD_REVOKED',
   UNIT_CREATED: 'UNIT_CREATED',
   UNIT_VERIFIED: 'UNIT_VERIFIED',
   ATTENDANCE_RECORDED: 'ATTENDANCE_RECORDED',

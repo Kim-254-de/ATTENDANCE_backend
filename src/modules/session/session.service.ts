@@ -2,6 +2,7 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { atCampusTime, campusClock } from '../../common/utils/campus-time.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
+import type { VerificationMethod } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
 import { findUnitSlots, type UnitSlot } from '../unit/index.js';
 import * as sessionRepository from './session.repository.js';
@@ -53,6 +54,8 @@ export interface SessionSummary {
   closesAt: string;
   rotationSeconds: number;
   geofence: GeofenceStatus;
+  /** The methods this class accepts, as the lecturer ticked them. Never empty. */
+  verificationMethods: VerificationMethod[];
 }
 
 /**
@@ -91,6 +94,7 @@ const toSummary = (session: SessionForQr): SessionSummary => ({
   closesAt: session.closesAt.toISOString(),
   rotationSeconds: session.rotationSeconds,
   geofence: toGeofenceStatus(session),
+  verificationMethods: session.verificationMethods,
 });
 
 /**
@@ -131,6 +135,7 @@ export async function createSession(
     rotationSeconds: input.rotationSeconds ?? env.QR_ROTATION_SECONDS,
     roomCode,
     geofence,
+    verificationMethods: input.verificationMethods,
   });
 
   await auditService.record({
@@ -369,6 +374,26 @@ export type ScanGeofence =
 /** Session ids are UUIDs; the column is one, so anything else must never reach a query. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Said to whoever presented the wrong kind of proof for this class. */
+const METHOD_REFUSED: Record<VerificationMethod, string> = {
+  QR: 'This class is not taking QR code check-ins.',
+  CARD: 'This class is not taking ID card check-ins.',
+  FINGERPRINT: 'This class is not taking fingerprint check-ins.',
+  FACE: 'This class is not taking face check-ins.',
+};
+
+/**
+ * A class accepts only the methods its lecturer ticked when activating it.
+ *
+ * Checked on every path, including QR: a lecturer who runs a card-only class
+ * has said that a code on screen is not how attendance is taken, and a stale
+ * code from an earlier class must not slip through on that basis.
+ */
+function assertMethodEnabled(session: SessionForQr, method: VerificationMethod): void {
+  if (session.verificationMethods.includes(method)) return;
+  throw new AppError(409, ErrorCode.CONFLICT, METHOD_REFUSED[method]);
+}
+
 /**
  * Validates a scanned code on behalf of a student.
  *
@@ -418,6 +443,7 @@ export async function verifyScan(
   }
 
   assertSessionAcceptingScans(session);
+  assertMethodEnabled(session, 'QR');
 
   const geofence = checkGeofence(session, location);
   if (!geofence.accepted) {
@@ -480,6 +506,73 @@ export async function verifyScan(
         }
       : { result: 'NOT_CHECKED' },
   };
+}
+
+export interface CardSwipeVerdict {
+  sessionId: string;
+  unitId: string;
+  unitCode: string;
+}
+
+/**
+ * Validates a card swipe for a student the terminal has already identified.
+ *
+ * Takes a student id, not a card: resolving a UID to its holder belongs to the
+ * attendance module, which owns the card table. This keeps every rule about
+ * whether a check-in counts in one place alongside verifyScan.
+ *
+ * Two rules from the QR path deliberately do not apply:
+ *
+ *  - There is no rotating token. The card itself is the credential, and what
+ *    stops a borrowed card is that it names one student who can only be
+ *    recorded once (below), not a short expiry.
+ *  - The geofence is not evaluated. It exists to check that a *phone* claiming
+ *    to be in the room really is; a student at the terminal is in the room by
+ *    construction, and we have no reading from them to judge. The record is
+ *    stored NOT_CHECKED, which is honest: the fence was not the thing that
+ *    proved this one.
+ */
+export async function verifyCardSwipe(
+  sessionId: string,
+  studentUserId: string,
+  context: RequestContext,
+): Promise<CardSwipeVerdict> {
+  const session = await sessionRepository.findSessionById(sessionId);
+  if (!session) throw AppError.notFound('Session not found.');
+
+  assertSessionAcceptingScans(session);
+  assertMethodEnabled(session, 'CARD');
+
+  const allocated = await sessionRepository.studentAllocatedToUnit(session.unitId, studentUserId);
+  if (!allocated) {
+    await recordFailure(session, studentUserId, 'NOT_ALLOCATED', context);
+    throw new AppError(
+      403,
+      ErrorCode.FORBIDDEN,
+      `This student is not registered for ${session.unitCode}.`,
+    );
+  }
+
+  if (await sessionRepository.hasAlreadyCheckedIn(session.id, studentUserId)) {
+    // The terminal shows this as "already recorded" rather than an error: a
+    // student swiping twice has done nothing wrong.
+    throw AppError.conflict(
+      'This student is already recorded present for this class.',
+      ErrorCode.CONFLICT,
+    );
+  }
+
+  await auditService.record({
+    action: 'ATTENDANCE_SCAN_ACCEPTED',
+    outcome: 'SUCCESS',
+    userId: studentUserId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { sessionId: session.id, unitCode: session.unitCode, method: 'CARD' },
+  });
+
+  return { sessionId: session.id, unitId: session.unitId, unitCode: session.unitCode };
 }
 
 type GeofenceOutcome =

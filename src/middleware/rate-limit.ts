@@ -42,11 +42,21 @@ function buildLimiter(
 }
 
 /**
- * The two routes a scanning student hits. Mounted at /api, so paths are relative to it.
+ * The routes a check-in arrives on. Mounted at /api, so paths are relative to it.
  * They have their own limiters (checkInLimiters) and must not also count
  * against the per-IP global bucket, or a class sharing campus Wi-Fi would.
+ *
+ * card-check-in is here for the same reason, more sharply: every swipe in a
+ * hall comes from the one terminal, so the global bucket would stop a class
+ * part-way through. It takes the perIp backstop only — perStudent is keyed by
+ * the signed-in user, and a terminal is not one, so it would put the whole
+ * room on a single student's allowance.
  */
-const CHECK_IN_PATHS = new Set(['/v1/attendance/check-in', '/v1/sessions/scan']);
+const CHECK_IN_PATHS = new Set([
+  '/v1/attendance/check-in',
+  '/v1/attendance/card-check-in',
+  '/v1/sessions/scan',
+]);
 export const isCheckInRequest = (req: Request): boolean => req.method === 'POST' && CHECK_IN_PATHS.has(req.path);
 
 export const globalLimiter = buildLimiter(

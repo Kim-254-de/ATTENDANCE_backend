@@ -170,7 +170,7 @@ src/
 │   ├── unit/            Units and allocations                        [PLACEHOLDER]
 │   ├── session/         Sessions and QR issuance                     [PLACEHOLDER]
 │   ├── attendance/      Check-in and records                         [PLACEHOLDER]
-│   ├── verification/    QR / biometric / facial checks               [PLACEHOLDER]
+│   ├── verification/    Fingerprint and face checks                  [PLACEHOLDER]
 │   └── reporting/       Summaries and exports                        [PLACEHOLDER]
 ├── routes.ts            Mounts module routers under /api/v1
 ├── app.ts               Express wiring (testable without a port)
