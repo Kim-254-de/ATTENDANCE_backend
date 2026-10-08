@@ -1,7 +1,7 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { isUniqueViolation } from '../../db/database.js';
 import { auditService } from '../audit/index.js';
-import { sessionService, type StudentLocationInput } from '../session/index.js';
+import { sessionService, type SessionForQr, type StudentLocationInput } from '../session/index.js';
 import * as attendanceRepository from './attendance.repository.js';
 
 /**
@@ -74,6 +74,76 @@ export async function checkIn(
   };
 }
 
+export interface FaceCheckInResult {
+  recordId: string;
+  sessionId: string;
+  unitCode: string;
+  studentUserId: string;
+  recordedAt: string;
+}
+
+/**
+ * Records a student the lecturer confirmed on the face terminal. Whether the
+ * match counts is decided in src/modules/verification, like verifyScan for
+ * QR; this only persists it. The same one-record-per-session constraint
+ * applies, so a student who already scanned the QR code gets the same 409.
+ */
+export async function recordFaceCheckIn(args: {
+  session: SessionForQr;
+  studentUserId: string;
+  score: number;
+  lecturerUserId: string;
+  context: RequestContext;
+}): Promise<FaceCheckInResult> {
+  const { session, studentUserId, context } = args;
+  let record: { id: string; recordedAt: Date };
+  try {
+    record = await attendanceRepository.insertRecord({
+      sessionId: session.id,
+      unitId: session.unitId,
+      studentUserId,
+      qrAgeSeconds: null,
+      // The terminal is in the lecturer's hand, in the room: there is no student reading to check.
+      geofenceResult: 'NOT_CHECKED',
+      distanceMetres: null,
+      locationAccuracyMetres: null,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      method: 'FACE',
+      faceScore: args.score,
+      confirmedByUserId: args.lecturerUserId,
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw AppError.conflict(ALREADY_RECORDED, ErrorCode.CONFLICT);
+    throw error;
+  }
+
+  await auditService.record({
+    action: 'ATTENDANCE_RECORDED',
+    outcome: 'SUCCESS',
+    userId: studentUserId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: {
+      sessionId: session.id,
+      unitCode: session.unitCode,
+      recordId: record.id,
+      method: 'FACE',
+      faceScore: args.score,
+      confirmedBy: args.lecturerUserId,
+    },
+  });
+
+  return {
+    recordId: record.id,
+    sessionId: session.id,
+    unitCode: session.unitCode,
+    studentUserId,
+    recordedAt: record.recordedAt.toISOString(),
+  };
+}
+
 export interface SessionAttendance {
   sessionId: string;
   checkedIn: number;
@@ -86,6 +156,8 @@ export interface SessionAttendance {
     /** Null when the session's geofence was off at check-in. */
     distanceMetres: number | null;
     geofenceResult: 'INSIDE' | 'NOT_CHECKED';
+    /** Scanned the QR code, or recognised on the lecturer's terminal. */
+    method: 'QR' | 'FACE';
   }>;
 }
 

@@ -336,6 +336,21 @@ export async function getOwnedSession(sessionId: string, lecturerUserId: string)
   return toSummary(session);
 }
 
+/**
+ * The session, for its own lecturer, only while it is taking check-ins. For
+ * face check-in (src/modules/verification), which signs its match tokens with
+ * the session's secret, so this returns the full row. Never send it to a client.
+ */
+export async function getLiveOwnedSession(sessionId: string, lecturerUserId: string): Promise<SessionForQr> {
+  const session = await sessionRepository.findSessionById(sessionId);
+  if (!session) throw AppError.notFound('Session not found.');
+  if (session.lecturerUserId !== lecturerUserId) {
+    throw AppError.forbidden('This session belongs to another lecturer.');
+  }
+  assertSessionAcceptingScans(session);
+  return session;
+}
+
 /** Raw payload for the image endpoints, without the JSON envelope. */
 export async function getCurrentPayload(
   sessionId: string,

@@ -47,7 +47,10 @@ function buildLimiter(
  * against the per-IP global bucket, or a class sharing campus Wi-Fi would.
  */
 const CHECK_IN_PATHS = new Set(['/v1/attendance/check-in', '/v1/sessions/scan']);
-export const isCheckInRequest = (req: Request): boolean => req.method === 'POST' && CHECK_IN_PATHS.has(req.path);
+/** The face terminal and face enrollment. They have faceLimiter, per lecturer, instead. */
+const FACE_PATH = /^\/v1\/(sessions\/[^/]+\/face\/(identify|confirm)|units\/[^/]+\/students\/[^/]+\/face)$/;
+export const isCheckInRequest = (req: Request): boolean =>
+  req.method === 'POST' && (CHECK_IN_PATHS.has(req.path) || FACE_PATH.test(req.path));
 
 export const globalLimiter = buildLimiter(
   env.RATE_LIMIT_MAX_REQUESTS,
@@ -93,6 +96,18 @@ export function createCheckInLimiters(
 }
 
 export const checkInLimiters = createCheckInLimiters();
+
+/**
+ * Face terminal and enrollment, per signed-in lecturer (mounted after requireAuth).
+ * One phone checks in a whole class, so the per-IP global bucket, sized for one
+ * person, would stop it partway through a lecture.
+ */
+export const faceLimiter = buildLimiter(
+  env.FACE_RATE_LIMIT_PER_LECTURER,
+  env.CHECKIN_RATE_LIMIT_WINDOW_MS,
+  'Too many face check-in requests. Wait a moment and try again.',
+  { keyGenerator: (req) => (req.auth ? `user:${req.auth.userId}` : `ip:${req.ip ?? 'unknown'}`) },
+);
 
 export const registrationLimiter = buildLimiter(
   env.REGISTER_RATE_LIMIT_MAX,

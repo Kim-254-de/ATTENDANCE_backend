@@ -414,6 +414,9 @@ export interface Allocation {
   source: AllocationSource;
   /** Whether the student has an account yet, i.e. can actually sign in and check in. */
   hasAccount: boolean;
+  /** Face check-in (src/modules/verification): opted in from their app, and enrolled by a lecturer. */
+  faceConsent: boolean;
+  faceEnrolled: boolean;
   createdAt: Date;
 }
 
@@ -424,6 +427,8 @@ interface AllocationRow {
   full_name: string | null;
   status: AllocationStatus;
   source: AllocationSource;
+  face_consent: boolean;
+  face_enrolled: boolean;
   created_at: Date;
 }
 
@@ -435,11 +440,15 @@ const toAllocation = (row: AllocationRow): Allocation => ({
   status: row.status,
   source: row.source,
   hasAccount: row.student_user_id !== null,
+  faceConsent: row.face_consent,
+  faceEnrolled: row.face_enrolled,
   createdAt: row.created_at,
 });
 
 const ALLOCATION_COLUMNS = `a.id, a.registration_number, a.student_user_id,
-  COALESCE(a.full_name, s.full_name) AS full_name, a.status, a.source, a.created_at`;
+  COALESCE(a.full_name, s.full_name) AS full_name, a.status, a.source, a.created_at,
+  (s.face_consent_at IS NOT NULL) AS face_consent,
+  EXISTS (SELECT 1 FROM face_enrollments f WHERE f.student_user_id = a.student_user_id) AS face_enrolled`;
 
 /** ACTIVE students first, dropped ones last. Nothing sits PENDING any more — see syncRosterAllocations. */
 export async function listAllocations(unitId: string): Promise<Allocation[]> {

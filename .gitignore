@@ -30,3 +30,9 @@ Thumbs.db
 # Prisma
 prisma/*.db
 prisma/*.db-journal
+
+# Face service (Python)
+face-service/.venv/
+face-service/models/*.onnx
+__pycache__/
+.pytest_cache/
