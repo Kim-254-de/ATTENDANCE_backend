@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings, load_settings
 from .engine import MODEL_ID, Embedding, FaceEngine
-from .images import ImageError, decode_image
+from .images import ImageError, decode_image, face_crop
 
 
 class Engine(Protocol):
@@ -26,6 +26,9 @@ class EmbedRequest(BaseModel):
     # Base64 or a data URL. Capped as characters here so an oversized body is
     # refused before any decoding; decode_image applies the byte limit.
     image: str = Field(min_length=16, max_length=3_000_000)
+    # Also return a small JPEG of the face: the API keeps one per enrollment so
+    # the terminal can show the lecturer who was registered. Off by default.
+    crop: bool = False
 
 
 class Box(BaseModel):
@@ -40,6 +43,8 @@ class EmbeddedFace(BaseModel):
     detectionScore: float
     sharpness: float
     embedding: list[float]
+    # A square JPEG data URL of the face, only when the request asked for it.
+    crop: str | None = None
 
 
 class EmbedResponse(BaseModel):
@@ -95,6 +100,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
                 detectionScore=round(result.face.detection_score, 4),
                 sharpness=round(result.sharpness, 1),
                 embedding=result.vector,
+                crop=face_crop(image, result.face.x, result.face.y, result.face.width, result.face.height)
+                if body.crop
+                else None,
             )
         return EmbedResponse(model=MODEL_ID, faceCount=count, face=face)
 

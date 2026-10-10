@@ -108,6 +108,7 @@ export const IMPLEMENTED_VERIFICATION_METHODS: readonly VerificationMethod[] = [
   VerificationMethod.QR,
   VerificationMethod.FACE,
   VerificationMethod.CARD,
+  VerificationMethod.FINGERPRINT,
 ];
 
 export const CardStatus = {
@@ -124,6 +125,12 @@ export const AuditAction = {
   STUDENT_REGISTRATION_REVOKED: 'STUDENT_REGISTRATION_REVOKED',
   STUDENT_REGISTRATION_COMPLETED: 'STUDENT_REGISTRATION_COMPLETED',
   STUDENT_ROSTERS_LINKED: 'STUDENT_ROSTERS_LINKED',
+  /** First sign-in with a SMARTTT account: the attendance account was created for it. */
+  SMARTTT_ACCOUNT_CREATED: 'SMARTTT_ACCOUNT_CREATED',
+  /** First sign-in with a SMARTTT account: an existing attendance account was linked to it. */
+  SMARTTT_ACCOUNT_LINKED: 'SMARTTT_ACCOUNT_LINKED',
+  /** A SMARTTT sign-in was refused for something about the account, not the password. */
+  SMARTTT_ACCOUNT_REFUSED: 'SMARTTT_ACCOUNT_REFUSED',
   EMAIL_VERIFICATION_SENT: 'EMAIL_VERIFICATION_SENT',
   EMAIL_VERIFICATION_CONFIRMED: 'EMAIL_VERIFICATION_CONFIRMED',
   ACCOUNT_APPROVED: 'ACCOUNT_APPROVED',
@@ -146,6 +153,11 @@ export const AuditAction = {
   /** A card was bound to a student, or taken out of use (scripts/dev-enrol-card.mjs until there is an admin interface). */
   STUDENT_CARD_ENROLLED: 'STUDENT_CARD_ENROLLED',
   STUDENT_CARD_REVOKED: 'STUDENT_CARD_REVOKED',
+  /** A finger was presented at a terminal and matched nobody. Audited without a user id. */
+  ATTENDANCE_FINGERPRINT_REJECTED: 'ATTENDANCE_FINGERPRINT_REJECTED',
+  /** A reader's enrolment slot was bound to a student, or taken out of use. */
+  STUDENT_FINGERPRINT_ENROLLED: 'STUDENT_FINGERPRINT_ENROLLED',
+  STUDENT_FINGERPRINT_REVOKED: 'STUDENT_FINGERPRINT_REVOKED',
   UNIT_CREATED: 'UNIT_CREATED',
   UNIT_VERIFIED: 'UNIT_VERIFIED',
   ATTENDANCE_RECORDED: 'ATTENDANCE_RECORDED',

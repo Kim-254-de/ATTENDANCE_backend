@@ -51,6 +51,11 @@ export async function removeEnrollment(req: Request, res: Response): Promise<voi
   sendSuccess(res, await verificationService.removeEnrollment(unitId, studentUserId, userId(req), contextFrom(req)));
 }
 
+/** POST /api/v1/face/warm-up */
+export function warmUpFaceService(_req: Request, res: Response): void {
+  sendSuccess(res, verificationService.warmUpFaceService(), 202);
+}
+
 /** POST /api/v1/sessions/:sessionId/face/identify */
 export async function identifyFace(req: Request, res: Response): Promise<void> {
   const { sessionId } = req.params as unknown as SessionIdParam;

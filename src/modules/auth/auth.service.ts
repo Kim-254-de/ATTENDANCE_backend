@@ -125,6 +125,14 @@ async function lookupStaffInErp(staffNumber: string): Promise<StaffLookup> {
   return result.status === 'VERIFIED' ? { status: 'VERIFIED', record } : { status: 'INACTIVE', record };
 }
 
+/** With SMARTTT accounts on, students and lecturers have no attendance registration: their SMARTTT account is it. */
+export const registrationClosed = (): AppError =>
+  new AppError(
+    410,
+    ErrorCode.ACCOUNTS_MANAGED_BY_SMARTTT,
+    'There is no separate sign-up. Sign in with your SMARTTT account (create one in SMARTTT first if you have none).',
+  );
+
 export async function registerLecturer(
   input: LecturerRegistrationInput,
   context: RegistrationContext,

@@ -1,9 +1,13 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
+import type { AppError } from '../../common/errors/index.js';
 import { asyncHandler } from '../../common/utils/async-handler.js';
 import { validate } from '../../middleware/validate.js';
 import { loginLimiter, passwordResetLimiter, registrationLimiter } from '../../middleware/rate-limit.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import * as authController from './auth.controller.js';
+import { managedBySmarttt } from './auth.password.service.js';
+import { registrationClosed } from './auth.service.js';
+import { smartttAccountsEnabled } from './auth.smarttt.js';
 import {
   avatarSchema,
   changePasswordSchema,
@@ -19,12 +23,24 @@ import {
 export const authRouter: Router = Router();
 
 /**
+ * With SMARTTT accounts on (docs/smarttt-accounts.md), routes that only make
+ * sense for attendance-held student and lecturer accounts are refused before
+ * the body is validated: nothing it says would matter.
+ */
+const unlessSmartttAccounts =
+  (refusal: () => AppError): RequestHandler =>
+  (_req, _res, next) => {
+    next(smartttAccountsEnabled() ? refusal() : undefined);
+  };
+
+/**
  * Lecturer registration.
  *
  * Rate limited before validation so a flood of malformed requests cannot be
  * used to drive outbound ERP traffic.
  *
  * 201 - account created and ACTIVE; the lecturer signs in next
+ * 410 - SMARTTT accounts are on: lecturers sign in with their SMARTTT account instead
  * 400 - payload failed validation
  * 403 - staff number absent, inactive, or identity mismatched (REVOKED)
  * 409 - email or staff number already registered
@@ -33,6 +49,7 @@ export const authRouter: Router = Router();
 authRouter.post(
   '/lecturer/register',
   registrationLimiter,
+  unlessSmartttAccounts(registrationClosed),
   validate({ body: lecturerRegistrationSchema }),
   asyncHandler(authController.registerLecturer),
 );
@@ -43,12 +60,14 @@ authRouter.post(
  * 201 - account created and ACTIVE; the student signs in next
  * 400 - payload failed validation
  * 403 - registration number not in the student records, not a current student, or name/email don't match
+ * 410 - SMARTTT accounts are on: students sign in with their SMARTTT account instead
  * 409 - email or registration number already registered
  * 503 - the student records system (SMARTTT, or the ERP) could not be reached, so nothing was created
  */
 authRouter.post(
   '/student/register',
   registrationLimiter,
+  unlessSmartttAccounts(registrationClosed),
   validate({ body: studentRegistrationSchema }),
   asyncHandler(authController.registerStudent),
 );
@@ -63,11 +82,14 @@ authRouter.post(
 
 /**
  * Sign-in with a staff number (lecturers), registration number (students) or email, plus password.
+ * With SMARTTT accounts on, students and lecturers use their SMARTTT login and password
+ * (auth.smarttt.ts): the attendance account is created or linked at first sign-in.
  *
  * 200 - signed in; httpOnly session cookies are set and the account is returned (`role` is lecturer or student)
  * 401 - wrong credentials (same answer for an unknown account)
  * 403 - correct password but the account is pending / suspended / deactivated
  * 429 - too many attempts (per-IP limiter) or the account is temporarily locked
+ * 503 - SMARTTT accounts are on and SMARTTT could not be asked
  */
 authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
 
@@ -99,12 +121,15 @@ authRouter.delete('/me/avatar', asyncHandler(requireAuth('LECTURER', 'STUDENT'))
  *
  * 200 - password changed
  * 400 - current password wrong, or new password same as current
+ * 409 - SMARTTT accounts are on: the password is changed in SMARTTT
  * 429 - too many attempts
  */
 authRouter.post(
   '/change-password',
   passwordResetLimiter,
   asyncHandler(requireAuth('LECTURER', 'STUDENT')),
+  // Only lecturers and students reach this route, and with SMARTTT accounts their password is SMARTTT's.
+  unlessSmartttAccounts(managedBySmarttt),
   validate({ body: changePasswordSchema }),
   asyncHandler(authController.changePassword),
 );

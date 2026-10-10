@@ -5,6 +5,7 @@ import type { AccountStatus } from '../../db/types.js';
 
 export interface ResetCandidate {
   id: string;
+  role: string;
   email: string;
   fullName: string;
   status: AccountStatus;
@@ -20,18 +21,19 @@ export interface ResetCandidate {
 export async function findUserForReset(email: string): Promise<ResetCandidate | null> {
   const row = await queryOne<{
     id: string;
+    role: string;
     email: string;
     full_name: string;
     status: AccountStatus;
   }>(
-    `SELECT id, email, full_name, status
+    `SELECT id, role, email, full_name, status
        FROM users
       WHERE email = $1 AND deleted_at IS NULL`,
     [email],
   );
 
   if (!row) return null;
-  return { id: row.id, email: row.email, fullName: row.full_name, status: row.status };
+  return { id: row.id, role: row.role, email: row.email, fullName: row.full_name, status: row.status };
 }
 
 /**
@@ -70,6 +72,7 @@ export interface StoredResetToken {
   consumedAt: Date | null;
   invalidatedAt: Date | null;
   userStatus: AccountStatus;
+  userRole: string;
   currentPasswordHash: string;
   email: string;
   fullName: string;
@@ -83,13 +86,14 @@ export async function findResetToken(tokenHash: string): Promise<StoredResetToke
     consumed_at: Date | null;
     invalidated_at: Date | null;
     status: AccountStatus;
+    role: string;
     password_hash: string;
     email: string;
     full_name: string;
     deleted_at: Date | null;
   }>(
     `SELECT t.id, t.user_id, t.expires_at, t.consumed_at, t.invalidated_at,
-            u.status, u.password_hash, u.email, u.full_name, u.deleted_at
+            u.status, u.role, u.password_hash, u.email, u.full_name, u.deleted_at
        FROM password_reset_tokens t
        JOIN users u ON u.id = t.user_id
       WHERE t.token_hash = $1`,
@@ -104,6 +108,7 @@ export async function findResetToken(tokenHash: string): Promise<StoredResetToke
     consumedAt: row.consumed_at,
     invalidatedAt: row.invalidated_at,
     userStatus: row.status,
+    userRole: row.role,
     currentPasswordHash: row.password_hash,
     email: row.email,
     fullName: row.full_name,

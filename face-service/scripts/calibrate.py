@@ -1,6 +1,6 @@
-"""Recommend FACE_MATCH_THRESHOLD and FACE_MATCH_MARGIN from real photos.
+"""Recommend FACE_MATCH_THRESHOLD and FACE_MATCH_MARGIN from real photos, and check FACE_DUPLICATE_THRESHOLD.
 
-    python scripts/calibrate.py PHOTOS_DIR [--enroll 3] [--margin 0.05] [--json out.json]
+    python scripts/calibrate.py PHOTOS_DIR [--enroll 3] [--margin 0.05] [--duplicate 0.55] [--json out.json]
 
 PHOTOS_DIR has one folder per volunteer, each holding their photos:
 
@@ -25,7 +25,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.calibration import Person, recommend, scores, sweep  # noqa: E402
+from app.calibration import Person, closest_enrollments, duplicate_clashes, recommend, scores, sweep  # noqa: E402
 from app.config import SERVICE_DIR  # noqa: E402
 from app.engine import FaceEngine  # noqa: E402
 
@@ -53,6 +53,7 @@ def main() -> int:
     parser.add_argument('photos', type=Path)
     parser.add_argument('--enroll', type=int, default=3, help='photos per person used as the enrollment (default 3, as in the app)')
     parser.add_argument('--margin', type=float, default=0.05, help='FACE_MATCH_MARGIN to evaluate (default 0.05)')
+    parser.add_argument('--duplicate', type=float, default=0.55, help='FACE_DUPLICATE_THRESHOLD to check (default 0.55)')
     parser.add_argument('--json', type=Path, help='also write the full results here')
     args = parser.parse_args()
 
@@ -113,6 +114,15 @@ def main() -> int:
     print(f'  FACE_MATCH_MARGIN={args.margin}')
     print(f'  -> {best.correct_rate:.1%} recognised first time, {best.wrong_person} wrong names, '
           f'{best.enrollments_refused} enrollments refused')
+
+    closest = closest_enrollments(people)
+    clashes = duplicate_clashes(people, args.duplicate)
+    print()
+    print(f'Duplicate check (FACE_DUPLICATE_THRESHOLD={args.duplicate}):')
+    print(f'  closest two different people\'s enrollments: {closest:.3f}')
+    print(f'  -> {clashes} of {len(people)} enrollments would be wrongly refused as "already registered"')
+    if args.duplicate < best.threshold:
+        print(f'  It is below FACE_MATCH_THRESHOLD ({best.threshold}): enrollments will be refused for faces the terminal would not even match.')
     if len(people) < 10:
         print('\nFewer than 10 people: treat this as a rough guide and collect more photos before relying on it.')
 
@@ -123,6 +133,7 @@ def main() -> int:
             'impostor': impostor,
             'sweep': [asdict(o) for o in outcomes],
             'recommended': asdict(best),
+            'duplicate': {'threshold': args.duplicate, 'closestEnrollments': closest, 'wronglyRefused': clashes},
             'skipped': skipped,
         }, indent=2))
     return 0

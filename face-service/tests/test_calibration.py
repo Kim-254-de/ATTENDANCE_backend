@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.calibration import FLOOR, Person, min_agreement, recommend, scores, simulate
+from app.calibration import FLOOR, Person, closest_enrollments, duplicate_clashes, min_agreement, recommend, scores, simulate
 
 
 def at(degrees: float) -> np.ndarray:
@@ -65,3 +65,11 @@ def test_recommend_clears_the_worst_impostor():
 
 def test_min_agreement():
     assert min_agreement([at(0), at(10), at(40)]) == pytest.approx(np.cos(np.radians(40)))
+
+
+def test_duplicate_check_refuses_only_look_alikes_above_its_threshold():
+    # 'b' sits 60 degrees from 'a': their closest enrollment photos are 50 degrees apart, cos ~ 0.64.
+    people = [person('a', 0), person('b', 60), person('c', 180)]
+    assert closest_enrollments(people) == pytest.approx(np.cos(np.radians(50)))
+    assert duplicate_clashes(people, 0.55) == 2  # a and b each refused as the other
+    assert duplicate_clashes(people, 0.70) == 0

@@ -89,6 +89,9 @@ export interface EnrollmentResult {
  * The photos must each show exactly one usable face, agree with each other,
  * and not match any other enrolled student (which would mean the wrong person
  * is in front of the camera, or one person is being enrolled twice).
+ *
+ * Only templates are kept, plus a small crop of the first (straight-on)
+ * photo's face for the terminal to show the lecturer at check-in.
  */
 export async function enrollFace(
   unitId: string,
@@ -108,10 +111,13 @@ export async function enrollFace(
 
   const templates: Vector[] = [];
   let model: string | null = null;
+  let referencePhoto: string | null = null;
   for (const [index, image] of images.entries()) {
-    const embedded = await embedOrThrow(image, { photo: index + 1 });
+    // The portal takes the straight-on photo first; that one is kept as the reference.
+    const embedded = await embedOrThrow(image, { photo: index + 1 }, { crop: index === 0 });
     const face = usableFace(embedded, { allowOthersInFrame: false, photo: index + 1 });
     templates.push(face.embedding);
+    if (index === 0) referencePhoto = face.crop;
     model = embedded.model;
   }
   if (!model) throw new Error('enrollment produced no templates');
@@ -136,10 +142,11 @@ export async function enrollFace(
     );
   }
 
-  // Any other student's best template against any of these photos.
+  // Any other student's best template against any of these photos. Uses its
+  // own, stricter threshold: this compares against the whole school (see env.ts).
   const others = await verificationRepository.findOtherEnrollments(studentUserId, model);
   for (const probe of templates) {
-    const clash = bestMatch(probe, others, { threshold: env.FACE_MATCH_THRESHOLD, margin: 0 });
+    const clash = bestMatch(probe, others, { threshold: env.FACE_DUPLICATE_THRESHOLD, margin: 0 });
     if (clash.result === 'MATCH') {
       // The other student is named in the audit trail only: telling the
       // lecturer would reveal another student's enrollment.
@@ -156,6 +163,7 @@ export async function enrollFace(
     studentUserId,
     model,
     embeddings: templates,
+    referencePhoto,
     enrolledByUserId: lecturerUserId,
   });
   await auditService.record({
@@ -163,7 +171,15 @@ export async function enrollFace(
     outcome: 'SUCCESS',
     userId: lecturerUserId,
     ...fingerprint(context),
-    metadata: { unitCode: target.unitCode, studentUserId, model, photos: templates.length, replaced: saved.replaced, agreement: roundScore(agreement) },
+    metadata: {
+      unitCode: target.unitCode,
+      studentUserId,
+      model,
+      photos: templates.length,
+      replaced: saved.replaced,
+      agreement: roundScore(agreement),
+      referencePhoto: referencePhoto !== null,
+    },
   });
   return { studentUserId, enrolledAt: saved.enrolledAt.toISOString(), replaced: saved.replaced };
 }
@@ -307,6 +323,15 @@ export async function confirmFace(
   return { ...record, fullName: card?.fullName ?? '' };
 }
 
+/**
+ * Starts waking face-service, so it is up by the time the lecturer has taken
+ * the photos. Returns at once; there is nothing to report.
+ */
+export function warmUpFaceService(): { enabled: boolean } {
+  faceClient.warmUp();
+  return { enabled: faceClient.faceServiceEnabled() };
+}
+
 // --- Shared -----------------------------------------------------------------
 
 /** The unit is the lecturer's and the student is ACTIVE on it. */
@@ -318,8 +343,8 @@ async function requireRosterStudent(unitId: string, studentUserId: string, lectu
   return target;
 }
 
-async function embedOrThrow(image: string, details?: { photo: number }) {
-  const result = await faceClient.embed(image);
+async function embedOrThrow(image: string, details?: { photo: number }, options?: { crop?: boolean }) {
+  const result = await faceClient.embed(image, options);
   switch (result.status) {
     case 'OK':
       return result;

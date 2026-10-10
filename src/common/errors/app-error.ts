@@ -29,6 +29,14 @@ export const ErrorCode = {
   // Sign-in
   INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
   ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
+  /** Students and lecturers sign in with SMARTTT, and it could not be asked. */
+  SMARTTT_UNAVAILABLE: 'SMARTTT_UNAVAILABLE',
+  /** The SMARTTT account is missing what attendance needs (admission number, staff-list entry, email), or isn't a student or lecturer. */
+  SMARTTT_ACCOUNT_INCOMPLETE: 'SMARTTT_ACCOUNT_INCOMPLETE',
+  /** The SMARTTT account collides with a different attendance account; an administrator must sort it out. */
+  SMARTTT_ACCOUNT_CONFLICT: 'SMARTTT_ACCOUNT_CONFLICT',
+  /** Registration and passwords for students and lecturers live in SMARTTT, not here. */
+  ACCOUNTS_MANAGED_BY_SMARTTT: 'ACCOUNTS_MANAGED_BY_SMARTTT',
 
   // Geofenced check-in (session.geofence.ts)
   LOCATION_REQUIRED: 'LOCATION_REQUIRED',

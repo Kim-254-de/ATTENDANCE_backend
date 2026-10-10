@@ -42,3 +42,27 @@ def decode_image(value: str, max_bytes: int, max_side_px: int) -> np.ndarray:
         scale = max_side_px / longest
         image = cv2.resize(image, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
     return image
+
+
+# The reference photo a lecturer sees on the terminal: big enough to recognise
+# someone on a phone screen, small enough (~5-10 KB) to keep one per student.
+CROP_SIDE_PX = 160
+CROP_JPEG_QUALITY = 80
+# Room around the detector's box, as a share of its size, so the crop shows hair and chin.
+CROP_PADDING = 0.25
+
+
+def face_crop(image: np.ndarray, x: int, y: int, width: int, height: int) -> str:
+    """A square JPEG data URL of the face at (x, y, width, height), with some room around it."""
+    side = round(max(width, height) * (1 + 2 * CROP_PADDING))
+    cx, cy = x + width / 2, y + height / 2
+    img_h, img_w = image.shape[:2]
+    left = max(0, min(round(cx - side / 2), img_w - 1))
+    top = max(0, min(round(cy - side / 2), img_h - 1))
+    right = min(img_w, left + side)
+    bottom = min(img_h, top + side)
+    crop = cv2.resize(image[top:bottom, left:right], (CROP_SIDE_PX, CROP_SIDE_PX), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, CROP_JPEG_QUALITY])
+    if not ok:
+        raise RuntimeError("could not encode the face crop")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()

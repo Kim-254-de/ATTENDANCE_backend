@@ -11,3 +11,7 @@ process.env.ERP_AUTH_SCHEME ??= 'none';
 process.env.ERP_CACHE_TTL_SECONDS ??= '0';
 process.env.QR_ROTATION_SECONDS ??= '60';
 process.env.QR_ACCEPT_PREVIOUS_WINDOWS ??= '1';
+// The developer's .env may point SMARTTT_BASE_URL at a real SMARTTT. Tests sign
+// in with attendance's own passwords unless they turn SMARTTT accounts on
+// themselves (tests/integration/smarttt-accounts.test.ts).
+process.env.SMARTTT_ACCOUNTS ??= 'false';
