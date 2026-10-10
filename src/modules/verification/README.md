@@ -13,7 +13,7 @@ chosen). A check-in by a method the class did not enable is refused with a 409.
 | Rotating QR code | **Built**: `src/modules/session/session.token.ts`, `POST /attendance/check-in`, and `docs/student-app-checkin.md` |
 | Facial recognition | **Built**: this module, on the lecturer's phone as the terminal |
 | Student ID card swipe | **Built**: `POST /attendance/card-check-in`, `src/modules/attendance/card.repository.ts`, `docs/card-check-in.md`. Only the hardware is outstanding: a terminal has to read a card and post its UID |
-| Fingerprint | Not implemented |
+| Fingerprint | **Built**: `POST /attendance/fingerprint-check-in`, `src/modules/attendance/fingerprint.repository.ts`, `docs/fingerprint-check-in.md`. Only the hardware is outstanding: a reader has to match a finger and post the slot it matched. **No fingerprint reaches this service** — the reader keeps the templates and does the 1:N match |
 
 Whichever enabled method comes first records the student; the second attempt
 gets the usual *"already been recorded"* 409 from the
