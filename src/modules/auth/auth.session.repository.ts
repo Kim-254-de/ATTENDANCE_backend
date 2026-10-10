@@ -43,8 +43,19 @@ export interface DepartmentOfficerPublic {
   status: AccountStatus;
 }
 
+/** What the portal shows about a signed-in faculty officer — the same idea as a department officer, one level up. */
+export interface FacultyOfficerPublic {
+  id: string;
+  role: 'faculty';
+  fullName: string;
+  email: string;
+  facultyId: string;
+  facultyName: string;
+  status: AccountStatus;
+}
+
 /** Whoever is signed in: what GET /auth/me and sign-in return. */
-export type AccountPublic = LecturerPublic | StudentPublic | DepartmentOfficerPublic;
+export type AccountPublic = LecturerPublic | StudentPublic | DepartmentOfficerPublic | FacultyOfficerPublic;
 
 export const toStudentPublic = (c: {
   id: string; fullName: string; email: string; registrationNumber: string;
@@ -62,7 +73,7 @@ export const toStudentPublic = (c: {
 
 export interface LoginCandidate {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY';
   email: string;
   fullName: string;
   passwordHash: string;
@@ -75,7 +86,7 @@ export interface LoginCandidate {
 
 interface LoginRow {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY';
   email: string;
   full_name: string;
   password_hash: string;
@@ -90,6 +101,8 @@ interface LoginRow {
   year_of_study: number | null;
   department_id: string | null;
   department_name: string | null;
+  faculty_id: string | null;
+  faculty_name: string | null;
 }
 
 /** The public shape for a session or login row; null when its profile row is missing. */
@@ -98,6 +111,7 @@ function accountFrom(row: {
   staff_number: string | null; title: string | null; department: string | null;
   registration_number: string | null; programme: string | null; year_of_study: number | null;
   department_id: string | null; department_name: string | null;
+  faculty_id: string | null; faculty_name: string | null;
 }): AccountPublic | null {
   if (row.role === 'LECTURER' && row.staff_number) {
     return toLecturerPublic({
@@ -115,6 +129,12 @@ function accountFrom(row: {
     return toDepartmentOfficerPublic({
       id: row.id, fullName: row.full_name, email: row.email,
       departmentId: row.department_id, departmentName: row.department_name, status: row.status,
+    });
+  }
+  if (row.role === 'FACULTY' && row.faculty_id) {
+    return toFacultyOfficerPublic({
+      id: row.id, fullName: row.full_name, email: row.email,
+      facultyId: row.faculty_id, facultyName: row.faculty_name, status: row.status,
     });
   }
   return null;
@@ -147,6 +167,19 @@ export const toDepartmentOfficerPublic = (c: {
   status: c.status,
 });
 
+export const toFacultyOfficerPublic = (c: {
+  id: string; fullName: string; email: string; facultyId: string; facultyName: string | null;
+  status: AccountStatus;
+}): FacultyOfficerPublic => ({
+  id: c.id,
+  role: 'faculty',
+  fullName: c.fullName,
+  email: c.email,
+  facultyId: c.facultyId,
+  facultyName: c.facultyName ?? '',
+  status: c.status,
+});
+
 /**
  * A lecturer, student or department-officer account for sign-in. `identifier` is already
  * normalised: a lower-cased email, or an upper-cased staff number
@@ -159,13 +192,16 @@ export async function findAccountForLogin(identifier: string): Promise<LoginCand
             u.failed_login_attempts, u.locked_until,
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
-            dp.department_id, d.name AS department_name
+            dp.department_id, d.name AS department_name,
+            fp.faculty_id, fac.name AS faculty_name
        FROM users u
-  LEFT JOIN lecturer_profiles   p  ON p.user_id = u.id
-  LEFT JOIN student_profiles    sp ON sp.user_id = u.id
-  LEFT JOIN department_profiles dp ON dp.user_id = u.id
-  LEFT JOIN departments         d  ON d.id = dp.department_id
-      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT')
+  LEFT JOIN lecturer_profiles   p   ON p.user_id = u.id
+  LEFT JOIN student_profiles    sp  ON sp.user_id = u.id
+  LEFT JOIN department_profiles dp  ON dp.user_id = u.id
+  LEFT JOIN departments         d   ON d.id = dp.department_id
+  LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
+  LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
+      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY')
         AND u.deleted_at IS NULL
         AND ${byEmail ? 'u.email = $1' : '(p.staff_number = $1 OR sp.registration_number = $1)'}
       ORDER BY u.role
@@ -254,6 +290,7 @@ export interface LiveSession {
   lecturer: LecturerPublic | null;
   student: StudentPublic | null;
   department: DepartmentOfficerPublic | null;
+  faculty: FacultyOfficerPublic | null;
 }
 
 /** A session with its owner, or null. Callers decide what "usable" means. */
@@ -264,18 +301,22 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
     email: string; full_name: string; staff_number: string | null; title: string | null; department: string | null;
     registration_number: string | null; programme: string | null; year_of_study: number | null;
     department_id: string | null; department_name: string | null;
+    faculty_id: string | null; faculty_name: string | null;
   }>(
     `SELECT s.id, s.user_id, s.refresh_token_hash, s.expires_at, s.revoked_at,
             u.role, u.status, u.deleted_at, u.email, u.full_name,
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
-            dp.department_id, d.name AS department_name
+            dp.department_id, d.name AS department_name,
+            fp.faculty_id, fac.name AS faculty_name
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
-  LEFT JOIN lecturer_profiles   p  ON p.user_id = u.id
-  LEFT JOIN student_profiles    sp ON sp.user_id = u.id
-  LEFT JOIN department_profiles dp ON dp.user_id = u.id
-  LEFT JOIN departments         d  ON d.id = dp.department_id
+  LEFT JOIN lecturer_profiles   p   ON p.user_id = u.id
+  LEFT JOIN student_profiles    sp  ON sp.user_id = u.id
+  LEFT JOIN department_profiles dp  ON dp.user_id = u.id
+  LEFT JOIN departments         d   ON d.id = dp.department_id
+  LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
+  LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
       WHERE s.id = $1`,
     [sessionId],
   );
@@ -294,6 +335,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
         lecturer: account?.role === 'lecturer' ? account : null,
         student: account?.role === 'student' ? account : null,
         department: account?.role === 'department' ? account : null,
+        faculty: account?.role === 'faculty' ? account : null,
       };
     })(),
   };

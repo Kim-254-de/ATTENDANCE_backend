@@ -5,6 +5,7 @@ import { readAccessToken, verifyAccessToken } from '../modules/auth/auth.session
 import {
   findSession,
   type DepartmentOfficerPublic,
+  type FacultyOfficerPublic,
   type LecturerPublic,
   type StudentPublic,
 } from '../modules/auth/auth.session.repository.js';
@@ -17,6 +18,8 @@ export interface AuthContext {
   student: StudentPublic | null;
   /** The signed-in department officer and the department they oversee; null for every other role. */
   department: DepartmentOfficerPublic | null;
+  /** The signed-in faculty officer and the faculty they oversee; null for every other role. */
+  faculty: FacultyOfficerPublic | null;
 }
 
 declare global {
@@ -54,6 +57,7 @@ export function requireAuth(...roles: UserRole[]) {
         lecturer: session.lecturer,
         student: session.student,
         department: session.department,
+        faculty: session.faculty,
       };
       next();
     } catch (error) {

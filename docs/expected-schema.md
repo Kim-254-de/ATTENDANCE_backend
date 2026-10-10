@@ -26,7 +26,7 @@ and account status have a single home.
 | `email` | `varchar(255)` | **UNIQUE** — the registration race depends on this |
 | `password_hash` | `varchar(255)` | Argon2id. Never plaintext |
 | `full_name` | `varchar(160)` | |
-| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` (`021_departments.sql` widened `users_role_check`) |
+| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` · `FACULTY` (`021_departments.sql` and `022_faculty_role.sql` widened `users_role_check`) |
 | `status` | enum/text | See below |
 | `email_verified_at` | `timestamptz` null | |
 | `failed_login_attempts` | `integer` | Defaults to 0; used by sign-in throttling |
@@ -383,8 +383,8 @@ changes hands.
 
 ### `faculties`
 
-The level above a department. A faculty-level role is the next milestone; the
-table exists now so departments have somewhere to hang.
+The level above a department, and since `022_faculty_role.sql` a scope of its
+own — see `faculty_profiles` below.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -427,10 +427,29 @@ selecting the department's lecturers, the way `units_lecturer_idx` backs every
 
 ---
 
-## Tables later modules will need
+## Tables the faculty module touches
 
-Not queried yet — listed so the database owner can plan: a `faculties`-scoped
-role, which is why `faculties` already exists as a table.
+Created by `db/migrations/022_faculty_role.sql`. See
+[`src/modules/faculty/README.md`](../src/modules/faculty/README.md).
+
+### `faculty_profiles`
+
+One faculty officer — the person with read-only oversight of every
+department in one faculty. Mirrors `department_profiles` one level up, same
+reasoning throughout: no ERP record to verify an officer against, so
+provisioned directly (`scripts/dev-seed-faculty.mjs` locally), no
+self-registration.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `FACULTY`) ON DELETE CASCADE |
+| `faculty_id` | `uuid` | FK -> `faculties(id)`. The only scope this officer may read |
+| `title` | `varchar(32)` null | |
+| `phone` | `varchar(32)` null | |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Index: `faculty_profiles(faculty_id)`.
 
 ---
 

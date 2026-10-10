@@ -7,6 +7,7 @@ import { attendanceRouter } from './modules/attendance/index.js';
 import { reportingRouter } from './modules/reporting/index.js';
 import { studentRouter } from './modules/student/index.js';
 import { departmentRouter } from './modules/department/index.js';
+import { facultyRouter } from './modules/faculty/index.js';
 import { integrationRouter } from './modules/integration/index.js';
 import { verificationRouter } from './modules/verification/index.js';
 
@@ -18,6 +19,7 @@ import { verificationRouter } from './modules/verification/index.js';
  *   /lecturers   - profile management          (lecturer module)
  *   /reports     - summaries and exports       (reporting module)
  *   /departments - department-wide oversight   (department module)
+ *   /faculties   - faculty-wide oversight      (faculty module)
  */
 export const apiRouter: Router = Router();
 
@@ -30,6 +32,7 @@ apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/reports', reportingRouter);
 apiRouter.use('/students', studentRouter);
 apiRouter.use('/departments', departmentRouter);
+apiRouter.use('/faculties', facultyRouter);
 /** Face check-in: /students/me/face*, /units/:id/students/:id/face, /sessions/:id/face/*. */
 apiRouter.use(verificationRouter);
 /** Calls from SMARTTT (API key, not a user session). */
