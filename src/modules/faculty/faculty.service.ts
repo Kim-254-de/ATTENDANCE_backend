@@ -465,3 +465,19 @@ export async function provideCourse(
     throw error;
   }
 }
+
+export interface FacultyCourseDto {
+  id: string;
+  code: string;
+  name: string | null;
+  departmentId: string;
+  departmentName: string;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
+/** GET /faculties/courses — every course offering across every department, department named. */
+export async function listCourses(userId: string): Promise<FacultyCourseDto[]> {
+  const faculty = await requireOwnFaculty(userId);
+  return facultyRepository.listFacultyCourseOfferings(faculty.facultyId);
+}

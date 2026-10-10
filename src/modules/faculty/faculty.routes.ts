@@ -93,3 +93,10 @@ facultyRouter.post(
   validate({ params: departmentIdParamSchema, body: provideCourseSchema }),
   asyncHandler(facultyController.provideCourse),
 );
+
+/** Every course offering across every department in the faculty, with department named. */
+facultyRouter.get(
+  '/courses',
+  asyncHandler(requireAuth('FACULTY')),
+  asyncHandler(facultyController.courses),
+);

@@ -52,6 +52,7 @@ department, computed per department so they can be read side by side.
 | `GET` | `/api/v1/faculties/timekeeping` | Faculty | `?lecturerUserId=&unitId=&departmentId=&limit=` — session-level punctuality log, newest first |
 | `POST` | `/api/v1/faculties/departments` | Faculty | Creates a department in the caller's own faculty |
 | `POST` | `/api/v1/faculties/departments/:departmentId/courses` | Faculty (own) | Provides a course to one of the caller's own departments — manually entered, no ERP check, no lecturer yet |
+| `GET` | `/api/v1/faculties/courses` | Faculty | Every course offering across every department, with `departmentName` and segments planned/filled |
 
 ## Course provisioning (writes)
 

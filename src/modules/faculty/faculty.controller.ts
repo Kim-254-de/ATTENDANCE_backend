@@ -74,3 +74,8 @@ export async function provideCourse(req: Request, res: Response): Promise<void> 
   const { code, name } = req.body as ProvideCourseInput;
   sendCreated(res, await facultyService.provideCourse(userId(req), departmentId, code, name ?? null));
 }
+
+/** GET /api/v1/faculties/courses */
+export async function courses(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await facultyService.listCourses(userId(req)));
+}

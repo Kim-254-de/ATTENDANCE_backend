@@ -688,3 +688,43 @@ export async function listCourseOfferings(departmentId: string): Promise<CourseO
     segmentsFilled: r.segments_filled,
   }));
 }
+
+export interface FacultyCourseOfferingRow {
+  id: string;
+  code: string;
+  name: string | null;
+  departmentId: string;
+  departmentName: string;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
+/** Every course offering across every department in the faculty, with department named — the faculty-wide view across `listCourseOfferings`' per-department one. */
+export async function listFacultyCourseOfferings(facultyId: string): Promise<FacultyCourseOfferingRow[]> {
+  const { rows } = await query<{
+    id: string;
+    code: string;
+    name: string | null;
+    department_id: string;
+    department_name: string;
+    segments_planned: number;
+    segments_filled: number;
+  }>(
+    `SELECT co.id, co.code, co.name, d.id AS department_id, d.name AS department_name, co.segments_planned,
+            (SELECT COUNT(*) FROM units u WHERE u.offering_id = co.id)::int AS segments_filled
+       FROM course_offerings co
+       JOIN departments d ON d.id = co.department_id
+      WHERE d.faculty_id = $1
+      ORDER BY d.name, co.code`,
+    [facultyId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    departmentId: r.department_id,
+    departmentName: r.department_name,
+    segmentsPlanned: r.segments_planned,
+    segmentsFilled: r.segments_filled,
+  }));
+}

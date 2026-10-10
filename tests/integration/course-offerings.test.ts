@@ -231,4 +231,18 @@ describe('the whole provisioning flow', () => {
     const res = await api(fx.deptOfficer.auth).patch(`/departments/courses/${offeringId}`, { segmentsPlanned: 1 });
     expect(res.status).toBe(400);
   });
+
+  it('the faculty\'s own course list already shows it, department named, no changes needed', async () => {
+    const res = await api(fx.facultyOfficer.auth).get('/faculties/courses');
+    expect(res.status).toBe(200);
+    const rows = body<Array<{ code: string; departmentName: string; segmentsPlanned: number; segmentsFilled: number }>>(res).data;
+    const row = rows.find((r) => r.code === 'WGT 101');
+    expect(row).toMatchObject({ departmentName: 'Department of Widgets', segmentsPlanned: 2, segmentsFilled: 2 });
+  });
+
+  it('never includes a course from another faculty', async () => {
+    const rows = body<Array<{ code: string }>>(
+      await api(fx.otherFacultyOfficer.auth).get('/faculties/courses')).data;
+    expect(rows.map((r) => r.code)).not.toContain('WGT 101');
+  });
 });
