@@ -1,0 +1,173 @@
+# session module
+
+Attendance sessions and **rotating QR codes**.
+
+## The problem this solves
+
+A student photographs the QR projected in the lecture hall and sends it to an
+absent friend, who scans it and is marked present.
+
+## How rotation works
+
+The code is not a stored value. It is derived from the session's secret and the
+current time window:
+
+```text
+payload   = v1.<sessionId>.<counter>.<signature>
+counter   = floor(unixSeconds / rotationSeconds)          ← changes every 60s
+signature = HMAC-SHA256(sessionSecret, "v1.<sessionId>.<counter>")
+```
+
+The server recomputes the signature when a scan arrives. **Nothing is written
+per rotation** — a two-hour COSC 100 class produces one `attendance_sessions`
+row, not 120 QR rows. The stable identifier for the class meeting is that row;
+the unit itself (`COSC 100`) is a single row in `units`.
+
+The signature covers the counter, so a photographed code cannot be edited to
+look current — changing the counter invalidates the signature.
+
+## What rotation does *not* solve
+
+Rotation shrinks the sharing window; it does not close it. A student can still
+send a screenshot within the current minute. Three checks do the real work:
+
+1. **Allocation** — the scanner must be registered on the unit, so a forwarded
+   code gets an unrelated student nowhere.
+2. **One record per student per session** — enforced by
+   `UNIQUE (session_id, student_user_id)` on `attendance_records`.
+3. **Session window** — a session that has closed, or drifted past `closes_at`,
+   accepts nothing regardless of status.
+
+The fourth layer is the **geofence** (`session.geofence.ts`), below.
+Shortening `QR_ROTATION_SECONDS` also helps, at the cost of more failed scans.
+
+## The geofence
+
+Each session is fenced to a centre point chosen at activation
+(`chooseCentre`):
+
+1. the room's surveyed point (`rooms`, set with `npm run dev:set-room`), else
+2. the lecturer's device reading sent with `POST /sessions` as
+   `location: { latitude, longitude, accuracy }`, if accurate to
+   `GEOFENCE_MAX_ANCHOR_ACCURACY_METRES` (30 m), else
+3. with **no** reading (activated from a laptop), the session opens with
+   mode `AWAITING_LOCATION` and no centre. Scans are refused with
+   `409 GEOFENCE_AWAITING_LOCATION` until the lecturer sends the room's
+   position from their phone (below), else
+4. a reading that was sent but is too vague refuses activation with
+   `422 GEOFENCE_ANCHOR_UNAVAILABLE`.
+
+### Laptop shows the code, phone sends the location
+
+A laptop has no GPS, so its location is too vague to fence a room. The
+lecturer signs in to the same account on the laptop and on their phone (each
+sign-in is its own `auth_sessions` row; neither signs the other out):
+
+1. The laptop activates the class with no `location`. In an unsurveyed room
+   it opens `AWAITING_LOCATION`.
+2. The phone calls `GET /sessions/live`: the lecturer's sessions that are not
+   closed and not past `closes_at`, newest first, each with `geofence`.
+3. The phone sends `PATCH /sessions/:id/geofence { mode: 'ON', location }`.
+   The session becomes `LECTURER_DEVICE`, centred on the phone, and the
+   laptop's next `GET /sessions/:id/qr` shows it.
+
+The phone can re-send at any time to re-centre (audited, as below). In a
+surveyed room the room's point wins and nothing waits for the phone.
+
+`geofence: 'OFF'` on `POST /sessions` opens the class unfenced.
+`PATCH /sessions/:id/geofence` takes `{ mode: 'OFF' }` or
+`{ mode: 'ON', location? }` (switch back on, or re-capture the lecturer's
+position). A surveyed room always wins, so a lecturer cannot drag the fence
+off it. Every change is audited as `ATTENDANCE_SESSION_GEOFENCE_CHANGED`.
+The fence's status (never its coordinates) is returned as `session.geofence`
+by every session endpoint, including `GET /sessions/:id/qr`.
+
+### At check-in
+
+The full contract for app developers, with platform settings and what to
+show for each error, is [`docs/student-app-checkin.md`](../../../docs/student-app-checkin.md).
+
+`POST /attendance/check-in` and `POST /sessions/scan` take
+`location: { latitude, longitude, accuracy, capturedAt, isMocked? }`
+(`capturedAt` as epoch milliseconds or ISO 8601). When the fence is on,
+`verifyScan` checks it after the code and session-time checks and before the
+class-list check:
+
+| Code | Status | When |
+|---|---|---|
+| `LOCATION_REQUIRED` | 422 | no `location` |
+| `LOCATION_MOCKED` | 403 | `isMocked: true` |
+| `LOCATION_STALE` | 422 | `capturedAt` more than `GEOFENCE_MAX_FIX_AGE_SECONDS` (60) from the server's clock |
+| `LOCATION_TOO_IMPRECISE` | 422 | `accuracy` above `GEOFENCE_MAX_STUDENT_ACCURACY_METRES` (50) |
+| `OUTSIDE_GEOFENCE` | 403 | `distance - accuracy > radius` |
+
+422 means the phone can fix it and retry; 403 means retrying won't help.
+`error.details` carries the rounded distance and the limits, for the app to
+show. Every refusal is audited through `recordFailure` with the distance and
+accuracy (never coordinates), and `GET /sessions/:id/qr` counts students
+refused as `OUTSIDE_GEOFENCE` who have not since checked in
+(`refusedOutsideFence`). An accepted check-in stores `distance_m`,
+`location_accuracy_m` and `geofence_result`; the student's coordinates are
+never stored. With the fence off, `location` is ignored and the record is
+`NOT_CHECKED`.
+
+## The grace window
+
+`QR_ACCEPT_PREVIOUS_WINDOWS` (default `1`) accepts the previous counter as well
+as the current one, so a code is usable for 60–120 seconds.
+
+This exists because scanning is not instant — a student who opens the camera at
+second 59 submits at second 61, and rejecting them would be wrong. It is a
+genuine trade-off: every extra window is another minute in which a shared
+screenshot still works. Set it to `0` for the strictest behaviour and expect
+some legitimate scans to fail.
+
+Codes from the **future** are never accepted, at any setting.
+
+## Why the secret is per-session, not per-unit
+
+Both resist replay, since the counter is signed. But a per-unit secret, once
+leaked, mints valid codes for COSC 100 forever. A per-session secret dies with
+the class meeting.
+
+## Files
+
+| File | Responsibility |
+|---|---|
+| `session.token.ts` | Token generation, signing, rotation maths. Pure — no DB, no HTTP |
+| `qr.render.ts` | PNG / SVG / data-URL rendering |
+| `session.schema.ts` | Zod request contracts |
+| `session.repository.ts` | All SQL; parameterised only |
+| `session.service.ts` | When a code may be issued or accepted |
+| `session.controller.ts` | HTTP in, HTTP out |
+| `session.routes.ts` | Router, auth guards, validation |
+
+## Endpoints
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| `POST` | `/api/v1/sessions` | Lecturer | Open a session for a unit they teach |
+| `GET` | `/api/v1/sessions/:id/qr` | Lecturer | Current code + countdown, plus `checkedIn` / `enrolled` counts, as JSON |
+| `GET` | `/api/v1/sessions/:id/qr.image?format=png\|svg` | Lecturer | Rendered image; `X-QR-Expires-In` header carries the countdown |
+| `POST` | `/api/v1/sessions/scan` | Student | Verify a scanned code without recording it (dry run — use `/attendance/check-in`) |
+| `PATCH` | `/api/v1/sessions/:id/status` | Lecturer | Pause, resume or close |
+| `GET` | `/api/v1/sessions/live` | Lecturer | Their sessions still open, for their phone to find |
+| `PATCH` | `/api/v1/sessions/:id/geofence` | Lecturer | Fence off / on, or (re-)centre it on the device's location |
+
+Lecturers cannot scan and students cannot mint — a lecturer who could do both
+could mark a hall present from their desk.
+
+The client should re-request the code every `expiresInSeconds`; polling costs
+nothing, since no row is written.
+
+## Scope
+
+This module verifies a scan and returns a verdict. It does **not** write the
+attendance record — that belongs to the attendance module, which calls
+`sessionService.verifyScan()` and persists the result.
+
+## Tables
+
+Created by `db/migrations/005_*` and `006_*`. `docs/expected-schema.md` documents the exact
+columns these queries depend on: `units`, `attendance_sessions`,
+`unit_allocations`, `attendance_records`.

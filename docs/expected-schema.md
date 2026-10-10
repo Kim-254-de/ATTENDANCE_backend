@@ -1,0 +1,442 @@
+# Expected database schema
+
+**This service does not create, migrate or own the schema.** It connects to a
+database that already exists and queries it.
+
+This document describes what those queries expect to find, so the database can
+be checked against it. It is a contract, not a migration — nothing here is
+executed by the application.
+
+At boot, [`verifyDatabaseConnection()`](../src/db/database.ts) checks that the
+four tables below exist and refuses to start if any is missing, so a mismatch
+surfaces at startup rather than as a 500 on the first registration.
+
+---
+
+## Tables the lecturer registration flow touches
+
+### `users`
+
+One row per human — lecturers, students and admins share it, so credentials
+and account status have a single home.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key, server-generated |
+| `email` | `varchar(255)` | **UNIQUE** — the registration race depends on this |
+| `password_hash` | `varchar(255)` | Argon2id. Never plaintext |
+| `full_name` | `varchar(160)` | |
+| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` (`021_departments.sql` widened `users_role_check`) |
+| `status` | enum/text | See below |
+| `email_verified_at` | `timestamptz` null | |
+| `failed_login_attempts` | `integer` | Defaults to 0; used by sign-in throttling |
+| `locked_until` | `timestamptz` null | |
+| `last_login_at` | `timestamptz` null | |
+| `created_at` | `timestamptz` | Defaults to `NOW()` |
+| `updated_at` | `timestamptz` | |
+| `deleted_at` | `timestamptz` null | Soft delete — attendance history must outlive an account |
+
+`status` values: `PENDING_VERIFICATION`, `PENDING_APPROVAL`, `ACTIVE`,
+`SUSPENDED`, `DEACTIVATED`. Only `ACTIVE` may authenticate.
+
+Whether `role` and `status` are Postgres enums or plain `text` with a check
+constraint does not matter to this service — it sends and receives strings.
+
+### `lecturer_profiles`
+
+A row exists only once the ERP has confirmed the staff number, so its presence
+is itself proof of verification.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK → `users(id)` ON DELETE CASCADE |
+| `staff_number` | `varchar(64)` | **UNIQUE** — stored uppercased |
+| `title` | `varchar(32)` null | From the ERP |
+| `department` | `varchar(160)` null | From the ERP |
+| `faculty` | `varchar(160)` null | From the ERP |
+| `phone` | `varchar(32)` null | Not set at registration |
+| `erp_staff_id` | `varchar(128)` null | The ERP's own key, for reconciliation |
+| `erp_verified_at` | `timestamptz` | Set to `NOW()` on insert |
+| `erp_snapshot` | `jsonb` null | Verbatim ERP payload — evidence for disputes |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The normalised key everything department-scoped joins on; `department` above stays the ERP's free text and is still written by every sync. Null for a lecturer whose ERP department matched no row |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `student_profiles`
+
+One row per student account (`db/migrations/012_student_accounts.sql`). Created by
+`POST /auth/student/register` once the registration number is verified against the
+student directory (SMARTTT, or the ERP when SMARTTT is off).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `STUDENT`) |
+| `registration_number` | `varchar(64)` | **UNIQUE**, upper-cased. What links the student to `unit_allocations` rows |
+| `programme` | `varchar(200)` null | From the directory at registration |
+| `year_of_study` | `smallint` null | From the directory at registration |
+| `directory_source` | text | `SMARTTT` / `ERP`: which directory verified them |
+| `directory_verified_at` | `timestamptz` | |
+| `directory_snapshot` | `jsonb` null | The directory record as returned |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+`audit_logs.subject_registration_number` (same migration) records the number on
+student registration attempts, including rejected ones.
+
+### `email_verification_tokens`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | FK → `users(id)` ON DELETE CASCADE |
+| `token_hash` | `varchar(64)` | **UNIQUE** — SHA-256 hex. The plaintext token is never stored |
+| `expires_at` | `timestamptz` | |
+| `consumed_at` | `timestamptz` null | The `IS NULL` guard makes consumption atomic |
+| `created_at` | `timestamptz` | |
+
+### `password_reset_tokens`
+
+Created by `db/migrations/004_password_reset_tokens.sql`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | FK -> `users(id)` ON DELETE CASCADE |
+| `token_hash` | `varchar(64)` | **UNIQUE** - SHA-256 hex. The plaintext lives only in the email |
+| `expires_at` | `timestamptz` | Minutes, not days - the link is a live key to the account |
+| `consumed_at` | `timestamptz` null | The `IS NULL` guard makes consumption atomic |
+| `invalidated_at` | `timestamptz` null | Set when a newer request supersedes this link |
+| `requested_ip` | `varchar(64)` null | Who asked, for abuse investigation |
+| `created_at` | `timestamptz` | |
+
+Two separate "dead" columns on purpose: `consumed_at` means the link was used,
+`invalidated_at` means it was replaced. Keeping them apart is what lets an
+administrator tell "somebody used your reset link" from "you requested a second
+one" when a dispute comes up.
+
+### `audit_logs`
+
+Append-only. A revoked registration writes here even though no user row is
+created — that is what makes a rejection explainable afterwards.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `action` | enum/text | See `AuditAction` in [`src/db/types.ts`](../src/db/types.ts) |
+| `outcome` | enum/text | `SUCCESS` · `FAILURE` |
+| `user_id` | `uuid` null | FK → `users(id)` ON DELETE SET NULL. Null when no user existed |
+| `subject_email` | `varchar(255)` null | Denormalised, so a rejection stays traceable |
+| `subject_staff_number` | `varchar(64)` null | Likewise |
+| `erp_outcome` | enum/text null | `VERIFIED` · `NOT_FOUND` · `INACTIVE` · `IDENTITY_MISMATCH` · `UNAVAILABLE` |
+| `reason` | `varchar(255)` null | Truncated by the app before insert |
+| `ip_address` | `varchar(64)` null | |
+| `user_agent` | `varchar(512)` null | |
+| `request_id` | `varchar(64)` null | Correlates with the API logs |
+| `metadata` | `jsonb` null | |
+| `created_at` | `timestamptz` | |
+
+---
+
+## Constraints the logic actually relies on
+
+Two unique indexes are load-bearing, not merely tidy. The service checks for
+duplicates before inserting, but that check cannot be atomic on its own — two
+simultaneous registrations would both pass it. The insert then fails with
+SQLSTATE `23505` and the service converts that to a 409. Without these indexes,
+concurrent requests would create duplicate accounts:
+
+- `users(email)` UNIQUE
+- `lecturer_profiles(staff_number)` UNIQUE
+
+Useful but not load-bearing: indexes on `users(role, status)`,
+`email_verification_tokens(user_id)`, `audit_logs(action, created_at)` and
+`audit_logs(subject_staff_number)`.
+
+---
+
+## Tables the session / QR module touches
+
+`units` and `attendance_sessions` are created by
+`db/migrations/005_attendance_sessions.sql`; `unit_allocations` and
+`attendance_records` by `db/migrations/006_unit_allocations_attendance_records.sql`. See
+[`src/modules/session/README.md`](../src/modules/session/README.md).
+
+### `units`
+
+One row per unit, ever. `COSC 100` exists here exactly once; the rotating QR
+codes never add rows anywhere.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(80)` | **UNIQUE** — e.g. `COSC 100`, or `COSC 103 GR A` for one group of a split unit |
+| `name` | `varchar(200)` | Nullable |
+| `lecturer_user_id` | `uuid` | FK -> `users(id)`. Who may open sessions for it |
+| `status` | text | `PENDING_VERIFICATION` / `VERIFIED` (CHECK constraint). A lecturer-added unit starts `PENDING_VERIFICATION`; `session.service.ts` refuses to activate a class until an admin verifies it (`db/migrations/009_unit_verification.sql`) |
+| `base_code` | `varchar(80)` null | The unit a class belongs to: `COSC 103` for `COSC 103 GR A`. Set by the SMARTTT sync (`db/migrations/011_units_timetable_sync.sql`) |
+| `class_group` | `varchar(50)` null | The teaching group (`GR A`) when the unit is split into groups taught by different lecturers; each group is its own row. Null when not split |
+| `registered_students` | `integer` null | Students registered for this class this term, per SMARTTT (only the group's students for a group). Null for a unit SMARTTT has never reported |
+| `students_without_group` | `integer` null | For a group: students registered for the unit who haven't picked a group in SMARTTT, so are on no group's roster |
+| `timetable_synced_at` | `timestamptz` null | Last time SMARTTT confirmed this unit for its lecturer |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `attendance_sessions`
+
+**One row per class meeting** — not per QR code. A two-hour class writes one
+row here and nothing else, however many times the code rotates.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key. The stable id embedded in every code |
+| `unit_id` | `uuid` | FK -> `units(id)` |
+| `lecturer_user_id` | `uuid` | FK -> `users(id)`. Only this lecturer may view the code |
+| `qr_secret` | `text` | **32-byte base64url HMAC key. Never leaves the server** |
+| `status` | text | `OPEN` / `PAUSED` / `CLOSED` (CHECK constraint) |
+| `title` | `varchar(160)` null | e.g. "Week 3 - Lecture" |
+| `opens_at` | `timestamptz` | Scans before this are refused |
+| `closes_at` | `timestamptz` | Scans after this are refused even if status is OPEN |
+| `rotation_seconds` | `integer` | Per-session override of `QR_ROTATION_SECONDS` |
+| `geofence_mode` | text | `ROOM` / `LECTURER_DEVICE` / `AWAITING_LOCATION` / `OFF` (CHECK constraint, default `OFF`). Where the fence is centred; see `session.geofence.ts` (`db/migrations/012_geofence.sql`, `016_geofence_awaiting_location.sql`). `AWAITING_LOCATION`: activated with no reading in an unsurveyed room, waiting for the lecturer's phone; scans are held |
+| `geofence_lat` / `geofence_lng` | `double precision` null | The fence's centre, fixed at activation. Kept when the fence is switched `OFF` so it can be switched back on |
+| `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
+| `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
+| `room_code` | `varchar(80)` null | The room of the meeting the session was activated for (`unit_slots.room_code`), fixed at activation (`017_unit_slots.sql`) |
+| `scheduled_start_at` | `timestamptz` null | When the meeting this session was activated inside was due to start (`unit_slots.start_time` in campus time), fixed at activation (`021_departments.sql`). `opens_at - this` is how late the class began, which is what the department module reports. Null when the unit has no issued schedule — those sessions are excluded from every timekeeping figure rather than counted as on time |
+| `verification_methods` | `text[]` | Which of `QR` / `CARD` / `FINGERPRINT` / `FACE` this class accepts, as the lecturer ticked them. Non-empty, and a subset of the four (CHECK constraint, default `{QR,FACE}` since `020_unify_verification_method.sql`). A check-in by a method not listed is refused (`019_card_verification.sql`) |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | Unless `geofence_mode` is `OFF` or `AWAITING_LOCATION`, the centre and radius are set (CHECK constraint) |
+
+`qr_secret` is credential material. It should never be selected into a
+response, logged, or exposed through any admin screen — anyone holding it can
+mint valid codes for that session.
+
+### `unit_allocations`
+
+A student on a unit. Rows are synced from SMARTTT's registrations when
+`SMARTTT_BASE_URL` is set (`unit.service.ts syncUnitsFromTimetable`), otherwise
+from the ERP's enrollment records (`unit.service.ts listStudents`), both via
+`unitRepository.syncRosterAllocations` (`db/migrations/010_unit_allocations_erp_source.sql`,
+`011_units_timetable_sync.sql`). A lecturer cannot add, approve or remove a
+student, and a student cannot self-enrol. `LECTURER` / `SELF_ENROLLED` remain
+valid `source` values only for historical rows written before rosters were synced.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | FK -> `units(id)` |
+| `registration_number` | `varchar(64)` null | Uppercased. Set by the SMARTTT or ERP sync |
+| `student_user_id` | `uuid` null | FK -> `users(id)`. Linked on student registration (`linkAllocationsToStudent`) |
+| `full_name` | `varchar(160)` null | From SMARTTT or the ERP at sync time |
+| `status` | text | `ACTIVE` / `PENDING` / `DROPPED`. Only `ACTIVE` may check in. `PENDING` is legacy-only; nothing writes it any more |
+| `source` | text | `SMARTTT` or `ERP`, whichever sync wrote it; `LECTURER` / `SELF_ENROLLED` only on historical data |
+| `added_by_user_id` | `uuid` null | FK -> `users(id)`. Null on synced rows |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | At least one of `registration_number`, `student_user_id` is set |
+| | | **UNIQUE (unit_id, registration_number)** and **UNIQUE (unit_id, student_user_id)**, each partial on NOT NULL |
+
+### `attendance_records`
+
+Written by the attendance module on a verified check-in; read by the session
+module to reject a second one.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `session_id` | `uuid` | FK -> `attendance_sessions(id)` |
+| `student_user_id` | `uuid` | FK -> `users(id)` |
+| `allocation_id` | `uuid` null | FK -> `unit_allocations(id)` |
+| `recorded_at` | `timestamptz` | Defaults to `NOW()` |
+| `qr_age_seconds` | `integer` null | How old the scanned code was. Null for a method with no rotating code, e.g. a card swipe |
+| `verification_method` | text | `QR` / `CARD` / `FINGERPRINT` / `FACE` (CHECK constraint, default `QR`). What proved the student was present; every row predating `019_card_verification.sql` was a QR scan |
+| `ip_address` / `user_agent` | text null | |
+| `distance_m` | `double precision` null | How far the student's reading was from the fence's centre |
+| `location_accuracy_m` | `double precision` null | The reading's reported accuracy |
+| `geofence_result` | text | `INSIDE` / `NOT_CHECKED` (CHECK constraint, default `NOT_CHECKED`). `INSIDE` requires both columns above |
+| `face_score` | `real` null | Cosine similarity of the confirmed face match. Required when `verification_method = 'FACE'` (`020_unify_verification_method.sql` replaced the face branch's own `method` column with `verification_method`) |
+| `confirmed_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who confirmed a face match on the terminal |
+| | | **UNIQUE (session_id, student_user_id)** -- load-bearing. Also what makes QR and face each other's fallback: whichever comes first is the record |
+
+The student's raw coordinates are deliberately never stored; the distance is
+all attendance needs.
+
+The `UNIQUE (session_id, student_user_id)` index is not cosmetic. The service
+checks for an existing record before writing, but that check cannot be atomic
+on its own: two simultaneous scans would both pass it. The unique violation is
+what actually stops a double record.
+
+### `face_enrollments`
+
+A student's enrolled face (`db/migrations/019_face_recognition.sql`). One row
+per student, used for all their units. See
+[`face-recognition.md`](face-recognition.md).
+
+| Column | Type | Notes |
+|---|---|---|
+| `student_user_id` | `uuid` | Primary key, FK -> `users(id)` ON DELETE CASCADE |
+| `model` | text | The face-service model that produced the templates, e.g. `sface-2021dec` |
+| `embeddings` | `jsonb` | Array of templates, each an array of numbers. The photos are never stored |
+| `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who captured the photos |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+`users.face_consent_at` (`timestamptz` null) is when the student opted in.
+Without it no lecturer can enroll them; withdrawing it deletes their row here.
+
+### `unit_schedule`
+
+The unit's weekly slot **when it has exactly one** (`db/migrations/007_unit_schedule.sql`), for display. Activation
+uses `unit_slots`, below.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | **UNIQUE**, FK -> `units(id)` |
+| `day_of_week` | `smallint` | 0=Sun..6=Sat |
+| `start_time` / `end_time` | `time` | |
+| `room_code` | `varchar(80)` null | Where the slot is taught, as SMARTTT names it. Looked up in `rooms` by code; not a foreign key, since SMARTTT may name a room nobody has surveyed |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `unit_slots`
+
+Every weekly meeting of a unit (`db/migrations/017_unit_slots.sql`), replaced on each SMARTTT sync. A class can only
+be activated while `now` (campus time, `CAMPUS_TIMEZONE`) falls inside one of them; the session closes at that
+meeting's end and is fenced to its room.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `unit_id` | `uuid` | FK -> `units(id)`, ON DELETE CASCADE |
+| `day_of_week` | `smallint` | 0=Sun..6=Sat |
+| `start_time` / `end_time` | `time` | `end_time > start_time` |
+| `room_code` | `varchar(80)` null | As SMARTTT names it, like `unit_schedule.room_code` |
+| `created_at` | `timestamptz` | |
+| | | UNIQUE (`unit_id`, `day_of_week`, `start_time`, `end_time`) |
+
+### `rooms`
+
+A teaching room and its surveyed centre point (`db/migrations/012_geofence.sql`).
+Coordinates are set by an administrator (`npm run dev:set-room`), never by a
+lecturer, who could otherwise move the fence to wherever their absent students are.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(80)` | **UNIQUE**, e.g. `LH1` |
+| `name` | `varchar(160)` null | |
+| `latitude` / `longitude` | `double precision` null | Null until surveyed |
+| `surveyed_accuracy_m` | `double precision` null | The survey reading's accuracy |
+| `surveyed_at` | `timestamptz` null | |
+| `surveyed_by_user_id` | `uuid` null | FK -> `users(id)` |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | `latitude`, `longitude` and `surveyed_at` are all set or all null (CHECK constraint) |
+
+---
+
+### `student_cards`
+
+A student's ID card, for check-in at a terminal
+([`docs/card-check-in.md`](card-check-in.md)). Written by
+`scripts/dev-enrol-card.mjs` until there is an administrator interface; read on
+every swipe by `src/modules/attendance/card.repository.ts`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `student_user_id` | `uuid` | FK -> `users(id)`, cascade |
+| `card_uid_hmac` | `varchar(64)` | **HMAC-SHA256 hex of the UID, keyed with `CARD_UID_SECRET`.** Unique. The UID itself is never stored |
+| `label` | `varchar(64)` null | Free text for whoever has to find a physical card, e.g. "re-issued Oct 2026" |
+| `status` | text | `ACTIVE` / `REVOKED` (CHECK constraint) |
+| `issued_at` | `timestamptz` | Defaults to `NOW()` |
+| `revoked_at` | `timestamptz` null | Set exactly when status is `REVOKED` (CHECK constraint) |
+| `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`, set null |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | **UNIQUE (student_user_id) WHERE status = 'ACTIVE'** -- load-bearing: one usable card each |
+
+A card UID is only 32-56 bits, so unlike the 256-bit tokens above a plain
+SHA-256 of one could be enumerated from a dump in seconds and written onto a
+blank card. The HMAC key lives in the environment, not the database — see
+[`src/common/utils/card-uid.ts`](../src/common/utils/card-uid.ts). Rotating
+`CARD_UID_SECRET` invalidates every enrolled card, which is the recovery path
+if this table leaks.
+
+Rows are never deleted. A lost card is `REVOKED` so the attendance it already
+recorded keeps its meaning, and the partial unique index exempts revoked rows
+so a replacement can be enrolled alongside the history.
+
+---
+
+## Tables the department module touches
+
+Created by `db/migrations/021_departments.sql`. See
+[`src/modules/department/README.md`](../src/modules/department/README.md).
+
+"Department" was free text on `lecturer_profiles` until this migration — fine
+for printing on a profile, but nothing can be *scoped* to a department that
+way, since two spellings of one department are two departments. Both tables are
+backfilled from the distinct values the ERP had already written, and the
+free-text `lecturer_profiles.department` / `.faculty` columns stay: the ERP sync
+still writes them on every registration and profile refresh.
+
+`units` deliberately has **no** `department_id`. A unit's department is its
+lecturer's (`units.lecturer_user_id` -> `lecturer_profiles.user_id` ->
+`department_id`); a second copy could disagree with the first the moment a unit
+changes hands.
+
+### `faculties`
+
+The level above a department. A faculty-level role is the next milestone; the
+table exists now so departments have somewhere to hang.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `name` | `varchar(160)` | **UNIQUE** — what the backfill keys on |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `departments`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `name` | `varchar(160)` | **UNIQUE**. Matched against `lecturer_profiles.department` by the backfill |
+| `faculty_id` | `uuid` null | FK -> `faculties(id)`. Null when the ERP named a department but no faculty |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `department_profiles`
+
+One department officer — the person with read-only oversight of one
+department's teaching. Mirrors `lecturer_profiles` minus the ERP columns:
+there is no ERP staff record to verify an officer against, so they are
+provisioned directly (`scripts/dev-seed-department.mjs` locally) and there is
+no self-registration flow. A row's presence is what makes a `DEPARTMENT` user
+able to see anything; `department.service.ts` reads it by `user_id` on every
+request rather than trusting the session's cached account.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `DEPARTMENT`) ON DELETE CASCADE |
+| `department_id` | `uuid` | FK -> `departments(id)`. The only scope this officer may read |
+| `title` | `varchar(32)` null | |
+| `phone` | `varchar(32)` null | |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Indexes: `lecturer_profiles(department_id)` — every department query starts by
+selecting the department's lecturers, the way `units_lecturer_idx` backs every
+"this lecturer's units" query — plus `departments(faculty_id)` and
+`department_profiles(department_id)`.
+
+---
+
+## Tables later modules will need
+
+Not queried yet — listed so the database owner can plan: a `faculties`-scoped
+role, which is why `faculties` already exists as a table.
+
+---
+
+## If the real schema differs
+
+Column and table names live only in the SQL inside each module's
+`*.repository.ts`. Adjust the queries there; nothing else in the codebase
+refers to them. If names differ substantially, update
+[`src/db/types.ts`](../src/db/types.ts) to match so the row types stay honest.

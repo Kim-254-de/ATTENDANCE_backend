@@ -1,0 +1,461 @@
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { parse } from 'dotenv';
+import type { Express } from 'express';
+import pg from 'pg';
+import request from 'supertest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Student accounts end to end against a real Postgres database: registration
+ * checked against SMARTTT (and the ERP fallback), sign-in straight after it,
+ * /auth/me, refresh, password reset, a real QR check-in, and the student's
+ * own units and attendance. SMARTTT and the ERP are stubbed at fetch.
+ */
+const TEST_DB = 'attendance_students_test';
+const SMARTTT = 'https://smarttt.test.local';
+const PASSWORD = 'Sup3rSecretPw9x';
+const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
+const adminUrl = new URL(realUrl); adminUrl.pathname = '/postgres';
+
+let app: Express;
+let pool: pg.Pool;
+let env: { SMARTTT_BASE_URL?: string };
+let logger: { debug: (...args: unknown[]) => void };
+
+interface Body<T = Record<string, unknown>> { data: T; error?: { code: string; message: string; details?: unknown } }
+const body = <T = Record<string, unknown>>(res: request.Response) => res.body as Body<T>;
+const cookiesOf = (res: request.Response) => (res.headers['set-cookie'] as unknown as string[] | undefined) ?? [];
+const cookieHeader = (res: request.Response) => cookiesOf(res).map((c) => c.split(';')[0]).join('; ');
+
+const uniq = (() => { let n = 0; return () => ++n; })();
+/** Names may only contain letters, so each test student gets a letters-only surname: 12 -> "Kbc". */
+const surname = (n: number) => `K${String(n).split('').map((d) => 'abcdefghij'[Number(d)]).join('')}`;
+
+/** SMARTTT's student records, keyed by registration number. */
+type DirectoryEntry = { full_name: string | null; email: string | null; programme?: string; is_active?: boolean } | 'DOWN';
+let smartttStudents: Record<string, DirectoryEntry> = {};
+/** What SMARTTT's student-units endpoint returns, keyed by registration number. */
+let smartttStudentUnits: Record<string, unknown[] | 'DOWN'> = {};
+/** The ERP's, for the fallback when SMARTTT is off. */
+let erpStudents: Record<string, { fullName: string; status: string }> = {};
+
+function stubFetch() {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.origin === SMARTTT && url.pathname.endsWith('/students/')) {
+      const reg = url.searchParams.get('registration_number') ?? '';
+      const entry = smartttStudents[reg];
+      if (entry === 'DOWN') return Promise.resolve(new Response('asleep', { status: 503 }));
+      if (!entry) return Promise.resolve(new Response('{}', { status: 404 }));
+      return Promise.resolve(Response.json({
+        registration_number: reg, full_name: entry.full_name, email: entry.email,
+        programme: entry.programme ?? 'BSc Computer Science', year_of_study: 3, is_active: entry.is_active ?? true,
+      }));
+    }
+    if (url.origin === SMARTTT && url.pathname.endsWith('/student-units/')) {
+      const units = smartttStudentUnits[url.searchParams.get('registration_number') ?? ''] ?? [];
+      if (units === 'DOWN') return Promise.resolve(new Response('asleep', { status: 503 }));
+      return Promise.resolve(Response.json({ registration_number: 'X', term: { academic_year: '2025/2026', semester: 1 }, units }));
+    }
+    if (url.origin === SMARTTT) return Promise.resolve(Response.json({ term: null, units: [] })); // lecturer-units
+    const reg = decodeURIComponent(url.pathname.split('/students/')[1] ?? '');
+    const found = erpStudents[reg];
+    if (!found) return Promise.resolve(new Response('{}', { status: 404 }));
+    return Promise.resolve(Response.json({ registrationNumber: reg, fullName: found.fullName, programme: 'BEd Arts', status: found.status }));
+  });
+}
+
+/** The link the (logged, not sent) email would carry. */
+let emailedTokens: string[] = [];
+function captureEmails() {
+  vi.spyOn(logger, 'debug').mockImplementation((...args: unknown[]) => {
+    const text = (args[0] as { body?: string } | undefined)?.body ?? '';
+    const match = /token=([^\s&]+)/.exec(text);
+    if (match) emailedTokens.push(decodeURIComponent(match[1]!));
+  });
+}
+
+beforeAll(async () => {
+  const admin = new pg.Client({ connectionString: adminUrl.toString() });
+  await admin.connect();
+  await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE ${TEST_DB}`);
+  await admin.end();
+
+  const testUrl = new URL(realUrl); testUrl.pathname = `/${TEST_DB}`;
+  process.env.DATABASE_URL = testUrl.toString();
+  process.env.ERP_MAX_RETRIES = '0';
+  process.env.SMARTTT_BASE_URL = SMARTTT;
+  process.env.SMARTTT_API_KEY = 'k';
+  process.env.LOG_LEVEL = 'debug';
+
+  pool = new pg.Pool({ connectionString: testUrl.toString() });
+  for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {
+    await pool.query(fs.readFileSync(new URL(`../../db/migrations/${f}`, import.meta.url), 'utf8'));
+  }
+  app = (await import('../../src/app.js')).createApp();
+  ({ env } = await import('../../src/config/env.js'));
+  ({ logger } = await import('../../src/config/logger.js'));
+});
+
+beforeEach(() => {
+  smartttStudents = {};
+  smartttStudentUnits = {};
+  erpStudents = {};
+  emailedTokens = [];
+  env.SMARTTT_BASE_URL = SMARTTT;
+  stubFetch();
+  captureEmails();
+});
+afterEach(() => { vi.restoreAllMocks(); });
+
+afterAll(async () => {
+  await pool.end();
+  await (await import('../../src/db/database.js')).closeDatabase();
+  const admin = new pg.Client({ connectionString: adminUrl.toString() });
+  await admin.connect();
+  await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+  await admin.end();
+});
+
+const register = (data: Record<string, unknown>) => request(app).post('/api/v1/auth/student/register').send(data);
+const login = (identifier: string, password = PASSWORD) => request(app).post('/api/v1/auth/login').send({ identifier, password });
+
+/** A student SMARTTT knows, and the registration form they'd submit. */
+function knownStudent(overrides: Partial<{ fullName: string; email: string }> = {}) {
+  const n = uniq();
+  const reg = `EBT1/${String(10000 + n)}/23`;
+  const email = `student${n}@students.tharaka.ac.ke`;
+  smartttStudents[reg] = { full_name: `Amina Wanjiku ${surname(n)}`, email };
+  return {
+    reg,
+    form: {
+      fullName: overrides.fullName ?? `Amina ${surname(n)}`, // dropped middle name still matches
+      email: overrides.email ?? email.toUpperCase(), // any case
+      registrationNumber: reg.toLowerCase(),         // any case
+      password: PASSWORD,
+      confirmPassword: PASSWORD,
+    },
+  };
+}
+
+/** Register, then sign in. Returns the cookie header and the user id. */
+async function activeStudent() {
+  const s = knownStudent();
+  expect((await register(s.form)).status).toBe(201);
+  const res = await login(s.reg);
+  expect(res.status).toBe(200);
+  return { ...s, cookie: cookieHeader(res), id: body<{ id: string }>(res).data.id };
+}
+
+async function lecturerWithUnit(code = `COSC ${100 + uniq()} GR A`) {
+  const n = uniq();
+  const { rows: [l] } = await pool.query<{ id: string }>(
+    `INSERT INTO users (email, password_hash, full_name, role, status, email_verified_at)
+     VALUES ($1, 'x', 'Dr. Jane Otieno', 'LECTURER', 'ACTIVE', NOW()) RETURNING id`, [`lec${n}@uni.ac.ke`]);
+  await pool.query(`INSERT INTO lecturer_profiles (user_id, staff_number, erp_verified_at) VALUES ($1, $2, NOW())`, [l!.id, `STF/S${n}`]);
+  const { rows: [u] } = await pool.query<{ id: string }>(
+    `INSERT INTO units (code, name, lecturer_user_id, status, base_code, class_group)
+     VALUES ($1, 'Computer Applications', $2, 'VERIFIED', 'COSC 103', 'GR A') RETURNING id`, [code, l!.id]);
+  const sessionId = randomUUID();
+  await pool.query(`INSERT INTO auth_sessions (id, user_id, refresh_token_hash, expires_at) VALUES ($1, $2, 'x', NOW() + INTERVAL '1 hour')`, [sessionId, l!.id]);
+  const { signAccessToken } = await import('../../src/modules/auth/auth.session.js');
+  return { id: l!.id, unitId: u!.id, code, auth: `Bearer ${await signAccessToken({ userId: l!.id, sessionId, role: 'LECTURER' })}` };
+}
+
+describe('student registration', () => {
+  it('creates an active account when SMARTTT knows the student, with no confirmation email', async () => {
+    const s = knownStudent();
+    const res = await register(s.form);
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ registrationNumber: s.reg, status: 'ACTIVE', nextStep: 'SIGN_IN' });
+    expect(emailedTokens).toHaveLength(0);
+
+    const { rows: [p] } = await pool.query<{ registration_number: string; programme: string; directory_source: string }>(`SELECT registration_number, programme, directory_source FROM student_profiles WHERE registration_number = $1`, [s.reg]);
+    expect(p).toEqual({ registration_number: s.reg, programme: 'BSc Computer Science', directory_source: 'SMARTTT' });
+
+    // No email to confirm and no approval: they sign in straight away.
+    expect((await login(s.reg)).status).toBe(200);
+  });
+
+  it('links the student to rosters that already list them on registration', async () => {
+    const s = knownStudent();
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source) VALUES ($1, $2, 'Amina', 'ACTIVE', 'SMARTTT')`,
+      [lec.unitId, s.reg]);
+
+    expect((await register(s.form)).status).toBe(201);
+
+    const { rows: [a] } = await pool.query<{ student_user_id: string | null }>(`SELECT student_user_id FROM unit_allocations WHERE registration_number = $1`, [s.reg]);
+    expect(a!.student_user_id).toEqual(expect.any(String));
+  });
+
+  it.each([
+    ['in neither SMARTTT nor the ERP', () => ({ ...knownStudent().form, registrationNumber: 'EBT1/99999/23' }), 403, 'STUDENT_RECORD_NOT_FOUND'],
+    ['not a current student', () => { const s = knownStudent(); smartttStudents[s.reg] = { ...(smartttStudents[s.reg] as object), is_active: false } as DirectoryEntry; return s.form; }, 403, 'STUDENT_RECORD_INACTIVE'],
+    ['unconfirmable: SMARTTT unreachable and not in the ERP', () => { const s = knownStudent(); smartttStudents[s.reg] = 'DOWN'; return s.form; }, 503, 'STUDENT_DIRECTORY_UNAVAILABLE'],
+  ])('refuses a registration when the number is %s, creating nothing', async (_label, form, status, code) => {
+    const f = form();
+    const res = await register(f);
+    expect(res.status).toBe(status);
+    expect(body(res).error?.code).toBe(code);
+    const { rows } = await pool.query(`SELECT 1 FROM users WHERE email = lower($1)`, [f.email]);
+    expect(rows).toHaveLength(0);
+    const { rows: audit } = await pool.query(
+      `SELECT action FROM audit_logs WHERE subject_registration_number = upper($1) AND action = 'STUDENT_REGISTRATION_REVOKED'`, [f.registrationNumber]);
+    expect(audit).toHaveLength(1);
+  });
+
+  it('checks only the registration number: a name and email unlike the record still register', async () => {
+    const s = knownStudent({ fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
+    const res = await register(s.form);
+    expect(res.status).toBe(201);
+    expect(body(res).data).toMatchObject({ registrationNumber: s.reg, fullName: 'Brian Otieno', email: 'brian.otieno@gmail.com' });
+  });
+
+  it('refuses a second account for the same registration number or email', async () => {
+    const s = knownStudent();
+    expect((await register(s.form)).status).toBe(201);
+    const again = await register({ ...s.form, email: 'other@students.tharaka.ac.ke' });
+    expect(again.status).toBe(409);
+    expect(body(again).error?.code).toBe('ACCOUNT_ALREADY_EXISTS');
+  });
+
+  it('applies the password policy, including not reusing the registration number', async () => {
+    const s = knownStudent();
+    expect((await register({ ...s.form, password: 'short', confirmPassword: 'short' })).status).toBe(400);
+    const pw = `Aa${s.reg.replace(/\//g, '')}9`;
+    const res = await register({ ...s.form, password: pw, confirmPassword: pw });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toMatch(/registration number/);
+  });
+
+  it.each([
+    ['does not list the number', undefined],
+    ['is unreachable', 'DOWN' as const],
+  ])('falls back to the ERP when SMARTTT %s', async (_label, smartttEntry) => {
+    const n = uniq();
+    const reg = `EBT1/${String(30000 + n)}/22`;
+    if (smartttEntry) smartttStudents[reg] = smartttEntry;
+    erpStudents[reg] = { fullName: 'Kevin Tuei Kiprono', status: 'active' };
+    const res = await register({ fullName: 'Kevin Tuei', email: `kevin${n}@gmail.com`, registrationNumber: reg, password: PASSWORD, confirmPassword: PASSWORD });
+    expect(res.status).toBe(201);
+    const { rows: [p] } = await pool.query<{ directory_source: string }>(`SELECT directory_source FROM student_profiles WHERE registration_number = $1`, [reg]);
+    expect(p!.directory_source).toBe('ERP');
+  });
+
+  it('does not ask the ERP about a student SMARTTT reports as no longer current', async () => {
+    const s = knownStudent();
+    smartttStudents[s.reg] = { ...(smartttStudents[s.reg] as object), is_active: false } as DirectoryEntry;
+    erpStudents[s.reg] = { fullName: 'Amina Wanjiku', status: 'active' };
+    const res = await register(s.form);
+    expect(res.status).toBe(403);
+    expect(body(res).error?.code).toBe('STUDENT_RECORD_INACTIVE');
+  });
+
+  it('checks against the ERP when SMARTTT is not configured (name only: the ERP holds no email)', async () => {
+    env.SMARTTT_BASE_URL = undefined;
+    erpStudents['EBT1/20000/22'] = { fullName: 'Kevin Tuei Kiprono', status: 'active' };
+    const ok = await register({ fullName: 'Kevin Tuei', email: 'kevin@gmail.com', registrationNumber: 'EBT1/20000/22', password: PASSWORD, confirmPassword: PASSWORD });
+    expect(ok.status).toBe(201);
+    const { rows: [p] } = await pool.query<{ directory_source: string }>(`SELECT directory_source FROM student_profiles WHERE registration_number = 'EBT1/20000/22'`);
+    expect(p!.directory_source).toBe('ERP');
+  });
+});
+
+describe('student sign-in and session', () => {
+  it('signs in by registration number or email, and /auth/me returns the student', async () => {
+    const s = await activeStudent();
+    const byEmail = await login(s.form.email);
+    expect(byEmail.status).toBe(200);
+    expect(body(byEmail).data).toMatchObject({ role: 'student', registrationNumber: s.reg, programme: 'BSc Computer Science', yearOfStudy: 3 });
+
+    const me = await request(app).get('/api/v1/auth/me').set('Cookie', s.cookie);
+    expect(me.status).toBe(200);
+    expect(body(me).data).toMatchObject({ id: s.id, role: 'student', registrationNumber: s.reg, avatarUrl: null });
+    expect(JSON.stringify(me.body)).not.toMatch(/password|hash/i);
+  });
+
+  it('says "registration number" on a wrong password', async () => {
+    const s = await activeStudent();
+    const res = await login(s.reg, 'Wr0ngPassword99');
+    expect(res.status).toBe(401);
+    expect(body(res).error?.message).toBe('Incorrect registration number/email or password.');
+  });
+
+  it('refreshes a student session and keeps the student role', async () => {
+    const s = await activeStudent();
+    const signedIn = await login(s.reg);
+    const refreshed = await request(app).post('/api/v1/auth/refresh').set('Cookie', cookieHeader(signedIn));
+    expect(refreshed.status).toBe(204);
+    const me = await request(app).get('/api/v1/auth/me').set('Cookie', cookieHeader(refreshed));
+    expect(body(me).data).toMatchObject({ role: 'student' });
+  });
+
+  it('keeps students and lecturers out of each other’s endpoints', async () => {
+    const s = await activeStudent();
+    const lec = await lecturerWithUnit();
+    expect((await request(app).get('/api/v1/units').set('Cookie', s.cookie)).status).toBe(403);
+    expect((await request(app).post('/api/v1/sessions').set('Cookie', s.cookie).send({ unitId: lec.unitId })).status).toBe(403);
+    expect((await request(app).get('/api/v1/students/me/units').set('Authorization', lec.auth)).status).toBe(403);
+    expect(body(await request(app).get('/api/v1/auth/me').set('Authorization', lec.auth)).data).toMatchObject({ role: 'lecturer' });
+  });
+
+  it('resets a forgotten student password by email', async () => {
+    const s = await activeStudent();
+    emailedTokens = [];
+    expect((await request(app).post('/api/v1/auth/forgot-password').send({ email: s.form.email })).status).toBe(200);
+    expect(emailedTokens).toHaveLength(1);
+    const next = 'N3wStudentPassword';
+    const reset = await request(app).post('/api/v1/auth/reset-password').send({ token: emailedTokens[0], password: next, confirmPassword: next });
+    expect(reset.status).toBe(200);
+    expect((await login(s.reg)).status).toBe(401);
+    expect((await login(s.reg, next)).status).toBe(200);
+  });
+});
+
+describe("a student's units and attendance", () => {
+  it('checks in with a real QR code, then reports units, rates and history', async () => {
+    const s = await activeStudent();
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, student_user_id, full_name, status, source)
+       VALUES ($1, $2, $3, 'Amina', 'ACTIVE', 'SMARTTT')`, [lec.unitId, s.reg, s.id]);
+
+    // An earlier class the student missed.
+    await pool.query(
+      `INSERT INTO attendance_sessions (unit_id, lecturer_user_id, qr_secret, status, title, opens_at, closes_at, rotation_seconds)
+       VALUES ($1, $2, 'x', 'CLOSED', 'Week 1', NOW() - INTERVAL '8 days', NOW() - INTERVAL '8 days' + INTERVAL '2 hours', 60)`,
+      [lec.unitId, lec.id]);
+
+    // Today's class: the lecturer opens it, the student scans the code on screen.
+    // Geofence off: this test is about what a student's units and history report, not where
+    // they scanned from. The fence has its own tests in units-attendance.test.ts.
+    const opened = await request(app).post('/api/v1/sessions').set('Authorization', lec.auth)
+      .send({ unitId: lec.unitId, title: 'Week 2', closesAt: new Date(Date.now() + 3600_000).toISOString(), geofence: 'OFF' });
+    expect(opened.status).toBe(201);
+    const sessionId = body<{ id: string }>(opened).data.id;
+    const qr = await request(app).get(`/api/v1/sessions/${sessionId}/qr`).set('Authorization', lec.auth);
+    const checkIn = await request(app).post('/api/v1/attendance/check-in').set('Cookie', s.cookie)
+      .send({ payload: body<{ payload: string }>(qr).data.payload });
+    expect(checkIn.status).toBe(201);
+
+    // A class that's open right now and not yet attended: not an absence yet.
+    await pool.query(
+      `INSERT INTO attendance_sessions (unit_id, lecturer_user_id, qr_secret, status, title, opens_at, closes_at, rotation_seconds)
+       VALUES ($1, $2, 'x', 'OPEN', 'Week 2 lab', NOW() - INTERVAL '1 minute', NOW() + INTERVAL '1 hour', 60)`,
+      [lec.unitId, lec.id]);
+
+    const units = await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie);
+    expect(units.status).toBe(200);
+    expect(body<unknown[]>(units).data).toEqual([expect.objectContaining({
+      id: lec.unitId, code: lec.code, baseCode: 'COSC 103', group: 'GR A', lecturerName: 'Dr. Jane Otieno',
+      // The lab is still open and not scanned yet, so it isn't counted: 1 of 2, like the history below.
+      sessionsHeld: 2, sessionsAttended: 1, attendanceRate: 50,
+    })]);
+
+    const history = await request(app).get('/api/v1/students/me/attendance').set('Cookie', s.cookie);
+    expect(history.status).toBe(200);
+    const h = body<{ summary: unknown; records: { title: string; mark: string }[] }>(history).data;
+    // Newest first: Week 2 opened just now, the lab a minute earlier, Week 1 last week.
+    expect(h.records.map((r) => [r.title, r.mark])).toEqual([['Week 2', 'PRESENT'], ['Week 2 lab', 'OPEN'], ['Week 1', 'ABSENT']]);
+    expect(h.summary).toEqual({ sessionsHeld: 2, attended: 1, attendanceRate: 50 });
+
+    const filtered = await request(app).get(`/api/v1/students/me/attendance?unitId=${randomUUID()}`).set('Cookie', s.cookie);
+    expect(body<{ records: unknown[] }>(filtered).data.records).toEqual([]);
+    expect((await request(app).get('/api/v1/students/me/attendance?limit=0').set('Cookie', s.cookie)).status).toBe(400);
+  });
+
+  it('shows nothing for units the student was dropped from or never on', async () => {
+    const s = await activeStudent();
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, student_user_id, status, source) VALUES ($1, $2, $3, 'DROPPED', 'SMARTTT')`,
+      [lec.unitId, s.reg, s.id]);
+    await lecturerWithUnit(); // someone else's unit entirely
+    expect(body(await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie)).data).toEqual([]);
+  });
+});
+
+describe("a student's units from SMARTTT", () => {
+  const slot = (day: number, start: string, end: string) =>
+    ({ day_of_week: day, start_time: start, end_time: end, room: 'LH1', class_group: 'MAIN', program: 'BSc CS' });
+
+  it('lists units SMARTTT has them registered for alongside the ones on a class list here, without duplicates', async () => {
+    const s = await activeStudent();
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, student_user_id, status, source) VALUES ($1, $2, $3, 'ACTIVE', 'SMARTTT')`,
+      [lec.unitId, s.reg, s.id]);
+    smartttStudentUnits[s.reg] = [
+      { code: lec.code.toLowerCase(), unit_code: 'COSC 103', group: 'GR A', name: 'Computer Applications',
+        group_required: false, lecturers: ['Jane Otieno'], slots: [slot(1, '08:00', '10:00')] },
+      { code: 'MATH 110', unit_code: 'MATH 110', group: null, name: 'Calculus I',
+        group_required: false, lecturers: ['Peter Kamami', 'Mary Wambui'], slots: [slot(3, '14:00', '16:00')] },
+      { code: 'EDFO 111', unit_code: 'EDFO 111', group: null, name: 'Foundations of Education',
+        group_required: true, lecturers: [], slots: [] },
+    ];
+
+    const res = await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie);
+    expect(res.status).toBe(200);
+    expect(body<unknown[]>(res).data).toEqual([
+      expect.objectContaining({ id: lec.unitId, code: lec.code, onRoster: true, groupRequired: false }),
+      {
+        id: null, code: 'EDFO 111', name: 'Foundations of Education', baseCode: 'EDFO 111', group: null,
+        lecturerName: null, schedule: null, sessionsHeld: 0, sessionsAttended: 0, attendanceRate: null,
+        onRoster: false, groupRequired: true,
+      },
+      expect.objectContaining({
+        id: null, code: 'MATH 110', lecturerName: 'Peter Kamami, Mary Wambui',
+        schedule: { dayOfWeek: 3, startTime: '14:00', endTime: '16:00' }, onRoster: false,
+      }),
+    ]);
+  });
+
+  it('keeps showing the last synced units when SMARTTT is down', async () => {
+    const s = await activeStudent();
+    smartttStudentUnits[s.reg] = [{ code: 'MATH 110', name: 'Calculus I', lecturers: [], slots: [] }];
+    const codes = async () =>
+      body<{ code: string }[]>(await request(app).get('/api/v1/students/me/units').set('Cookie', s.cookie)).data.map((u) => u.code);
+    expect(await codes()).toEqual(['MATH 110']);
+
+    smartttStudentUnits[s.reg] = 'DOWN';
+    (await import('../../src/modules/student/student.service.js')).resetStudentTimetableSyncState();
+    expect(await codes()).toEqual(['MATH 110']);
+  });
+});
+
+describe('migration 014', () => {
+  it('activates students stuck waiting for email confirmation and links them to their rosters', async () => {
+    const insertStudent = async (status: string) => {
+      const n = uniq();
+      const { rows: [u] } = await pool.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, 'x', 'Stuck Student', 'STUDENT', $2) RETURNING id`,
+        [`stuck${n}@students.tharaka.ac.ke`, status]);
+      const reg = `EBT1/${String(20000 + n)}/23`;
+      await pool.query(
+        `INSERT INTO student_profiles (user_id, registration_number, directory_source, directory_verified_at) VALUES ($1, $2, 'SMARTTT', NOW())`,
+        [u!.id, reg]);
+      return { id: u!.id, reg };
+    };
+    const pending = await insertStudent('PENDING_VERIFICATION');
+    const suspended = await insertStudent('SUSPENDED');
+    await pool.query(`INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 day')`, [pending.id, `h${uniq()}`]);
+    const lec = await lecturerWithUnit();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, full_name, status, source) VALUES ($1, $2, 'Stuck', 'ACTIVE', 'SMARTTT')`,
+      [lec.unitId, pending.reg]);
+
+    await pool.query(fs.readFileSync(new URL('../../db/migrations/014_students_active_on_registration.sql', import.meta.url), 'utf8'));
+
+    const status = async (id: string) => (await pool.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [id])).rows[0]!.status;
+    expect(await status(pending.id)).toBe('ACTIVE');
+    expect(await status(suspended.id)).toBe('SUSPENDED');
+    const { rows: [t] } = await pool.query<{ consumed: boolean }>('SELECT consumed_at IS NOT NULL AS consumed FROM email_verification_tokens WHERE user_id = $1', [pending.id]);
+    expect(t!.consumed).toBe(true);
+    const { rows: [a] } = await pool.query<{ student_user_id: string | null }>('SELECT student_user_id FROM unit_allocations WHERE registration_number = $1', [pending.reg]);
+    expect(a!.student_user_id).toBe(pending.id);
+  });
+});

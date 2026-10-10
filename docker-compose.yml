@@ -1,3 +1,4 @@
+name: attendance_backend   # same project name => reuses the existing Postgres container and volume
 services:
   db:
     image: postgres:15
@@ -14,5 +15,14 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       retries: 10
+  # Turns face photos into embeddings for face check-in (docs/face-recognition.md).
+  # Called by the API only; bound to localhost like the database.
+  face-service:
+    build: ./face-service
+    restart: unless-stopped
+    environment:
+      FACE_SERVICE_KEY: ${FACE_SERVICE_KEY}
+    ports:
+      - "127.0.0.1:8001:8000"
 volumes:
   attendance_pgdata:
