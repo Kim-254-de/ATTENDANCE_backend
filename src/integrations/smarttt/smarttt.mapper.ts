@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  SmartttAccount,
   SmartttSlot,
   SmartttStaffRecord,
   SmartttStudent,
@@ -147,6 +148,49 @@ export function toStaffRecord(body: unknown): SmartttStaffRecord | null {
     title: v.title?.trim() || null,
     isActive: v.is_active,
     raw: body,
+  };
+}
+
+const authenticateSchema = z.discriminatedUnion('authenticated', [
+  z.object({ authenticated: z.literal(false) }),
+  z.object({
+    authenticated: z.literal(true),
+    account: z.object({
+      id: z.string().min(1),
+      role: z.string().min(1),
+      university_id: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      full_name: z.string().nullable().optional(),
+    }),
+    student: z.unknown().optional(),
+    staff: z.unknown().optional(),
+  }),
+]);
+
+/**
+ * Translates SMARTTT's sign-in check: an account, `false` for wrong
+ * credentials, or null when the payload cannot be understood. A student or
+ * staff record that is present but unreadable also makes the whole answer
+ * unreadable, rather than quietly signing someone in without it.
+ */
+export function toAuthenticatedAccount(body: unknown): SmartttAccount | false | null {
+  const parsed = authenticateSchema.safeParse(body);
+  if (!parsed.success) return null;
+  if (!parsed.data.authenticated) return false;
+  const { account, student, staff } = parsed.data;
+  const hasStudent = student !== null && student !== undefined;
+  const hasStaff = staff !== null && staff !== undefined;
+  const studentRecord = hasStudent ? toStudentRecord(student) : null;
+  const staffRecord = hasStaff ? toStaffRecord(staff) : null;
+  if ((hasStudent && !studentRecord) || (hasStaff && !staffRecord)) return null;
+  return {
+    smartttUserId: account.id,
+    role: account.role.trim().toLowerCase(),
+    universityId: account.university_id?.trim().toUpperCase() || null,
+    email: account.email?.trim().toLowerCase() || null,
+    fullName: account.full_name?.trim() || null,
+    student: studentRecord,
+    staff: staffRecord,
   };
 }
 

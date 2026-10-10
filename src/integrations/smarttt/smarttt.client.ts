@@ -1,7 +1,8 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
+import { toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
 import type {
+  SmartttAuthenticateResult,
   SmartttLecturerUnitsResult,
   SmartttStaffLookupResult,
   SmartttStudentLookupResult,
@@ -15,7 +16,8 @@ import type {
  * returned status; a transport fault, a bad key or an unreadable payload is
  * UNAVAILABLE. Callers decide whether that fails open or closed: the unit
  * sync fails soft (the lecturer sees the last synced units), student
- * registration fails closed (nothing is created unverified).
+ * registration fails closed (nothing is created unverified), and so does
+ * sign-in (nobody is let in on an unanswered password check).
  *
  * No retries: a person is waiting on each call, and a sleeping Render
  * instance is better waited on once than hammered.
@@ -103,21 +105,58 @@ export class SmartttHttpClient {
     return { status: 'FOUND', ...mapped };
   }
 
-  /** One GET with the shared key and timeout. Never throws. */
-  private async get(path: string, params: Record<string, string>, logContext: Record<string, string>): Promise<RawResult> {
+  /**
+   * Checks a SMARTTT email, admission number or staff ID and password: how
+   * students and lecturers sign in to attendance. The password is sent in the
+   * body (never a URL) and never logged.
+   */
+  async authenticate(identifier: string, password: string): Promise<SmartttAuthenticateResult> {
+    if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };
+    const result = await this.send(
+      this.url(env.SMARTTT_AUTHENTICATE_PATH),
+      { method: 'POST', body: JSON.stringify({ identifier: identifier.trim(), password }) },
+      {},
+    );
+    // Not an answer the endpoint gives: it is missing (an older SMARTTT).
+    if (result.status === 'NOT_FOUND') {
+      logger.error('smarttt: no sign-in endpoint - deploy SMARTTT with apps/integrations attendance/authenticate/');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system cannot check sign-ins yet.' };
+    }
+    if (result.status !== 'OK') return result;
+
+    const account = toAuthenticatedAccount(result.body);
+    if (account === null) {
+      logger.error('smarttt: sign-in answer could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
+    }
+    return account === false ? { status: 'INVALID_CREDENTIALS' } : { status: 'AUTHENTICATED', account };
+  }
+
+  private url(path: string, params: Record<string, string> = {}): URL {
     const base = (env.SMARTTT_BASE_URL ?? '').replace(/\/+$/, '');
     const url = new URL(`${base}${path.startsWith('/') ? path : `/${path}`}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return url;
+  }
 
+  /** One GET with the shared key and timeout. Never throws. */
+  private get(path: string, params: Record<string, string>, logContext: Record<string, string>): Promise<RawResult> {
+    return this.send(this.url(path, params), { method: 'GET' }, logContext);
+  }
+
+  /** One request with the shared key and timeout. Never throws. */
+  private async send(url: URL, init: { method: 'GET' | 'POST'; body?: string }, logContext: Record<string, string>): Promise<RawResult> {
     let response: Response;
     try {
       response = await fetch(url, {
-        method: 'GET',
+        method: init.method,
         headers: {
           Accept: 'application/json',
           'User-Agent': 'smart-attendance-backend',
           'X-API-Key': env.SMARTTT_API_KEY ?? '',
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         },
+        body: init.body,
         signal: AbortSignal.timeout(env.SMARTTT_TIMEOUT_MS),
       });
     } catch (error) {

@@ -123,6 +123,16 @@ const envSchema = z
     SMARTTT_STUDENT_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/students/'),
     /** Lecturer registration checks the staff number here: SMARTTT's approved staff list. */
     SMARTTT_STAFF_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/staff/'),
+    /**
+     * Students and lecturers have no attendance accounts of their own: they
+     * sign in with their SMARTTT account, checked here, and attendance
+     * creates or links theirs on first sign-in. Registration here is closed.
+     * On whenever SMARTTT_BASE_URL is set; false keeps attendance's own
+     * registration and passwords (development without SMARTTT).
+     * Department and faculty officers always sign in with attendance passwords.
+     */
+    SMARTTT_ACCOUNTS: booleanish.default('true'),
+    SMARTTT_AUTHENTICATE_PATH: z.string().min(1).default('/api/v1/integrations/attendance/authenticate/'),
     /** A student's units page lists the classes SMARTTT has them registered for this term. */
     SMARTTT_STUDENT_UNITS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/student-units/'),
     SMARTTT_LECTURER_UNITS_PATH: z
@@ -214,6 +224,10 @@ const envSchema = z
     /** Sent as X-Face-Service-Key; must equal FACE_SERVICE_KEY on the service. */
     FACE_SERVICE_KEY: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
     FACE_SERVICE_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(10_000),
+    // How long to keep retrying while face-service is waking up. A sleeping
+    // free-plan Render service takes ~20-30 s; until it is up, Render's edge
+    // answers 502/503/429. 0 = no retries (a service that never sleeps).
+    FACE_SERVICE_WAKE_WAIT_MS: z.coerce.number().int().min(0).max(120_000).default(40_000),
     // Cosine similarity a face must reach to be offered as a match. OpenCV's
     // published figure for SFace is 0.363; higher is stricter. The lecturer
     // confirms every match, so this trades "not recognised" retries against
@@ -222,6 +236,13 @@ const envSchema = z
     // How far the best match must lead the runner-up. Below this the terminal
     // says "not sure" rather than guess between two similar-looking students.
     FACE_MATCH_MARGIN: z.coerce.number().min(0).max(0.5).default(0.05),
+    // Enrollment refuses a face scoring this high against another enrolled
+    // student ("already registered to another student"). Stricter than the
+    // match threshold on purpose: this check runs against every enrolled
+    // student in the school, three photos by three templates each, so at
+    // FACE_MATCH_THRESHOLD a large school would turn away genuine students
+    // for chance look-alikes. Check with scripts/calibrate.py --duplicate.
+    FACE_DUPLICATE_THRESHOLD: z.coerce.number().min(0.2).max(0.95).default(0.55),
     // How long the lecturer has to tap Confirm after a match.
     FACE_MATCH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(10).max(600).default(60),
     // Frames whose face is smaller (in pixels, width) or blurrier (Laplacian

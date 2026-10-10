@@ -4,6 +4,7 @@ import { fakeVerifyPassword, verifyPassword } from '../../common/utils/password.
 import type { AccountStatus } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
 import { findAvatarUrl } from './auth.repository.js';
+import { signInWithSmarttt, smartttAccountsEnabled } from './auth.smarttt.js';
 import * as sessions from './auth.session.js';
 import * as repo from './auth.session.repository.js';
 import type { LoginInput } from './auth.schema.js';
@@ -21,6 +22,12 @@ import type { RegistrationContext } from './auth.service.js';
  *  3. Account status is only revealed AFTER a correct password. Otherwise anyone could probe
  *     which staff numbers are registered, pending or suspended.
  *  4. Only ACTIVE accounts may sign in — pending, suspended and deactivated are refused.
+ *
+ * With SMARTTT accounts on (auth.smarttt.ts), students and lecturers don't
+ * have passwords here: SMARTTT checks theirs, and their attendance account is
+ * created or linked on first sign-in. Steps 2 and 4 still apply to it, and a
+ * wrong password still counts towards the lock. Department and faculty
+ * officers, who are not in SMARTTT, keep the password check below.
  */
 
 export interface IssuedSession {
@@ -34,6 +41,7 @@ export interface IssuedSession {
 
 const BAD_CREDENTIALS = 'Incorrect staff number/email or password.';
 const BAD_STUDENT_CREDENTIALS = 'Incorrect registration number/email or password.';
+const SMARTTT_BAD_CREDENTIALS = 'Incorrect SMARTTT login or password. Use the same admission number, staff ID or email and password as in SMARTTT.';
 
 const STATUS_MESSAGES: Record<Exclude<AccountStatus, 'ACTIVE'>, string> = {
   PENDING_VERIFICATION: 'Please confirm your email address before signing in. Check your inbox for the verification link.',
@@ -56,23 +64,17 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
 
   const user = await repo.findAccountForLogin(identifier);
 
+  if (smartttAccountsEnabled() && (!user || user.role === 'STUDENT' || user.role === 'LECTURER')) {
+    return loginWithSmarttt(input, user, context, fail);
+  }
+
   if (!user) {
     await fakeVerifyPassword();
     await fail('unknown account');
     throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, BAD_CREDENTIALS);
   }
 
-  const now = new Date();
-  if (user.lockedUntil && user.lockedUntil > now) {
-    await fail('account locked', user.id);
-    const retryAfterSeconds = Math.max(1, Math.ceil((user.lockedUntil.getTime() - now.getTime()) / 1000));
-    throw new AppError(
-      429,
-      ErrorCode.ACCOUNT_LOCKED,
-      `Too many failed sign-in attempts. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).`,
-      { retryAfterSeconds },
-    );
-  }
+  await assertNotLocked(user, fail);
 
   if (!(await verifyPassword(input.password, user.passwordHash))) {
     const { failedAttempts, lockedUntil } = await repo.recordFailedLogin(
@@ -86,6 +88,61 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
     throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, user.role === 'STUDENT' ? BAD_STUDENT_CREDENTIALS : BAD_CREDENTIALS);
   }
 
+  return startSession(user, context, fail);
+}
+
+/**
+ * A student or lecturer: SMARTTT checks the password. `local` is the
+ * attendance account the identifier found, if any, for the lock; the account
+ * signed in is the one SMARTTT's answer resolves to.
+ */
+async function loginWithSmarttt(
+  input: LoginInput,
+  local: repo.LoginCandidate | null,
+  context: RegistrationContext,
+  fail: (reason: string, userId?: string) => Promise<void>,
+): Promise<IssuedSession> {
+  if (local) await assertNotLocked(local, fail);
+
+  const result = await signInWithSmarttt(input.identifier, input.password, context);
+  if (result.status === 'INVALID_CREDENTIALS') {
+    if (local) {
+      const { failedAttempts, lockedUntil } = await repo.recordFailedLogin(local.id, env.LOGIN_MAX_FAILED_ATTEMPTS, env.LOGIN_LOCKOUT_MINUTES);
+      await fail(lockedUntil ? `wrong SMARTTT password; account locked after ${failedAttempts} attempts` : 'wrong SMARTTT password', local.id);
+    } else {
+      await fail('SMARTTT refused the credentials');
+    }
+    throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, SMARTTT_BAD_CREDENTIALS);
+  }
+
+  const user = await repo.findAccountForLoginById(result.userId);
+  if (!user) throw new Error(`account ${result.userId} from SMARTTT sign-in has no profile`);
+  // The identifier may have found nobody (first sign-in) or a different row
+  // than SMARTTT resolved to; the lock that matters is the signed-in account's.
+  if (user.id !== local?.id) await assertNotLocked(user, fail);
+  return startSession(user, context, fail);
+}
+
+/** Refuses a locked account, before any password is checked. Throws a 429 with how long to wait. */
+async function assertNotLocked(user: repo.LoginCandidate, fail: (reason: string, userId?: string) => Promise<void>): Promise<void> {
+  const now = new Date();
+  if (!user.lockedUntil || user.lockedUntil <= now) return;
+  await fail('account locked', user.id);
+  const retryAfterSeconds = Math.max(1, Math.ceil((user.lockedUntil.getTime() - now.getTime()) / 1000));
+  throw new AppError(
+    429,
+    ErrorCode.ACCOUNT_LOCKED,
+    `Too many failed sign-in attempts. Try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).`,
+    { retryAfterSeconds },
+  );
+}
+
+/** An account whose credentials checked out: refuses it unless ACTIVE, else opens the session. */
+async function startSession(
+  user: repo.LoginCandidate,
+  context: RegistrationContext,
+  fail: (reason: string, userId?: string) => Promise<void>,
+): Promise<IssuedSession> {
   if (user.status !== 'ACTIVE') {
     await fail(`account not active: ${user.status}`, user.id);
     throw new AppError(403, ErrorCode.ACCOUNT_NOT_ACTIVE, STATUS_MESSAGES[user.status], {
@@ -93,6 +150,7 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
     });
   }
 
+  const audit = { ipAddress: context.ipAddress, userAgent: context.userAgent, requestId: context.requestId };
   const sessionId = sessions.newSessionId();
   const sessionExpiresAt = new Date(Date.now() + sessions.refreshTtlSeconds * 1000);
   const refresh = await sessions.signRefreshToken(user.id, sessionId, sessionExpiresAt);
@@ -106,7 +164,7 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
   });
   const access = await sessions.signAccessToken({ userId: user.id, sessionId, role: user.role });
 
-  await auditService.record({ ...audit, userId: user.id, action: 'LOGIN_SUCCEEDED', outcome: 'SUCCESS' });
+  await auditService.record({ ...audit, subjectEmail: user.email, userId: user.id, action: 'LOGIN_SUCCEEDED', outcome: 'SUCCESS' });
   const avatarUrl = await findAvatarUrl(user.id);
   return { account: { ...user.account, avatarUrl }, access, refresh, sessionExpiresAt };
 }

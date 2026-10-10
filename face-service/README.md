@@ -4,7 +4,8 @@ Turns a face photo into an embedding (a 128-number vector) for face check-in.
 Plan and decisions: [`docs/face-recognition.md`](../docs/face-recognition.md).
 
 It is **stateless** and does one thing. It stores no images, templates or
-students. Comparing embeddings, thresholds and rosters all live in the Node
+students. On request it also returns a small crop of the face, which the API
+keeps as an enrollment's reference photo. Comparing embeddings, thresholds and rosters all live in the Node
 API, which is the only caller.
 
 ## Models
@@ -69,7 +70,9 @@ Header `X-Face-Service-Key: <key>`. Body:
 { "image": "data:image/jpeg;base64,/9j/4AAQ..." }
 ```
 
-A plain base64 string works too. JPEG, PNG and WebP are accepted.
+A plain base64 string works too. JPEG, PNG and WebP are accepted. Add
+`"crop": true` to also get `face.crop`: a 160x160 JPEG data URL of the face,
+with some room around it (about 5-10 KB). Without it, `face.crop` is `null`.
 
 `200`:
 

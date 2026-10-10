@@ -36,6 +36,13 @@ function faceOf(p: number, variant = 0): number[] {
   const norm = Math.hypot(...v);
   return v.map((x) => x / norm);
 }
+/** Mostly person `a`, a little of `b`: scores `similarity` against `a`'s plain face. */
+function lookAlike(a: number, b: number, similarity: number): number[] {
+  const v = new Array<number>(DIM).fill(0);
+  v[a] = similarity;
+  v[b] = Math.sqrt(1 - similarity ** 2);
+  return v;
+}
 /** Halfway between two people: as like one as the other. */
 function blend(a: number, b: number): number[] {
   const v = faceOf(a).map((x, i) => x + faceOf(b)[i]!);
@@ -43,11 +50,17 @@ function blend(a: number, b: number): number[] {
   return v.map((x) => x / norm);
 }
 
-type FakePhoto =
-  | { faceCount: number; embedding: number[]; width?: number; sharpness?: number }
-  | 'NO_FACE' | 'INVALID' | 'DOWN';
+type FakeResult =
+  /** `noCrop`: answer like a face-service that predates crops, which refuses a request for one. */
+  | { faceCount: number; embedding: number[]; width?: number; sharpness?: number; noCrop?: boolean }
+  | 'NO_FACE' | 'INVALID' | 'DOWN' | 'BAD_KEY';
+/** Or Render's edge while the service wakes: `waking` 502s, then the result. */
+type FakePhoto = FakeResult | { waking: number; then: FakeResult };
 const photos = new Map<string, FakePhoto>();
-const faceCalls: Array<{ key: string | null }> = [];
+const faceCalls: Array<{ key: string | null; name: string; crop: boolean }> = [];
+let healthChecks = 0;
+/** What the fake face-service returns as a photo's face crop. */
+const cropOf = (name: string) => `data:image/jpeg;base64,${Buffer.from(`crop:${name}`).toString('base64')}`;
 
 /** A data URL whose content is just `name`, so the stub can look it up. */
 function photo(name: string, result: FakePhoto): string {
@@ -59,10 +72,26 @@ function stubFetch() {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = input instanceof Request ? input.url : input.toString();
     if (!url.startsWith(FACE_URL)) return Promise.resolve(new Response('not stubbed', { status: 503 }));
-    faceCalls.push({ key: new Headers(init?.headers).get('X-Face-Service-Key') });
-    const { image } = JSON.parse(init?.body as string) as { image: string };
+    if (url === `${FACE_URL}/health`) {
+      healthChecks++;
+      return Promise.resolve(Response.json({ status: 'ok', model: 'sface-2021dec' }));
+    }
+    const { image, crop } = JSON.parse(init?.body as string) as { image: string; crop?: boolean };
     const name = Buffer.from(image.split(',')[1]!, 'base64').toString().replace(/~+$/, '');
-    const found = photos.get(name);
+    faceCalls.push({ key: new Headers(init?.headers).get('X-Face-Service-Key'), name, crop: crop === true });
+    const stored = photos.get(name);
+    if (stored && typeof stored === 'object' && 'waking' in stored && stored.waking > 0) {
+      stored.waking--;
+      return Promise.resolve(new Response('<html>waking up</html>', { status: 502 }));
+    }
+    const found: FakeResult | undefined = stored && typeof stored === 'object' && 'waking' in stored ? stored.then : stored;
+    if (crop && typeof found === 'object' && found.noCrop) {
+      // face-service from before crops: `extra="forbid"` refuses the unknown field.
+      return Promise.resolve(Response.json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'bad body' } }, { status: 400 }));
+    }
+    if (found === 'BAD_KEY') {
+      return Promise.resolve(Response.json({ success: false, error: { code: 'UNAUTHORIZED', message: 'no' } }, { status: 401 }));
+    }
     if (!found || found === 'DOWN') return Promise.resolve(new Response('down', { status: 502 }));
     if (found === 'INVALID') {
       return Promise.resolve(Response.json({ success: false, error: { code: 'INVALID_IMAGE', message: 'bad' } }, { status: 400 }));
@@ -76,6 +105,7 @@ function stubFetch() {
         detectionScore: 0.92,
         sharpness: found.sharpness ?? 300,
         embedding: found.embedding,
+        ...(crop ? { crop: cropOf(name) } : {}),
       },
     }));
   });
@@ -172,6 +202,8 @@ beforeAll(async () => {
   process.env.ERP_MAX_RETRIES = '0';
   process.env.FACE_SERVICE_URL = FACE_URL;
   process.env.FACE_SERVICE_KEY = FACE_KEY;
+  // Short, so "down" tests don't wait 40 s; long enough for a few retries a second apart.
+  process.env.FACE_SERVICE_WAKE_WAIT_MS = '2500';
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
   for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {
@@ -249,10 +281,14 @@ describe('enrollment', () => {
     expect(faceCalls).toHaveLength(3);
     expect(faceCalls.every((call) => call.key === FACE_KEY)).toBe(true);
 
-    const { rows: [row] } = await pool.query<{ model: string; embeddings: number[][] }>(
-      `SELECT model, embeddings FROM face_enrollments WHERE student_user_id = $1`, [student!.id]);
+    const { rows: [row] } = await pool.query<{ model: string; embeddings: number[][]; reference_photo: string | null }>(
+      `SELECT model, embeddings, reference_photo FROM face_enrollments WHERE student_user_id = $1`, [student!.id]);
     expect(row!.model).toBe('sface-2021dec');
     expect(row!.embeddings).toHaveLength(3);
+    // Only the first, straight-on photo's face is kept, as the terminal's reference.
+    expect(faceCalls.map((call) => call.crop)).toEqual([true, false, false]);
+    expect(row!.reference_photo).toBe(cropOf(faceCalls[0]!.name));
+    expect((await audits('FACE_ENROLLED')).at(-1)?.metadata).toMatchObject({ referencePhoto: true });
 
     const roster = body<Array<{ studentUserId: string; faceConsent: boolean; faceEnrolled: boolean }>>(
       await api(c.lecturer.auth).get(`/units/${c.unitId}/students`).expect(200)).data;
@@ -306,6 +342,25 @@ describe('enrollment', () => {
     expect((await audits('FACE_ENROLLMENT_REJECTED')).at(-1)).toMatchObject({ reason: 'PHOTOS_INCONSISTENT' });
   });
 
+  it('enrolls without a reference photo when face-service predates crops', async () => {
+    const c = await classroom(1);
+    const p = nextPerson();
+    const images = [0, 1, 2].map((v) => photo(`old-${p}-${v}`, { ...one(faceOf(p, v)), noCrop: true }));
+    await api(c.lecturer.auth).post(`/units/${c.unitId}/students/${c.students[0]!.id}/face`, { images }).expect(201);
+    const { rows: [row] } = await pool.query<{ reference_photo: string | null }>(
+      `SELECT reference_photo FROM face_enrollments WHERE student_user_id = $1`, [c.students[0]!.id]);
+    expect(row!.reference_photo).toBeNull();
+  });
+
+  it('accepts a look-alike who is close, but not close enough to be the same person', async () => {
+    const c = await classroom(2);
+    const [a, b] = [nextPerson(), nextPerson()];
+    await enroll(c, c.students[0]!, a).expect(201);
+    // 0.45 against the first student: above FACE_MATCH_THRESHOLD (0.40), below FACE_DUPLICATE_THRESHOLD (0.55).
+    const images = [0, 1, 2].map((v) => photo(`alike-${a}-${b}-${v}`, one(lookAlike(a, b, 0.45))));
+    await api(c.lecturer.auth).post(`/units/${c.unitId}/students/${c.students[1]!.id}/face`, { images }).expect(201);
+  });
+
   it("refuses a face already enrolled as another student, without naming them", async () => {
     const c = await classroom(2);
     const person = nextPerson();
@@ -347,9 +402,13 @@ describe('identify and confirm', () => {
     const res = await api(c.lecturer.auth)
       .post(`/sessions/${c.session.id}/face/identify`, { image: photo(`t-${people[1]}`, { faceCount: 2, embedding: faceOf(people[1]!, 7) }) })
       .expect(200);
-    const match = body<{ result: string; student: { studentUserId: string; fullName: string }; matchToken: string; alreadyCheckedIn: boolean; score: number }>(res).data;
+    const match = body<{ result: string; student: { studentUserId: string; fullName: string; referencePhotoDataUrl: string | null }; matchToken: string; alreadyCheckedIn: boolean; score: number }>(res).data;
     expect(match).toMatchObject({ result: 'MATCH', alreadyCheckedIn: false, facesInFrame: 2, enrolledOnUnit: 3 });
     expect(match.student.studentUserId).toBe(c.students[1]!.id);
+    // The face registered at enrollment, for the lecturer to compare with the person in front of them.
+    expect(match.student.referencePhotoDataUrl).toBe(cropOf(`enroll-${people[1]}-0`));
+    // The terminal's own frame is never cropped or kept.
+    expect(faceCalls.at(-1)).toMatchObject({ crop: false });
     expect(match.score).toBeGreaterThan(0.9);
 
     // Nothing is recorded until the lecturer confirms.
@@ -440,6 +499,47 @@ describe('identify and confirm', () => {
     const res = await api(c.lecturer.auth)
       .post(`/sessions/${c.session.id}/face/identify`, { image: photo(`down-${uniq()}`, 'DOWN') }).expect(503);
     expect(body(res).error?.code).toBe('FACE_RECOGNITION_UNAVAILABLE');
+  });
+
+  it('waits for face-service to wake up instead of failing', async () => {
+    const c = await classroom(1);
+    const person = nextPerson();
+    await enroll(c, c.students[0]!, person).expect(201);
+    const name = `sleepy-${person}`;
+    const res = await api(c.lecturer.auth)
+      .post(`/sessions/${c.session.id}/face/identify`, { image: photo(name, { waking: 2, then: one(faceOf(person, 3)) }) })
+      .expect(200);
+    expect(body(res).data).toMatchObject({ result: 'MATCH' });
+    expect(faceCalls.filter((call) => call.name === name)).toHaveLength(3);
+  });
+
+  it('does not retry what waking up would not fix', async () => {
+    const c = await classroom(0);
+    const name = `bad-key-${uniq()}`;
+    await api(c.lecturer.auth).post(`/sessions/${c.session.id}/face/identify`, { image: photo(name, 'BAD_KEY') }).expect(503);
+    expect(faceCalls.filter((call) => call.name === name)).toHaveLength(1);
+  });
+
+  it('wakes face-service when the lecturer opens the terminal, for lecturers only', async () => {
+    const c = await classroom(1);
+    const before = healthChecks;
+    // Earlier tests just talked to face-service, so it is known to be awake: nothing to do.
+    await api(c.lecturer.auth).post('/face/warm-up').expect(202);
+    expect(healthChecks).toBe(before);
+
+    // Six quiet minutes later it may have gone to sleep.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6 * 60_000 });
+    try {
+      const res = await api(c.lecturer.auth).post('/face/warm-up').expect(202);
+      expect(body(res).data).toEqual({ enabled: true });
+      await vi.waitFor(() => expect(healthChecks).toBe(before + 1));
+      // Just checked: opening it again doesn't check again.
+      await api(c.lecturer.auth).post('/face/warm-up').expect(202);
+      expect(healthChecks).toBe(before + 1);
+      await api(c.students[0]!.auth).post('/face/warm-up').expect(403);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is refused on another lecturer's session, a paused session, and for students", async () => {

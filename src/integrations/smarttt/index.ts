@@ -1,6 +1,8 @@
 export { smartttClient, SmartttHttpClient } from './smarttt.client.js';
-export { normaliseUnitCode, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
+export { normaliseUnitCode, toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
 export type {
+  SmartttAccount,
+  SmartttAuthenticateResult,
   SmartttLecturerUnitsResult,
   SmartttSlot,
   SmartttStaffLookupResult,

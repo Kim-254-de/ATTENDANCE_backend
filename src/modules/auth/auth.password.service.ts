@@ -1,12 +1,13 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { hashPassword, verifyPassword } from '../../common/utils/password.js';
 import { generateToken, hashToken } from '../../common/utils/tokens.js';
 import type { AccountStatus } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
 import { notificationService } from '../notification/index.js';
 import * as repo from './auth.password.repository.js';
+import { smartttAccountsEnabled } from './auth.smarttt.js';
 import type { ForgotPasswordInput, ResetPasswordInput } from './auth.schema.js';
 import type { RegistrationContext } from './auth.service.js';
 
@@ -23,6 +24,14 @@ import type { RegistrationContext } from './auth.service.js';
  */
 
 /** Deliberately vague, and identical in every case. */
+/** Students' and lecturers' passwords are SMARTTT's, with SMARTTT accounts on. */
+export const managedBySmarttt = (): AppError =>
+  new AppError(
+    409,
+    ErrorCode.ACCOUNTS_MANAGED_BY_SMARTTT,
+    'Your password is your SMARTTT password. Change or reset it in SMARTTT, then sign in here with the new one.',
+  );
+
 const GENERIC_REPLY =
   'If that email address has an account, a password reset link is on its way. Check your inbox, including spam.';
 
@@ -60,6 +69,19 @@ export async function requestPasswordReset(
       action: 'PASSWORD_RESET_REQUESTED',
       outcome: 'FAILURE',
       reason: 'no account for that email',
+    });
+    return { message: GENERIC_REPLY };
+  }
+
+  if (smartttAccountsEnabled() && (user.role === 'STUDENT' || user.role === 'LECTURER')) {
+    // Their password is SMARTTT's; resetting one here would do nothing. The
+    // portal tells students and lecturers to reset it in SMARTTT instead.
+    await auditService.record({
+      ...audit,
+      userId: user.id,
+      action: 'PASSWORD_RESET_REQUESTED',
+      outcome: 'FAILURE',
+      reason: 'password is managed by SMARTTT',
     });
     return { message: GENERIC_REPLY };
   }
@@ -166,6 +188,11 @@ export async function resetPassword(
   if (BLOCKED_STATUSES.has(stored.userStatus)) {
     await failed(`account status is ${stored.userStatus}`);
     throw invalid;
+  }
+  // A link sent before sign-in moved to SMARTTT: the password it would set is never checked.
+  if (smartttAccountsEnabled() && (stored.userRole === 'STUDENT' || stored.userRole === 'LECTURER')) {
+    await failed('password is managed by SMARTTT');
+    throw managedBySmarttt();
   }
 
   // Re-setting the same password leaves the account exactly as exposed as

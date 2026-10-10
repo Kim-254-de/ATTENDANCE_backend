@@ -84,6 +84,32 @@ export interface SmartttStaffRecord {
   raw: unknown;
 }
 
+/**
+ * A SMARTTT account whose password checked out: students and lecturers sign
+ * in to attendance with it (no attendance account of their own to register).
+ */
+export interface SmartttAccount {
+  /** SMARTTT's own id for the user: what an attendance account is linked by. */
+  smartttUserId: string;
+  /** SMARTTT's role: only 'student' and 'lecturer' may use attendance. */
+  role: string;
+  /** Admission number (student) or staff ID (lecturer), upper-cased. Null when they haven't added one. */
+  universityId: string | null;
+  email: string | null;
+  fullName: string | null;
+  /** A student's record, as the student lookup returns it. Null for non-students, or with no admission number. */
+  student: SmartttStudentRecord | null;
+  /** A lecturer's record, as the staff lookup returns it. Null when they are not on the approved staff list. */
+  staff: SmartttStaffRecord | null;
+}
+
+export type SmartttAuthenticateResult =
+  | { status: 'AUTHENTICATED'; account: SmartttAccount }
+  /** Wrong password, unknown account, disabled account, or a Google-only account with no password. */
+  | { status: 'INVALID_CREDENTIALS' }
+  | { status: 'UNAVAILABLE'; reason: string }
+  | { status: 'DISABLED' };
+
 export type SmartttStaffLookupResult =
   | { status: 'FOUND'; record: SmartttStaffRecord }
   | { status: 'NOT_FOUND' }

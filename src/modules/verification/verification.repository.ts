@@ -86,16 +86,18 @@ export async function upsertEnrollment(args: {
   studentUserId: string;
   model: string;
   embeddings: Vector[];
+  /** The straight-on photo's face crop, shown on the terminal. Null when face-service gave none. */
+  referencePhoto: string | null;
   enrolledByUserId: string;
 }): Promise<{ enrolledAt: Date; replaced: boolean }> {
   const row = await queryOne<{ updated_at: Date; replaced: boolean }>(
-    `INSERT INTO face_enrollments (student_user_id, model, embeddings, enrolled_by_user_id)
-     VALUES ($1, $2, $3::jsonb, $4)
+    `INSERT INTO face_enrollments (student_user_id, model, embeddings, reference_photo, enrolled_by_user_id)
+     VALUES ($1, $2, $3::jsonb, $4, $5)
      ON CONFLICT (student_user_id) DO UPDATE
-        SET model = EXCLUDED.model, embeddings = EXCLUDED.embeddings,
+        SET model = EXCLUDED.model, embeddings = EXCLUDED.embeddings, reference_photo = EXCLUDED.reference_photo,
             enrolled_by_user_id = EXCLUDED.enrolled_by_user_id, updated_at = NOW()
      RETURNING updated_at, (xmax <> 0) AS replaced`,
-    [args.studentUserId, args.model, JSON.stringify(args.embeddings), args.enrolledByUserId],
+    [args.studentUserId, args.model, JSON.stringify(args.embeddings), args.referencePhoto, args.enrolledByUserId],
   );
   if (!row) throw new Error('face_enrollments upsert returned no row');
   return { enrolledAt: row.updated_at, replaced: row.replaced };
@@ -157,6 +159,11 @@ export interface StudentCard {
   fullName: string;
   registrationNumber: string | null;
   avatarDataUrl: string | null;
+  /**
+   * The face photographed when they were registered: what the lecturer should
+   * compare against. Null for enrollments made before these were kept.
+   */
+  referencePhotoDataUrl: string | null;
 }
 
 export async function findStudentCard(unitId: string, studentUserId: string): Promise<StudentCard | null> {
@@ -165,10 +172,13 @@ export async function findStudentCard(unitId: string, studentUserId: string): Pr
     full_name: string;
     registration_number: string | null;
     avatar_data_url: string | null;
+    reference_photo: string | null;
   }>(
-    `SELECT s.id, COALESCE(a.full_name, s.full_name) AS full_name, a.registration_number, s.avatar_data_url
+    `SELECT s.id, COALESCE(a.full_name, s.full_name) AS full_name, a.registration_number, s.avatar_data_url,
+            f.reference_photo
        FROM users s
        LEFT JOIN unit_allocations a ON a.unit_id = $1 AND a.student_user_id = s.id
+       LEFT JOIN face_enrollments f ON f.student_user_id = s.id
       WHERE s.id = $2`,
     [unitId, studentUserId],
   );
@@ -178,6 +188,7 @@ export async function findStudentCard(unitId: string, studentUserId: string): Pr
     fullName: row.full_name,
     registrationNumber: row.registration_number,
     avatarDataUrl: row.avatar_data_url,
+    referencePhotoDataUrl: row.reference_photo,
   };
 }
 

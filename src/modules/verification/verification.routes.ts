@@ -52,6 +52,12 @@ verificationRouter.delete(
   asyncHandler(verificationController.removeEnrollment),
 );
 
+/**
+ * The face terminal or register-face dialog was opened: wake face-service now
+ * (a sleeping Render service takes ~20-30 s), not when the first photo is sent.
+ */
+verificationRouter.post('/face/warm-up', requireAuth('LECTURER'), verificationController.warmUpFaceService);
+
 /** The terminal: who is this? Records nothing. */
 verificationRouter.post(
   '/sessions/:sessionId/face/identify',

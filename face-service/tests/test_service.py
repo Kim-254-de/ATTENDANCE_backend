@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.config import SERVICE_DIR, Settings
 from app.engine import DETECTOR_FILE, RECOGNIZER_FILE, Embedding, Face, FaceEngine
-from app.images import ImageError, decode_image
+from app.images import ImageError, decode_image, face_crop
 from app.main import create_app
 
 KEY = "k" * 32
@@ -93,8 +93,17 @@ def test_embed_returns_the_largest_face(client):
             "detectionScore": 0.9123,
             "sharpness": 123.5,
             "embedding": [0.6, 0.8],
+            "crop": None,
         },
     }
+
+
+def test_embed_returns_a_face_crop_when_asked(client):
+    res = post(client, {"image": jpeg_b64(np.zeros((100, 100, 3), np.uint8)), "crop": True})
+    crop = res.json()["face"]["crop"]
+    assert crop.startswith("data:image/jpeg;base64,")
+    decoded = cv2.imdecode(np.frombuffer(base64.b64decode(crop.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape == (160, 160, 3)
 
 
 def test_embed_with_no_face_is_not_an_error(fake):
@@ -138,6 +147,13 @@ def test_decode_refuses_invalid_base64():
     with pytest.raises(ImageError) as caught:
         decode_image("not base64 at all!!", 10_000_000, 1000)
     assert caught.value.code == "INVALID_IMAGE"
+
+
+@pytest.mark.parametrize("box", [(0, 0, 30, 40), (90, 90, 30, 40), (-5, -5, 300, 300)])
+def test_face_crop_stays_inside_the_image_at_the_edges(box):
+    crop = face_crop(np.zeros((120, 120, 3), np.uint8), *box)
+    decoded = cv2.imdecode(np.frombuffer(base64.b64decode(crop.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape == (160, 160, 3)
 
 
 # --- Real models --------------------------------------------------------------
@@ -192,3 +208,16 @@ def test_counts_every_face_and_embeds_the_largest(engine):
     count, result = engine.embed(canvas)
     assert count == 2
     assert result.face.x < lena.shape[1]  # the full-size face, not the small one
+
+
+@needs_models
+def test_a_crop_of_a_real_face_is_still_that_face(engine):
+    lena = fixture("lena.jpg")
+    _, original = engine.embed(lena)
+    f = original.face
+    crop = face_crop(lena, f.x, f.y, f.width, f.height)
+    image = cv2.imdecode(np.frombuffer(base64.b64decode(crop.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+    _, cropped = engine.embed(image)
+    assert cropped is not None
+    assert similarity(original, cropped) > 0.6
+    assert len(crop) < 20_000

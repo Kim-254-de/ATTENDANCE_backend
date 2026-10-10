@@ -50,7 +50,7 @@ accepts and recorded each check-in's `verification_method`. Merging it:
    `POST /sessions/:id/face/identify`.
 3. The API asks the face service for the frame's template, then compares it
    with the enrolled templates of the unit's ACTIVE students. It returns the
-   best candidate (photo, name, registration number, score) and a short-lived
+   best candidate (registered face photo, name, registration number, score) and a short-lived
    signed **match token**. **Nothing is recorded.**
 4. The lecturer checks the face against the person and taps **Confirm**
    (`POST /sessions/:id/face/confirm` with the match token), or **Not them** to
@@ -78,12 +78,21 @@ Outcomes the terminal must handle:
 3. The API embeds each photo, rejects any with no face, several faces or low
    quality, checks the three agree with one another, and checks the face
    does **not** already match another enrolled student (which catches
-   registering the wrong person).
+   registering the wrong person). That check runs against the whole school,
+   so it uses its own, stricter `FACE_DUPLICATE_THRESHOLD` (0.55): at the
+   match threshold, chance look-alikes in a large school would turn away
+   genuine students.
 4. The templates are stored against the student, not the unit, so one
    enrollment works for all their units.
 
-Re-enrolling replaces the old templates and is audited. Photos are discarded
-once embedded; only templates are stored.
+Re-enrolling replaces the old templates and is audited. The photos are
+discarded once embedded. Besides the templates, one **reference photo** is
+kept: a 160x160 crop of the first (straight-on) photo's face, made by
+face-service (migration `024_face_reference_photo.sql`). The terminal shows it
+on the match card, so the lecturer compares the person against the face
+registered in class, not the student's self-chosen profile picture.
+Enrollments made before this have none; the terminal says so, and
+re-registering adds one. It is deleted with the templates.
 
 ---
 
@@ -129,6 +138,7 @@ Builds out `src/modules/verification`.
 | `GET` | `/api/v1/students/me/face` | Student | Consent and enrollment status |
 | `POST` | `/api/v1/units/:unitId/students/:studentUserId/face` | Lecturer | Enroll from three photos |
 | `DELETE` | `/api/v1/units/:unitId/students/:studentUserId/face` | Lecturer | Remove an enrollment |
+| `POST` | `/api/v1/face/warm-up` | Lecturer | Wakes face-service in the background (`202`). The portal calls it when the terminal or register-face dialog opens |
 | `POST` | `/api/v1/sessions/:id/face/identify` | Lecturer (owner) | Best candidate + match token. Writes nothing |
 | `POST` | `/api/v1/sessions/:id/face/confirm` | Lecturer (owner) | Record attendance as `FACE` |
 
@@ -176,10 +186,12 @@ switchable; photos are scaled to 720 px, ~100 KB). The mock API
   `face-service/app/calibration.py`, with tests.
 - **Error codes and API contract:** in
   [`src/modules/verification/README.md`](../src/modules/verification/README.md).
-- **Current values:** `FACE_MATCH_THRESHOLD=0.40`, `FACE_MATCH_MARGIN=0.05`.
-  These are safe starting points (OpenCV publishes 0.363 for SFace, and the
-  lecturer confirms every match) but have **not** been checked against your
-  students, phones or rooms.
+- **Current values:** `FACE_MATCH_THRESHOLD=0.40`, `FACE_MATCH_MARGIN=0.05`,
+  `FACE_DUPLICATE_THRESHOLD=0.55`. These are safe starting points (OpenCV
+  publishes 0.363 for SFace, and the lecturer confirms every match) but have
+  **not** been checked against your students, phones or rooms. The calibration
+  script also reports how many enrollments the duplicate threshold would
+  wrongly refuse (`--duplicate`).
 
 ### What's left: calibrate with your own photos
 
@@ -225,6 +237,22 @@ top.
   people.
 
 ---
+
+## Hosting on Render's free plan
+
+Free services sleep after 15 idle minutes, and face-service takes ~20-30 s to
+wake. Two things cover that:
+
+- **Warm-up:** opening the face terminal or the register-face dialog calls
+  `POST /face/warm-up`, which starts the wake-up while the lecturer frames the
+  first photo.
+- **Retries:** while face-service is waking, Render's edge answers
+  502/503/429. The API retries those (and refused connections) for up to
+  `FACE_SERVICE_WAKE_WAIT_MS` (40 s); the portal waits up to 60 s for face
+  requests. A bad key or an unreadable photo is never retried.
+
+On a paid instance, which never sleeps, set `FACE_SERVICE_WAKE_WAIT_MS=0` to
+fail fast instead.
 
 ## Later (not in v1)
 

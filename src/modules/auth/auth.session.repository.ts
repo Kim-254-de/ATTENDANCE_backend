@@ -187,6 +187,15 @@ export const toFacultyOfficerPublic = (c: {
  */
 export async function findAccountForLogin(identifier: string): Promise<LoginCandidate | null> {
   const byEmail = identifier.includes('@');
+  return findLoginCandidate(byEmail ? 'u.email = $1' : '(p.staff_number = $1 OR sp.registration_number = $1)', identifier);
+}
+
+/** The same account shape, by user id: the account a SMARTTT sign-in resolved to (auth.smarttt.ts). */
+export async function findAccountForLoginById(userId: string): Promise<LoginCandidate | null> {
+  return findLoginCandidate('u.id = $1', userId);
+}
+
+async function findLoginCandidate(where: string, value: string): Promise<LoginCandidate | null> {
   const row = await queryOne<LoginRow>(
     `SELECT u.id, u.role, u.email, u.full_name, u.password_hash, u.status,
             u.failed_login_attempts, u.locked_until,
@@ -203,10 +212,10 @@ export async function findAccountForLogin(identifier: string): Promise<LoginCand
   LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
       WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY')
         AND u.deleted_at IS NULL
-        AND ${byEmail ? 'u.email = $1' : '(p.staff_number = $1 OR sp.registration_number = $1)'}
+        AND ${where}
       ORDER BY u.role
       LIMIT 1`,
-    [identifier],
+    [value],
   );
   if (!row) return null;
   const account = accountFrom(row);

@@ -43,12 +43,15 @@ the model can be swapped without touching data.
    checks their ID card, and sends three photos. Each must show exactly one
    usable face; the three must agree with each other
    (`FACE_MATCH_THRESHOLD`); and none may match another enrolled student,
-   anywhere in the school.
+   anywhere in the school (`FACE_DUPLICATE_THRESHOLD`, 0.55: stricter, since
+   it compares against every enrolled student). A crop of the first photo's
+   face is kept as the **reference photo**.
 3. **Identify.** The terminal (the lecturer's phone) sends one photo. The
    largest face is compared against the templates of students **ACTIVE on the
    session's unit** who still consent. A clear winner comes back with a
    **match token**. Nothing is recorded.
-4. **Confirm.** The lecturer checks the face against the person and sends the
+4. **Confirm.** The lecturer checks the person against the reference photo
+   (`student.referencePhotoDataUrl`; null for older enrollments) and sends the
    token back. The student is recorded with `verification_method = 'FACE'`, the score, and
    who confirmed.
 
@@ -78,6 +81,7 @@ similarity. A match needs:
 | `DELETE` | `/api/v1/students/me/face-consent` | Student | Opt out; deletes templates |
 | `POST` | `/api/v1/units/:unitId/students/:studentUserId/face` | Lecturer (teaches the unit) | Enroll from `{ images: [3 data URLs] }`. 201 `{ studentUserId, enrolledAt, replaced }` |
 | `DELETE` | `/api/v1/units/:unitId/students/:studentUserId/face` | Lecturer (teaches the unit) | Remove the enrollment; consent stays |
+| `POST` | `/api/v1/face/warm-up` | Lecturer | `202 { enabled }`. Wakes face-service in the background; see "Hosting on Render's free plan" in docs/face-recognition.md |
 | `POST` | `/api/v1/sessions/:sessionId/face/identify` | Lecturer (owns the session) | `{ image }` → `MATCH` (with `student`, `score`, `alreadyCheckedIn`, `matchToken`, `expiresAt`), `NO_MATCH` or `AMBIGUOUS`; all with `facesInFrame` and `enrolledOnUnit` |
 | `POST` | `/api/v1/sessions/:sessionId/face/confirm` | Lecturer (owns the session) | `{ matchToken }` → 201 with the record |
 

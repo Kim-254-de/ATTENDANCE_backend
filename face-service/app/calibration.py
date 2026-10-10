@@ -8,6 +8,8 @@ threshold chosen here behaves the same in production:
   - a student's score is their best enrollment template's cosine similarity
   - a match needs score >= threshold and a lead of >= margin over the runner-up
   - an enrollment needs its photos to agree with each other at >= threshold
+  - an enrollment is refused when any of its photos scores >= the duplicate
+    threshold (FACE_DUPLICATE_THRESHOLD) against another enrolled student
 """
 
 from dataclasses import dataclass
@@ -114,3 +116,24 @@ def recommend(people: list[Person], margin: float = 0.05) -> Outcome:
         raise ValueError('No threshold up to 0.8 avoids offering a wrong name. Check the photos are labelled correctly.')
     keeping = [o for o in candidates if o.enrollments_refused == 0]
     return (keeping or candidates)[0]
+
+
+def duplicate_clashes(people: list[Person], threshold: float) -> int:
+    """Enrollments the duplicate check would refuse: any photo scoring >= threshold against anyone else's enrollment.
+
+    Every person here is someone different, so each of these is a genuine
+    student wrongly turned away as "already registered to another student".
+    """
+    return sum(
+        1
+        for person in people
+        if any(score(photo, other.enrollment) >= threshold for photo in person.enrollment for other in people if other is not person)
+    )
+
+
+def closest_enrollments(people: list[Person]) -> float:
+    """The highest score between two different people's enrollments: the duplicate threshold must clear it."""
+    return max(
+        (score(photo, other.enrollment) for person in people for photo in person.enrollment for other in people if other is not person),
+        default=-1.0,
+    )

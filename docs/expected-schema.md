@@ -275,7 +275,8 @@ per student, used for all their units. See
 |---|---|---|
 | `student_user_id` | `uuid` | Primary key, FK -> `users(id)` ON DELETE CASCADE |
 | `model` | text | The face-service model that produced the templates, e.g. `sface-2021dec` |
-| `embeddings` | `jsonb` | Array of templates, each an array of numbers. The photos are never stored |
+| `embeddings` | `jsonb` | Array of templates, each an array of numbers |
+| `reference_photo` | text null | 160x160 JPEG data URL of the first enrollment photo's face, shown on the terminal (migration 024). The full photos are never stored |
 | `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`. The lecturer who captured the photos |
 | `created_at` / `updated_at` | `timestamptz` | |
 
