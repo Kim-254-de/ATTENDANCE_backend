@@ -71,8 +71,8 @@ authRouter.post(
  */
 authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
 
-/** The signed-in lecturer or student, or 401. The portal calls this on load to restore the session. */
-authRouter.get('/me', asyncHandler(requireAuth('LECTURER', 'STUDENT')), asyncHandler(authController.me));
+/** The signed-in lecturer, student or department officer, or 401. The portal calls this on load to restore the session. */
+authRouter.get('/me', asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT')), asyncHandler(authController.me));
 
 /** Updates title/department only — see updateProfileSchema for why name and email are excluded. */
 authRouter.patch(
