@@ -2,7 +2,12 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../common/errors/index.js';
 import type { UserRole } from '../db/types.js';
 import { readAccessToken, verifyAccessToken } from '../modules/auth/auth.session.js';
-import { findSession, type LecturerPublic, type StudentPublic } from '../modules/auth/auth.session.repository.js';
+import {
+  findSession,
+  type DepartmentOfficerPublic,
+  type LecturerPublic,
+  type StudentPublic,
+} from '../modules/auth/auth.session.repository.js';
 
 export interface AuthContext {
   userId: string;
@@ -10,6 +15,8 @@ export interface AuthContext {
   role: UserRole;
   lecturer: LecturerPublic | null;
   student: StudentPublic | null;
+  /** The signed-in department officer and the department they oversee; null for every other role. */
+  department: DepartmentOfficerPublic | null;
 }
 
 declare global {
@@ -46,6 +53,7 @@ export function requireAuth(...roles: UserRole[]) {
         role: session.role,
         lecturer: session.lecturer,
         student: session.student,
+        department: session.department,
       };
       next();
     } catch (error) {

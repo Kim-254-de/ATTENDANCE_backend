@@ -82,14 +82,14 @@ export async function login(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * GET /api/v1/auth/me — the signed-in lecturer or student (`role` says which).
+ * GET /api/v1/auth/me — the signed-in lecturer, student or department officer (`role` says which).
  *
  * The avatar is deliberately NOT part of `req.auth` (that comes from the
  * session lookup `requireAuth` runs on every authenticated request) — it is
  * fetched here, once, only for the endpoint that actually needs it.
  */
 export async function me(req: Request, res: Response): Promise<void> {
-  const account = req.auth?.lecturer ?? req.auth?.student ?? null;
+  const account = req.auth?.lecturer ?? req.auth?.student ?? req.auth?.department ?? null;
   if (!account) {
     sendSuccess(res, null);
     return;

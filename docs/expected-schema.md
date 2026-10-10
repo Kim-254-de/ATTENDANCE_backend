@@ -26,7 +26,7 @@ and account status have a single home.
 | `email` | `varchar(255)` | **UNIQUE** — the registration race depends on this |
 | `password_hash` | `varchar(255)` | Argon2id. Never plaintext |
 | `full_name` | `varchar(160)` | |
-| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` |
+| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` (`021_departments.sql` widened `users_role_check`) |
 | `status` | enum/text | See below |
 | `email_verified_at` | `timestamptz` null | |
 | `failed_login_attempts` | `integer` | Defaults to 0; used by sign-in throttling |
@@ -59,6 +59,7 @@ is itself proof of verification.
 | `erp_staff_id` | `varchar(128)` null | The ERP's own key, for reconciliation |
 | `erp_verified_at` | `timestamptz` | Set to `NOW()` on insert |
 | `erp_snapshot` | `jsonb` null | Verbatim ERP payload — evidence for disputes |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The normalised key everything department-scoped joins on; `department` above stays the ERP's free text and is still written by every sync. Null for a lecturer whose ERP department matched no row |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `student_profiles`
@@ -200,6 +201,7 @@ row here and nothing else, however many times the code rotates.
 | `geofence_radius_m` | `double precision` null | `GEOFENCE_RADIUS_METRES` at activation |
 | `geofence_anchor_accuracy_m` | `double precision` null | How precise the centre is: the room survey's accuracy, or the lecturer's device reading |
 | `room_code` | `varchar(80)` null | The room of the meeting the session was activated for (`unit_slots.room_code`), fixed at activation (`017_unit_slots.sql`) |
+| `scheduled_start_at` | `timestamptz` null | When the meeting this session was activated inside was due to start (`unit_slots.start_time` in campus time), fixed at activation (`021_departments.sql`). `opens_at - this` is how late the class began, which is what the department module reports. Null when the unit has no issued schedule — those sessions are excluded from every timekeeping figure rather than counted as on time |
 | `verification_methods` | `text[]` | Which of `QR` / `CARD` / `FINGERPRINT` / `FACE` this class accepts, as the lecturer ticked them. Non-empty, and a subset of the four (CHECK constraint, default `{QR,FACE}` since `020_unify_verification_method.sql`). A check-in by a method not listed is refused (`019_card_verification.sql`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 | | | Unless `geofence_mode` is `OFF` or `AWAITING_LOCATION`, the centre and radius are set (CHECK constraint) |
@@ -362,9 +364,73 @@ so a replacement can be enrolled alongside the history.
 
 ---
 
+## Tables the department module touches
+
+Created by `db/migrations/021_departments.sql`. See
+[`src/modules/department/README.md`](../src/modules/department/README.md).
+
+"Department" was free text on `lecturer_profiles` until this migration — fine
+for printing on a profile, but nothing can be *scoped* to a department that
+way, since two spellings of one department are two departments. Both tables are
+backfilled from the distinct values the ERP had already written, and the
+free-text `lecturer_profiles.department` / `.faculty` columns stay: the ERP sync
+still writes them on every registration and profile refresh.
+
+`units` deliberately has **no** `department_id`. A unit's department is its
+lecturer's (`units.lecturer_user_id` -> `lecturer_profiles.user_id` ->
+`department_id`); a second copy could disagree with the first the moment a unit
+changes hands.
+
+### `faculties`
+
+The level above a department. A faculty-level role is the next milestone; the
+table exists now so departments have somewhere to hang.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `name` | `varchar(160)` | **UNIQUE** — what the backfill keys on |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `departments`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `name` | `varchar(160)` | **UNIQUE**. Matched against `lecturer_profiles.department` by the backfill |
+| `faculty_id` | `uuid` null | FK -> `faculties(id)`. Null when the ERP named a department but no faculty |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `department_profiles`
+
+One department officer — the person with read-only oversight of one
+department's teaching. Mirrors `lecturer_profiles` minus the ERP columns:
+there is no ERP staff record to verify an officer against, so they are
+provisioned directly (`scripts/dev-seed-department.mjs` locally) and there is
+no self-registration flow. A row's presence is what makes a `DEPARTMENT` user
+able to see anything; `department.service.ts` reads it by `user_id` on every
+request rather than trusting the session's cached account.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `DEPARTMENT`) ON DELETE CASCADE |
+| `department_id` | `uuid` | FK -> `departments(id)`. The only scope this officer may read |
+| `title` | `varchar(32)` null | |
+| `phone` | `varchar(32)` null | |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Indexes: `lecturer_profiles(department_id)` — every department query starts by
+selecting the department's lecturers, the way `units_lecturer_idx` backs every
+"this lecturer's units" query — plus `departments(faculty_id)` and
+`department_profiles(department_id)`.
+
+---
+
 ## Tables later modules will need
 
-Not queried yet — listed so the database owner can plan: `student_profiles`.
+Not queried yet — listed so the database owner can plan: a `faculties`-scoped
+role, which is why `faculties` already exists as a table.
 
 ---
 

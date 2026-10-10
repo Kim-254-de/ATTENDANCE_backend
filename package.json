@@ -21,7 +21,8 @@
     "dev:verify-unit": "node scripts/dev-verify-unit.mjs",
     "dev:enrol-card": "node scripts/dev-enrol-card.mjs",
     "dev:seed-attendance": "node scripts/dev-seed-attendance.mjs",
-    "dev:set-room": "node scripts/dev-set-room.mjs"
+    "dev:set-room": "node scripts/dev-set-room.mjs",
+    "dev:seed-department": "node scripts/dev-seed-department.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
