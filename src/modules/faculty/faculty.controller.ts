@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
-import { sendSuccess } from '../../common/http/index.js';
+import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import * as facultyService from './faculty.service.js';
-import type { DepartmentIdParam, LecturerUserIdParam, TimekeepingQuery } from './faculty.schema.js';
+import type { CreateDepartmentInput, DepartmentIdParam, LecturerUserIdParam, ProvideCourseInput, TimekeepingQuery } from './faculty.schema.js';
 
 /**
  * HTTP in and out only. The caller's faculty is never read from the
@@ -60,4 +60,17 @@ export async function units(req: Request, res: Response): Promise<void> {
 export async function timekeeping(req: Request, res: Response): Promise<void> {
   const { lecturerUserId, unitId, departmentId, limit } = req.query as unknown as TimekeepingQuery;
   sendSuccess(res, await facultyService.listTimekeeping(userId(req), { lecturerUserId, unitId, departmentId, limit }));
+}
+
+/** POST /api/v1/faculties/departments */
+export async function createDepartment(req: Request, res: Response): Promise<void> {
+  const { name } = req.body as CreateDepartmentInput;
+  sendCreated(res, await facultyService.createDepartment(userId(req), name));
+}
+
+/** POST /api/v1/faculties/departments/:departmentId/courses */
+export async function provideCourse(req: Request, res: Response): Promise<void> {
+  const { departmentId } = req.params as unknown as DepartmentIdParam;
+  const { code, name } = req.body as ProvideCourseInput;
+  sendCreated(res, await facultyService.provideCourse(userId(req), departmentId, code, name ?? null));
 }

@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as facultyController from './faculty.controller.js';
-import { departmentIdParamSchema, lecturerUserIdParamSchema, timekeepingQuerySchema } from './faculty.schema.js';
+import { createDepartmentSchema, departmentIdParamSchema, lecturerUserIdParamSchema, provideCourseSchema, timekeepingQuerySchema } from './faculty.schema.js';
 
 /**
  * Every route is gated to the FACULTY role, and every handler resolves the
@@ -76,4 +76,20 @@ facultyRouter.get(
   asyncHandler(requireAuth('FACULTY')),
   validate({ query: timekeepingQuerySchema }),
   asyncHandler(facultyController.timekeeping),
+);
+
+/** Creates a department in the caller's own faculty. */
+facultyRouter.post(
+  '/departments',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ body: createDepartmentSchema }),
+  asyncHandler(facultyController.createDepartment),
+);
+
+/** Provides a course to one of the caller's own departments — no lecturer yet. */
+facultyRouter.post(
+  '/departments/:departmentId/courses',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: departmentIdParamSchema, body: provideCourseSchema }),
+  asyncHandler(facultyController.provideCourse),
 );

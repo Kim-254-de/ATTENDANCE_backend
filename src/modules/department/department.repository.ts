@@ -1,4 +1,4 @@
-import { query, queryOne } from '../../db/database.js';
+import { query, queryOne, transaction } from '../../db/database.js';
 
 /**
  * All SQL for the department module. Every query is parameterised.
@@ -495,4 +495,121 @@ export async function listLecturerSessions(
     present: r.present,
     total: r.total,
   }));
+}
+
+/**
+ * Course provisioning: faculty provides a course to the department
+ * (`faculty.repository.ts createCourseOffering`); the department decides how
+ * many lecturer-taught segments it needs and allocates its own lecturers to
+ * them. Allocating is the moment a real `units` row is created — see
+ * `allocateLecturerToSegment` — reusing `units.base_code`/`class_group`
+ * exactly the way SMARTTT's own split units already do.
+ */
+
+export interface CourseOfferingListRow {
+  id: string;
+  code: string;
+  name: string | null;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
+/** Offerings in one department, with how many of their planned segments already have a lecturer. */
+export async function listCourseOfferings(departmentId: string): Promise<CourseOfferingListRow[]> {
+  const { rows } = await query<{
+    id: string;
+    code: string;
+    name: string | null;
+    segments_planned: number;
+    segments_filled: number;
+  }>(
+    `SELECT co.id, co.code, co.name, co.segments_planned,
+            (SELECT COUNT(*) FROM units u WHERE u.offering_id = co.id)::int AS segments_filled
+       FROM course_offerings co
+      WHERE co.department_id = $1
+      ORDER BY co.code`,
+    [departmentId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    segmentsPlanned: r.segments_planned,
+    segmentsFilled: r.segments_filled,
+  }));
+}
+
+/** The department an offering belongs to, for the write endpoints' ownership checks. Null if it doesn't exist. */
+export async function findOfferingDepartmentId(offeringId: string): Promise<string | null> {
+  const row = await queryOne<{ department_id: string }>(
+    `SELECT department_id FROM course_offerings WHERE id = $1`,
+    [offeringId],
+  );
+  return row ? row.department_id : null;
+}
+
+export async function countFilledSegments(offeringId: string): Promise<number> {
+  const row = await queryOne<{ count: number }>(
+    `SELECT COUNT(*)::int AS count FROM units WHERE offering_id = $1`,
+    [offeringId],
+  );
+  return row?.count ?? 0;
+}
+
+/** The service layer has already checked segmentsPlanned against the filled count before calling this. */
+export async function updateSegmentsPlanned(offeringId: string, segmentsPlanned: number): Promise<void> {
+  await query(`UPDATE course_offerings SET segments_planned = $2 WHERE id = $1`, [offeringId, segmentsPlanned]);
+}
+
+export type AllocateSegmentResult =
+  | { ok: true; unitId: string; code: string }
+  | { ok: false; reason: 'SEGMENTS_FULL' };
+
+/**
+ * Allocates a lecturer to the next open segment of an offering, inside a
+ * transaction: the offering row is locked (`FOR UPDATE`) so two simultaneous
+ * allocations can never both land on the same segment letter or overfill it.
+ *
+ * A single-segment offering (the common case: most courses aren't split)
+ * becomes one unit with the offering's own code, `base_code`/`class_group`
+ * both null — indistinguishable from any other ordinary unit. A multi-segment
+ * offering's units get `base_code` = the offering's code and
+ * `class_group` = "GR A", "GR B", ... in allocation order.
+ */
+export async function allocateLecturerToSegment(
+  offeringId: string,
+  lecturerUserId: string,
+): Promise<AllocateSegmentResult> {
+  return transaction(async (client) => {
+    const offering = await queryOne<{ code: string; name: string | null; segments_planned: number }>(
+      `SELECT code, name, segments_planned FROM course_offerings WHERE id = $1 FOR UPDATE`,
+      [offeringId],
+      client,
+    );
+    if (!offering) throw new Error('offering vanished between the ownership check and allocation');
+
+    const filled = await queryOne<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM units WHERE offering_id = $1`,
+      [offeringId],
+      client,
+    );
+    const filledCount = filled?.count ?? 0;
+    if (filledCount >= offering.segments_planned) return { ok: false, reason: 'SEGMENTS_FULL' };
+
+    const multiSegment = offering.segments_planned > 1;
+    const letter = String.fromCharCode('A'.charCodeAt(0) + filledCount);
+    const code = multiSegment ? `${offering.code} GR ${letter}` : offering.code;
+    const baseCode = multiSegment ? offering.code : null;
+    const classGroup = multiSegment ? `GR ${letter}` : null;
+
+    const unit = await queryOne<{ id: string }>(
+      `INSERT INTO units (code, name, lecturer_user_id, status, base_code, class_group, offering_id)
+       VALUES ($1, $2, $3, 'VERIFIED', $4, $5, $6)
+       RETURNING id`,
+      [code, offering.name, lecturerUserId, baseCode, classGroup, offeringId],
+      client,
+    );
+    if (!unit) throw new Error('units insert returned no row');
+    return { ok: true, unitId: unit.id, code };
+  });
 }

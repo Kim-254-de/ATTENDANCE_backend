@@ -255,6 +255,22 @@ export interface FacultyProfileRow {
   updated_at: Date;
 }
 
+/**
+ * A row of `course_offerings` — a course a faculty has provided to a
+ * department, before any lecturer is attached (db/migrations/023_course_offerings.sql).
+ * Becomes one or more `units` rows as the department allocates lecturers to it.
+ */
+export interface CourseOfferingRow {
+  id: string;
+  code: string;
+  name: string | null;
+  department_id: string;
+  segments_planned: number;
+  created_by_user_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 /** A row of `email_verification_tokens`. */
 export interface EmailVerificationTokenRow {
   id: string;

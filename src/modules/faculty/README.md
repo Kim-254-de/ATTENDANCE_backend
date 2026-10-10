@@ -1,8 +1,9 @@
 # faculty module
 
-Read-only oversight of every department in one faculty: the department
-module one level up, plus one new thing a department officer cannot see —
-how its departments compare against each other.
+Oversight of every department in one faculty: the department module one
+level up, plus one new thing a department officer cannot see — how its
+departments compare against each other. Read-only except for creating
+departments and provisioning courses (see below).
 
 ## Scoping
 
@@ -49,6 +50,20 @@ department, computed per department so they can be read side by side.
 | `GET` | `/api/v1/faculties/students` | Faculty | One row per (student, unit) across the faculty, with lecturer and department |
 | `GET` | `/api/v1/faculties/units` | Faculty | Units with aggregate attendance rate, lecturer and department |
 | `GET` | `/api/v1/faculties/timekeeping` | Faculty | `?lecturerUserId=&unitId=&departmentId=&limit=` — session-level punctuality log, newest first |
+| `POST` | `/api/v1/faculties/departments` | Faculty | Creates a department in the caller's own faculty |
+| `POST` | `/api/v1/faculties/departments/:departmentId/courses` | Faculty (own) | Provides a course to one of the caller's own departments — manually entered, no ERP check, no lecturer yet |
+
+## Course provisioning (writes)
+
+The two writes above are how this university actually fills a class: faculty
+decides which courses a department offers; the department
+(`src/modules/department/README.md`) decides how many lecturer-taught
+sections each needs and allocates its own lecturers to them — the moment
+that happens the lecturer can activate classes for it, no confirmation step.
+See `db/migrations/023_course_offerings.sql` and
+[`docs/expected-schema.md`](../../../docs/expected-schema.md) for the full
+mechanism. A department outside the caller's faculty 404s rather than
+confirming it exists, and a duplicate department name or course code is a 409.
 
 ## Not built
 
@@ -56,5 +71,4 @@ No self-registration, same reason as `department`: there is no ERP record to
 verify a faculty officer against, so accounts are provisioned directly. For
 local work: `npm run dev:seed-faculty`.
 
-A faculty officer cannot write anything — no reassigning departments, no
-editing rosters. Quality assurance is the next milestone.
+Quality assurance is the next milestone.

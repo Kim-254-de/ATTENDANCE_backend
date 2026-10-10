@@ -1,4 +1,5 @@
-import { AppError } from '../../common/errors/index.js';
+import { AppError, ErrorCode } from '../../common/errors/index.js';
+import { isUniqueViolation } from '../../db/database.js';
 import * as facultyRepository from './faculty.repository.js';
 
 /**
@@ -381,4 +382,69 @@ export async function listTimekeeping(
     lateMinutes: r.lateMinutes,
     onTime: r.lateMinutes <= ON_TIME_GRACE_MINUTES,
   }));
+}
+
+/**
+ * How this university actually provisions a class: faculty decides which
+ * courses a department offers, the department decides how many
+ * lecturer-taught sections it needs and assigns its own lecturers to them
+ * (`department.service.ts allocateLecturer`). Both actions below create
+ * rows scoped to the caller's own faculty — never to a `departmentId` the
+ * caller merely names.
+ */
+
+/** POST /faculties/departments */
+export async function createDepartment(userId: string, name: string): Promise<{ departmentId: string; departmentName: string }> {
+  const faculty = await requireOwnFaculty(userId);
+  try {
+    const department = await facultyRepository.createDepartment(faculty.facultyId, name);
+    return { departmentId: department.id, departmentName: department.name };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw AppError.conflict(`A department named "${name}" already exists.`, ErrorCode.CONFLICT, {
+        details: [{ field: 'name', message: 'This department name is already in use.' }],
+      });
+    }
+    throw error;
+  }
+}
+
+export interface CourseOfferingDto {
+  id: string;
+  code: string;
+  name: string | null;
+  departmentId: string;
+  segmentsPlanned: number;
+}
+
+/**
+ * POST /faculties/departments/:departmentId/courses
+ *
+ * A department outside the caller's faculty is reported as not found, not
+ * forbidden — the same enumeration-resistance rule the drill-downs use.
+ */
+export async function provideCourse(
+  userId: string,
+  departmentId: string,
+  code: string,
+  name: string | null,
+): Promise<CourseOfferingDto> {
+  const faculty = await requireOwnFaculty(userId);
+
+  const departmentFacultyId = await facultyRepository.findDepartmentFacultyId(departmentId);
+  if (departmentFacultyId !== faculty.facultyId) {
+    throw AppError.notFound('No such department in your faculty.');
+  }
+
+  try {
+    const offering = await facultyRepository.createCourseOffering(departmentId, code, name, userId);
+    return offering;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw AppError.conflict(`${code} already exists as a course or unit.`, ErrorCode.CONFLICT, {
+        details: [{ field: 'code', message: 'This code is already in use.' }],
+      });
+    }
+    throw error;
+  }
 }

@@ -178,6 +178,7 @@ codes never add rows anywhere.
 | `registered_students` | `integer` null | Students registered for this class this term, per SMARTTT (only the group's students for a group). Null for a unit SMARTTT has never reported |
 | `students_without_group` | `integer` null | For a group: students registered for the unit who haven't picked a group in SMARTTT, so are on no group's roster |
 | `timetable_synced_at` | `timestamptz` null | Last time SMARTTT confirmed this unit for its lecturer |
+| `offering_id` | `uuid` null | FK -> `course_offerings(id)` (`023_course_offerings.sql`). Set when a department allocated a lecturer to this unit rather than SMARTTT syncing or reproducing it; null for every other unit. `base_code`/`class_group` above are set the same way either path fills them |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `attendance_sessions`
@@ -450,6 +451,36 @@ self-registration.
 | `created_at` / `updated_at` | `timestamptz` | |
 
 Index: `faculty_profiles(faculty_id)`.
+
+---
+
+## Tables the course-provisioning write endpoints touch
+
+Created by `db/migrations/023_course_offerings.sql`. How this university
+actually fills a class: faculty provides a course to a department (manually
+— no ERP check, faculty is the authority), the department decides how many
+lecturer-taught sections it needs and allocates its own lecturers to them.
+Allocating is the moment a real `units` row appears — see `units.offering_id`
+above — reusing the same `base_code`/`class_group` split-unit mechanism
+SMARTTT's own grouped units already use, so no other module needed to change.
+
+### `course_offerings`
+
+A course before it has a lecturer. `units.lecturer_user_id` stays `NOT NULL`
+on purpose — a `units` row is only ever created once a lecturer is attached,
+so this table is where the "not yet assigned" state actually lives.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(32)` | **UNIQUE**, same format as `units.code` — becomes one directly, or `units.base_code` once split |
+| `name` | `varchar(200)` null | |
+| `department_id` | `uuid` | FK -> `departments(id)`. Who is offering it |
+| `segments_planned` | `integer` | 1–26 (CHECK constraint), `GR A`..`GR Z`. The department's call, not the faculty's — defaults to 1 |
+| `created_by_user_id` | `uuid` null | The faculty officer who provided it. Traceability only; no query is scoped by it |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Index: `course_offerings(department_id)`.
 
 ---
 

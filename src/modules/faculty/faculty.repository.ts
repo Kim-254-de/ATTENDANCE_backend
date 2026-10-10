@@ -605,3 +605,53 @@ export async function listLecturerSessions(
     total: r.total,
   }));
 }
+
+export interface NewDepartment {
+  id: string;
+  name: string;
+}
+
+/** Creates a department in the given faculty. A duplicate name is a unique-constraint violation the service layer turns into a 409. */
+export async function createDepartment(facultyId: string, name: string): Promise<NewDepartment> {
+  const row = await queryOne<{ id: string; name: string }>(
+    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id, name`,
+    [name, facultyId],
+  );
+  if (!row) throw new Error('departments insert returned no row');
+  return row;
+}
+
+export interface NewCourseOffering {
+  id: string;
+  code: string;
+  name: string | null;
+  departmentId: string;
+  segmentsPlanned: number;
+}
+
+/**
+ * Provides a course to a department: a row with no lecturer yet. Throws the
+ * raw Postgres unique-violation on a duplicate code — the service layer maps
+ * it to a 409, the same way `unit.service.ts createUnit` does for `units.code`.
+ */
+export async function createCourseOffering(
+  departmentId: string,
+  code: string,
+  name: string | null,
+  createdByUserId: string,
+): Promise<NewCourseOffering> {
+  const row = await queryOne<{ id: string; code: string; name: string | null; department_id: string; segments_planned: number }>(
+    `INSERT INTO course_offerings (code, name, department_id, created_by_user_id)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, code, name, department_id, segments_planned`,
+    [code, name, departmentId, createdByUserId],
+  );
+  if (!row) throw new Error('course_offerings insert returned no row');
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    departmentId: row.department_id,
+    segmentsPlanned: row.segments_planned,
+  };
+}
