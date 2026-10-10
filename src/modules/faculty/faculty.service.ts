@@ -200,10 +200,25 @@ export async function listUnits(userId: string): Promise<FacultyUnitDto[]> {
  * forbidden — the same enumeration-resistance rule the lecturer drill-down
  * uses.
  */
+/** A course offering as the department-detail drill-down lists it, with how many segments are filled. */
+export interface DepartmentCourseDto {
+  id: string;
+  code: string;
+  name: string | null;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
 export async function getDepartmentDetail(
   userId: string,
   departmentId: string,
-): Promise<{ departmentId: string; departmentName: string; lecturers: FacultyLecturerDto[]; units: FacultyUnitDto[] }> {
+): Promise<{
+  departmentId: string;
+  departmentName: string;
+  lecturers: FacultyLecturerDto[];
+  units: FacultyUnitDto[];
+  courses: DepartmentCourseDto[];
+}> {
   const faculty = await requireOwnFaculty(userId);
 
   const departmentFacultyId = await facultyRepository.findDepartmentFacultyId(departmentId);
@@ -213,9 +228,10 @@ export async function getDepartmentDetail(
   const departmentName = await facultyRepository.findDepartmentName(departmentId);
   if (!departmentName) throw AppError.notFound('No such department in your faculty.');
 
-  const [lecturers, units] = await Promise.all([
+  const [lecturers, units, courses] = await Promise.all([
     facultyRepository.listLecturers(faculty.facultyId, ON_TIME_GRACE_MINUTES, departmentId),
     facultyRepository.listUnits(faculty.facultyId, { departmentId }),
+    facultyRepository.listCourseOfferings(departmentId),
   ]);
 
   return {
@@ -223,6 +239,7 @@ export async function getDepartmentDetail(
     departmentName,
     lecturers: lecturers.map(toLecturerDto),
     units: units.map(toUnitDto),
+    courses,
   };
 }
 

@@ -655,3 +655,36 @@ export async function createCourseOffering(
     segmentsPlanned: row.segments_planned,
   };
 }
+
+export interface CourseOfferingListRow {
+  id: string;
+  code: string;
+  name: string | null;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
+/** Offerings in one department, with how many of their planned segments already have a lecturer — same query `department.repository.ts listCourseOfferings` runs, one level up. */
+export async function listCourseOfferings(departmentId: string): Promise<CourseOfferingListRow[]> {
+  const { rows } = await query<{
+    id: string;
+    code: string;
+    name: string | null;
+    segments_planned: number;
+    segments_filled: number;
+  }>(
+    `SELECT co.id, co.code, co.name, co.segments_planned,
+            (SELECT COUNT(*) FROM units u WHERE u.offering_id = co.id)::int AS segments_filled
+       FROM course_offerings co
+      WHERE co.department_id = $1
+      ORDER BY co.code`,
+    [departmentId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    segmentsPlanned: r.segments_planned,
+    segmentsFilled: r.segments_filled,
+  }));
+}
