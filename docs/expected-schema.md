@@ -362,6 +362,42 @@ so a replacement can be enrolled alongside the history.
 
 ---
 
+### `student_fingerprints`
+
+Which of a reader's own enrolment slots belongs to which student
+([`docs/fingerprint-check-in.md`](fingerprint-check-in.md)). Written by
+`scripts/dev-enrol-fingerprint.mjs` until there is an administrator interface;
+read on every presentation by
+`src/modules/attendance/fingerprint.repository.ts`.
+
+**No fingerprint, template or image is stored here, or anywhere in this
+service.** The reader holds the templates and runs the 1:N match itself; all
+this records is the mapping from its result to a student.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `student_user_id` | `uuid` | FK -> `users(id)`, cascade |
+| `terminal_id` | `varchar(64)` | Which reader. A slot number means nothing without it |
+| `finger_ref_hmac` | `varchar(64)` | **HMAC-SHA256 hex of the reader's slot reference, keyed with `FINGERPRINT_REF_SECRET`.** The reference itself is never stored |
+| `label` | `varchar(64)` null | Which finger, for whoever re-enrols it. Never used in matching |
+| `status` | text | `ACTIVE` / `REVOKED` (CHECK constraint) |
+| `enrolled_at` | `timestamptz` | Defaults to `NOW()` |
+| `revoked_at` | `timestamptz` null | Set exactly when status is `REVOKED` (CHECK constraint) |
+| `enrolled_by_user_id` | `uuid` null | FK -> `users(id)`, set null |
+| `created_at` / `updated_at` | `timestamptz` | |
+| | | **UNIQUE (terminal_id, finger_ref_hmac) WHERE status = 'ACTIVE'** -- load-bearing: a presentation can never be ambiguous |
+| | | **UNIQUE (student_user_id, terminal_id) WHERE status = 'ACTIVE'** -- one usable finger per student per reader |
+
+A slot reference is often an integer in the low hundreds, so a plain hash would
+be enumerable instantly from a dump and the reference is all it takes to post a
+check-in — hence the keyed HMAC, as for `student_cards`.
+
+The pair of unique indexes is what makes a travelling reader work: a student may
+hold an enrolment on several terminals, but only one on each.
+
+---
+
 ## Tables later modules will need
 
 Not queried yet — listed so the database owner can plan: `student_profiles`.

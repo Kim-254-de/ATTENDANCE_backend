@@ -3,7 +3,12 @@ import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as attendanceService from './attendance.service.js';
-import type { CardCheckInInput, CheckInInput, SessionIdParam } from './attendance.schema.js';
+import type {
+  CardCheckInInput,
+  CheckInInput,
+  FingerprintCheckInInput,
+  SessionIdParam,
+} from './attendance.schema.js';
 
 /** HTTP in, HTTP out. */
 
@@ -35,6 +40,22 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
 export async function cardCheckIn(req: Request, res: Response): Promise<void> {
   const { sessionId, cardUid } = req.body as CardCheckInInput;
   const result = await attendanceService.checkInByCard(sessionId, cardUid, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/fingerprint-check-in
+ *
+ * Called by a fingerprint terminal, authenticated by its shared key. The
+ * reader has already matched the finger; the body says which of its enrolment
+ * slots, and that names the student.
+ */
+export async function fingerprintCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, terminalId, fingerRef } = req.body as FingerprintCheckInInput;
+  const result = await attendanceService.checkInByFingerprint(sessionId, terminalId, fingerRef, {
     ...clientFingerprint(req),
     requestId: req.requestId,
   });

@@ -44,3 +44,35 @@ export const cardCheckInSchema = z
   })
   .strict();
 export type CardCheckInInput = z.infer<typeof cardCheckInSchema>;
+
+/**
+ * A finger matched at a terminal.
+ *
+ * `fingerRef` is the reader's own enrolment reference for the template it
+ * matched — a slot number on the modules this is built for. It is opaque here
+ * and only meaningful alongside `terminalId`, because each reader numbers its
+ * own slots (`021_fingerprint_verification.sql`).
+ *
+ * No fingerprint, template or image is accepted: the reader does the matching.
+ * A body carrying biometric data would be a body this service has to be
+ * trusted with, and the whole design avoids that.
+ */
+export const fingerprintCheckInSchema = z
+  .object({
+    sessionId: uuid,
+    /** Which reader. Configured on the device; identifies whose slot numbering this is. */
+    terminalId: z
+      .string()
+      .trim()
+      .min(1, 'Name the terminal.')
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Not a valid terminal id.'),
+    fingerRef: z
+      .string()
+      .trim()
+      .min(1, 'Not a valid enrolment reference.')
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9:_-]*$/, 'Not a valid enrolment reference.'),
+  })
+  .strict();
+export type FingerprintCheckInInput = z.infer<typeof fingerprintCheckInSchema>;

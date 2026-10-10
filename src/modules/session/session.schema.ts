@@ -73,10 +73,11 @@ export const createSessionSchema = z
      * Any combination, at least one, each named once. Defaults to QR and face,
      * each the other's fallback (docs/face-recognition.md).
      *
-     * FINGERPRINT is accepted here so the interface can offer all four, but
-     * nothing can check in with it yet — see src/modules/verification/README.md.
-     * Ticking it on its own leaves a class nobody can check in to, so that is
-     * refused below.
+     * All four have a check-in path now, so any single one is a usable class.
+     * Fingerprint and card both need their terminal present in the room — a
+     * class enabling only those, with no terminal, is a class nobody can check
+     * in to, but that is an operational matter rather than something the schema
+     * can tell.
      */
     verificationMethods: z
       .array(z.enum(['QR', 'CARD', 'FINGERPRINT', 'FACE']))
@@ -85,11 +86,6 @@ export const createSessionSchema = z
       .default(['QR', 'FACE'])
       .refine((methods) => new Set(methods).size === methods.length, {
         message: 'Each check-in method may only be chosen once.',
-      })
-      .refine((methods) => methods.some((m) => m !== 'FINGERPRINT'), {
-        message:
-          'Fingerprint check-in is not built yet. Include QR code, face or ID card scanning, ' +
-          'or students will have no way to check in.',
       }),
   })
   .strict()

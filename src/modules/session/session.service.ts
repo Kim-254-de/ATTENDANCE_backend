@@ -529,40 +529,46 @@ export async function verifyScan(
   };
 }
 
-export interface CardSwipeVerdict {
+export interface TerminalCheckInVerdict {
   sessionId: string;
   unitId: string;
   unitCode: string;
 }
 
+/** @deprecated The card-specific name. Use TerminalCheckInVerdict. */
+export type CardSwipeVerdict = TerminalCheckInVerdict;
+
 /**
- * Validates a card swipe for a student the terminal has already identified.
+ * Validates a check-in at a terminal, for a student the terminal has already
+ * identified — by their card, or by their finger.
  *
- * Takes a student id, not a card: resolving a UID to its holder belongs to the
- * attendance module, which owns the card table. This keeps every rule about
- * whether a check-in counts in one place alongside verifyScan.
+ * Takes a student id, not a card or a finger: resolving an identifier to its
+ * holder belongs to the attendance module, which owns those tables. One
+ * function for both because the rules are identical, and every rule about
+ * whether a check-in counts belongs in one place alongside verifyScan.
  *
  * Two rules from the QR path deliberately do not apply:
  *
- *  - There is no rotating token. The card itself is the credential, and what
- *    stops a borrowed card is that it names one student who can only be
- *    recorded once (below), not a short expiry.
+ *  - There is no rotating token. The card or finger is the credential, and
+ *    what stops a borrowed one is that it names a single student who can only
+ *    be recorded once (below), not a short expiry.
  *  - The geofence is not evaluated. It exists to check that a *phone* claiming
  *    to be in the room really is; a student at the terminal is in the room by
  *    construction, and we have no reading from them to judge. The record is
  *    stored NOT_CHECKED, which is honest: the fence was not the thing that
  *    proved this one.
  */
-export async function verifyCardSwipe(
+export async function verifyTerminalCheckIn(
   sessionId: string,
   studentUserId: string,
+  method: 'CARD' | 'FINGERPRINT',
   context: RequestContext,
-): Promise<CardSwipeVerdict> {
+): Promise<TerminalCheckInVerdict> {
   const session = await sessionRepository.findSessionById(sessionId);
   if (!session) throw AppError.notFound('Session not found.');
 
   assertSessionAcceptingScans(session);
-  assertMethodEnabled(session, 'CARD');
+  assertMethodEnabled(session, method);
 
   const allocated = await sessionRepository.studentAllocatedToUnit(session.unitId, studentUserId);
   if (!allocated) {
@@ -590,7 +596,7 @@ export async function verifyCardSwipe(
     requestId: context.requestId,
     ipAddress: context.ipAddress,
     userAgent: context.userAgent,
-    metadata: { sessionId: session.id, unitCode: session.unitCode, method: 'CARD' },
+    metadata: { sessionId: session.id, unitCode: session.unitCode, method },
   });
 
   return { sessionId: session.id, unitId: session.unitId, unitCode: session.unitCode };

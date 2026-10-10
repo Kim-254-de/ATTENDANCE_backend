@@ -184,6 +184,15 @@ const envSchema = z
     // if the table ever leaks.
     CARD_UID_SECRET: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
 
+    // --- Fingerprint check-in ---
+    // As above, for fingerprint terminals. A separate key from the card
+    // terminals' so one class of device can be revoked without the other.
+    FINGERPRINT_TERMINAL_API_KEY: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
+    // Keys the HMAC over the reader's enrolment reference. That reference is
+    // often a slot number in the low hundreds, so a plain hash would be
+    // trivially enumerable. No fingerprint is stored either way.
+    FINGERPRINT_REF_SECRET: emptyAsUnset(z.string().min(32, 'must be at least 32 characters').optional()),
+
     // --- Geofenced check-in (session.geofence.ts) ---
     // How far from the room's centre a student may be. Accuracy counts in the
     // student's favour, so the effective reach is radius + reported accuracy.
@@ -274,6 +283,13 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['CARD_UID_SECRET'],
         message: 'is required when CARD_TERMINAL_API_KEY is set',
+      });
+    }
+    if (env.FINGERPRINT_TERMINAL_API_KEY && !env.FINGERPRINT_REF_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FINGERPRINT_REF_SECRET'],
+        message: 'is required when FINGERPRINT_TERMINAL_API_KEY is set',
       });
     }
     if (env.NODE_ENV === 'production' && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {

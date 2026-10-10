@@ -6,6 +6,7 @@ import { auditService } from '../audit/index.js';
 import { sessionService, type SessionForQr, type StudentLocationInput } from '../session/index.js';
 import * as attendanceRepository from './attendance.repository.js';
 import * as cardRepository from './card.repository.js';
+import * as fingerprintRepository from './fingerprint.repository.js';
 
 /**
  * Check-in: turns a verified scan into an attendance record.
@@ -130,7 +131,12 @@ export async function checkInByCard(
     throw AppError.notFound(CARD_NOT_RECOGNISED);
   }
 
-  const verdict = await sessionService.verifyCardSwipe(sessionId, holder.studentUserId, context);
+  const verdict = await sessionService.verifyTerminalCheckIn(
+    sessionId,
+    holder.studentUserId,
+    'CARD',
+    context,
+  );
 
   let record: { id: string; recordedAt: Date };
   try {
@@ -167,6 +173,109 @@ export async function checkInByCard(
       recordId: record.id,
       method: 'CARD',
       cardId: holder.cardId,
+    },
+  });
+
+  return {
+    recordId: record.id,
+    sessionId: verdict.sessionId,
+    unitCode: verdict.unitCode,
+    recordedAt: record.recordedAt.toISOString(),
+    student: { fullName: holder.fullName, registrationNumber: holder.registrationNumber },
+  };
+}
+
+/** Said for a finger the reader matched to a slot this service does not know. */
+const FINGER_NOT_RECOGNISED =
+  'This fingerprint is not registered on this terminal. See your department to enrol it.';
+
+/**
+ * Check-in by fingerprint, presented at a terminal in the room.
+ *
+ * The reader has already done the biometric work: it holds the templates, it
+ * ran the 1:N match, and it reports which of its own enrolment slots matched.
+ * This service never sees a fingerprint. So the only question left here is
+ * whose slot that is, and the answer is scoped to the terminal — slot 37 on
+ * one reader and slot 37 on another are different people.
+ *
+ * Everything after that is the shared terminal path: the class is open and
+ * inside its window, the method was enabled, the student is ACTIVE on the
+ * roster, one check-in each. Decided by sessionService.verifyTerminalCheckIn,
+ * the same function the card swipe uses, so the two cannot drift apart.
+ */
+export async function checkInByFingerprint(
+  sessionId: string,
+  terminalId: string,
+  fingerRef: string,
+  context: RequestContext,
+): Promise<CardCheckInResult> {
+  if (!env.FINGERPRINT_REF_SECRET) {
+    // env.ts refuses this combination at boot; this is the type-level guard.
+    throw new Error('FINGERPRINT_REF_SECRET is not set, so no enrolment can be matched.');
+  }
+
+  const holder = await fingerprintRepository.findFingerprintHolder(
+    terminalId,
+    hashCardUid(fingerRef, env.FINGERPRINT_REF_SECRET),
+  );
+  if (!holder) {
+    // No user id: nobody is known to have presented it. A run of these from one
+    // terminal is how a reader whose templates were wiped shows up.
+    await auditService.record({
+      action: 'ATTENDANCE_FINGERPRINT_REJECTED',
+      outcome: 'FAILURE',
+      reason: 'enrolment not found or revoked',
+      requestId: context.requestId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      metadata: { sessionId, terminalId },
+    });
+    throw AppError.notFound(FINGER_NOT_RECOGNISED);
+  }
+
+  const verdict = await sessionService.verifyTerminalCheckIn(
+    sessionId,
+    holder.studentUserId,
+    'FINGERPRINT',
+    context,
+  );
+
+  let record: { id: string; recordedAt: Date };
+  try {
+    record = await attendanceRepository.insertRecord({
+      sessionId: verdict.sessionId,
+      unitId: verdict.unitId,
+      studentUserId: holder.studentUserId,
+      // No rotating code, and no reading to fence against: the student was at
+      // the terminal, which is in the room.
+      qrAgeSeconds: null,
+      verificationMethod: 'FINGERPRINT',
+      geofenceResult: 'NOT_CHECKED',
+      distanceMetres: null,
+      locationAccuracyMetres: null,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+  } catch (error) {
+    // Two presentations raced past verifyTerminalCheckIn's advisory check.
+    if (isUniqueViolation(error)) throw AppError.conflict(ALREADY_RECORDED, ErrorCode.CONFLICT);
+    throw error;
+  }
+
+  await auditService.record({
+    action: 'ATTENDANCE_RECORDED',
+    outcome: 'SUCCESS',
+    userId: holder.studentUserId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: {
+      sessionId: verdict.sessionId,
+      unitCode: verdict.unitCode,
+      recordId: record.id,
+      method: 'FINGERPRINT',
+      terminalId,
+      enrolmentId: holder.enrolmentId,
     },
   });
 
