@@ -13,6 +13,8 @@ export const UserRole = {
   ADMIN: 'ADMIN',
   /** A department officer: read-only oversight of one department's teaching (db/migrations/021_departments.sql). */
   DEPARTMENT: 'DEPARTMENT',
+  /** A faculty officer: read-only oversight of every department in one faculty (db/migrations/022_faculty_role.sql). */
+  FACULTY: 'FACULTY',
 } as const;
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
@@ -210,7 +212,7 @@ export interface LecturerProfileRow {
   updated_at: Date;
 }
 
-/** A row of `faculties`. The level above a department; a faculty role is not built yet. */
+/** A row of `faculties`. The level above a department. */
 export interface FacultyRow {
   id: string;
   name: string;
@@ -238,6 +240,33 @@ export interface DepartmentProfileRow {
   department_id: string;
   title: string | null;
   phone: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** A row of `faculty_profiles` — one faculty officer. Mirrors `DepartmentProfileRow` one level up. */
+export interface FacultyProfileRow {
+  id: string;
+  user_id: string;
+  faculty_id: string;
+  title: string | null;
+  phone: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * A row of `course_offerings` — a course a faculty has provided to a
+ * department, before any lecturer is attached (db/migrations/023_course_offerings.sql).
+ * Becomes one or more `units` rows as the department allocates lecturers to it.
+ */
+export interface CourseOfferingRow {
+  id: string;
+  code: string;
+  name: string | null;
+  department_id: string;
+  segments_planned: number;
+  created_by_user_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

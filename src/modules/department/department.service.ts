@@ -322,3 +322,83 @@ export async function listTimekeeping(
     onTime: r.lateMinutes <= ON_TIME_GRACE_MINUTES,
   }));
 }
+
+/**
+ * Course provisioning, the department's half: faculty has already provided
+ * the course (`faculty.service.ts provideCourse`); from here the department
+ * decides how many lecturer-taught segments it needs and assigns its own
+ * lecturers to them. Allocating is immediate — no confirmation step, no
+ * ERP check — and reuses `units.base_code`/`class_group`, so the resulting
+ * unit is a completely ordinary one to every other module in this codebase.
+ */
+
+export interface CourseOfferingDto {
+  id: string;
+  code: string;
+  name: string | null;
+  segmentsPlanned: number;
+  segmentsFilled: number;
+}
+
+/** GET /departments/courses */
+export async function listCourses(userId: string): Promise<CourseOfferingDto[]> {
+  const department = await requireOwnDepartment(userId);
+  return departmentRepository.listCourseOfferings(department.departmentId);
+}
+
+/**
+ * An offering outside the caller's department is reported as not found, not
+ * forbidden — the same enumeration-resistance rule every other named-resource
+ * endpoint in this module uses.
+ */
+async function requireOwnOffering(userId: string, offeringId: string): Promise<DepartmentDto> {
+  const department = await requireOwnDepartment(userId);
+  const offeringDepartmentId = await departmentRepository.findOfferingDepartmentId(offeringId);
+  if (offeringDepartmentId !== department.departmentId) {
+    throw AppError.notFound('No such course in your department.');
+  }
+  return department;
+}
+
+/** PATCH /departments/courses/:offeringId — how many sections this course needs. */
+export async function setSegmentCount(userId: string, offeringId: string, segmentsPlanned: number): Promise<void> {
+  await requireOwnOffering(userId, offeringId);
+  const filled = await departmentRepository.countFilledSegments(offeringId);
+  if (segmentsPlanned < filled) {
+    throw AppError.badRequest(
+      `This course already has ${filled} section${filled === 1 ? '' : 's'} assigned; it cannot be reduced below that.`,
+    );
+  }
+  await departmentRepository.updateSegmentsPlanned(offeringId, segmentsPlanned);
+}
+
+export interface AllocatedUnitDto {
+  unitId: string;
+  code: string;
+}
+
+/**
+ * POST /departments/courses/:offeringId/segments
+ *
+ * The lecturer must belong to this department — the same ownership rule the
+ * oversight endpoints use, now enforced on a write: a department can only
+ * assign its own staff, never borrow another department's lecturer.
+ */
+export async function allocateLecturer(
+  userId: string,
+  offeringId: string,
+  lecturerUserId: string,
+): Promise<AllocatedUnitDto> {
+  const department = await requireOwnOffering(userId, offeringId);
+
+  const lecturerDepartmentId = await departmentRepository.findLecturerDepartmentId(lecturerUserId);
+  if (lecturerDepartmentId !== department.departmentId) {
+    throw AppError.badRequest('That lecturer is not in your department.');
+  }
+
+  const result = await departmentRepository.allocateLecturerToSegment(offeringId, lecturerUserId);
+  if (!result.ok) {
+    throw AppError.conflict('This course already has a lecturer assigned to every planned section.');
+  }
+  return { unitId: result.unitId, code: result.code };
+}

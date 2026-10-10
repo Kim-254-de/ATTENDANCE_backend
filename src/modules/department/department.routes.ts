@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as departmentController from './department.controller.js';
-import { lecturerUserIdParamSchema, timekeepingQuerySchema } from './department.schema.js';
+import { allocateLecturerSchema, lecturerUserIdParamSchema, offeringIdParamSchema, setSegmentCountSchema, timekeepingQuerySchema } from './department.schema.js';
 
 /**
  * Every route is gated to the DEPARTMENT role, and every handler resolves the
@@ -61,4 +61,27 @@ departmentRouter.get(
   asyncHandler(requireAuth('DEPARTMENT')),
   validate({ query: timekeepingQuerySchema }),
   asyncHandler(departmentController.timekeeping),
+);
+
+/** Courses faculty has provided to the department, with how many of their planned segments are filled. */
+departmentRouter.get(
+  '/courses',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  asyncHandler(departmentController.courses),
+);
+
+/** How many lecturer-taught sections a course needs. 404 unless the course is in the caller's department. */
+departmentRouter.patch(
+  '/courses/:offeringId',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ params: offeringIdParamSchema, body: setSegmentCountSchema }),
+  asyncHandler(departmentController.setSegmentCount),
+);
+
+/** Allocates one of the department's own lecturers to the next open segment — immediate, creates a real unit. */
+departmentRouter.post(
+  '/courses/:offeringId/segments',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ params: offeringIdParamSchema, body: allocateLecturerSchema }),
+  asyncHandler(departmentController.allocateLecturer),
 );

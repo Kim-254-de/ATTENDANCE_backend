@@ -1,7 +1,8 @@
 # department module
 
-Read-only oversight of one department's teaching: who teaches what, how well
-attended it is, and whether classes start on time.
+Oversight of one department's teaching: who teaches what, how well attended
+it is, and whether classes start on time — read-only except for course
+provisioning (see below), which is the only writing this module does.
 
 ## Scoping
 
@@ -61,6 +62,22 @@ not `0`, when no session is measurable, so "nothing measured" cannot read as
 | `GET` | `/api/v1/departments/students` | Department | One row per (student, unit) across the department, with the owning lecturer |
 | `GET` | `/api/v1/departments/units` | Department | Units with aggregate attendance rate and lecturer name |
 | `GET` | `/api/v1/departments/timekeeping` | Department | `?lecturerUserId=&unitId=&limit=` — session-level punctuality log, newest first |
+| `GET` | `/api/v1/departments/courses` | Department | Courses faculty has provided, with segments planned/filled |
+| `PATCH` | `/api/v1/departments/courses/:offeringId` | Department (own) | Sets how many lecturer-taught sections a course needs |
+| `POST` | `/api/v1/departments/courses/:offeringId/segments` | Department (own) | Allocates one of the department's own lecturers to the next open section — immediate, creates a real `units` row |
+
+## Course provisioning (writes)
+
+The only mutations this module has: a department can allocate its own
+lecturers to courses faculty has provided (`src/modules/faculty/README.md`),
+and decide how many sections a course needs. See
+`db/migrations/023_course_offerings.sql` and
+[`docs/expected-schema.md`](../../../docs/expected-schema.md)'s
+"course-provisioning write endpoints" section for the full mechanism —
+allocating reuses `units.base_code`/`class_group`, so the resulting unit
+needs no special handling anywhere else in this codebase. A lecturer outside
+the caller's department cannot be allocated (400), and an offering outside
+the caller's department 404s rather than confirming it exists.
 
 ## Not built
 
