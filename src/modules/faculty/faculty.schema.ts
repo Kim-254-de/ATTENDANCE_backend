@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { inviteeSchema } from '../auth/auth.schema.js';
 import { unitCodeSchema } from '../unit/index.js';
 
 /** Request contracts for the faculty module. */
@@ -7,6 +8,11 @@ export const lecturerUserIdParamSchema = z
   .object({ lecturerUserId: z.string().uuid('Not a valid identifier.') })
   .strict();
 export type LecturerUserIdParam = z.infer<typeof lecturerUserIdParamSchema>;
+
+export const studentUserIdParamSchema = z
+  .object({ studentUserId: z.string().uuid('Not a valid identifier.') })
+  .strict();
+export type StudentUserIdParam = z.infer<typeof studentUserIdParamSchema>;
 
 export const departmentIdParamSchema = z
   .object({ departmentId: z.string().uuid('Not a valid identifier.') })
@@ -50,3 +56,11 @@ export const provideCourseSchema = z
   })
   .strict();
 export type ProvideCourseInput = z.infer<typeof provideCourseSchema>;
+
+/** POST /faculties/departments/:departmentId/officers — who to invite; the department comes from the route. */
+export const inviteDepartmentOfficerSchema = inviteeSchema;
+
+export const officerUserIdParamSchema = z
+  .object({ userId: z.string().uuid('Not a valid identifier.') })
+  .strict();
+export type OfficerUserIdParam = z.infer<typeof officerUserIdParamSchema>;

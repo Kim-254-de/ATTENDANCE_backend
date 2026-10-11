@@ -1,8 +1,9 @@
 // DEV ONLY. There is no registration flow for the FACULTY role and there
 // never will be a self-service one: a faculty officer has no ERP staff
 // record to verify against, so an open sign-up form would have nothing to
-// check. Accounts are provisioned directly, and this stands in for that until
-// there is an admin interface.
+// check. Real accounts are invited instead (admin console / faculty portal,
+// src/modules/auth/auth.invitation.ts); this is a local shortcut that skips
+// the email and sets a known password.
 //   node scripts/dev-seed-faculty.mjs
 //   node scripts/dev-seed-faculty.mjs "Physical Engineering and Technologies" faculty.pet@test.local
 // Creates one faculty (if it does not already exist) and one ACTIVE

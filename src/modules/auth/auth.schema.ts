@@ -22,7 +22,7 @@ const staffNumberSchema = z
   )
   .transform((value) => value.toUpperCase());
 
-const emailSchema = z
+export const emailSchema = z
   .string()
   .trim()
   .min(5, 'Email address is too short.')
@@ -30,7 +30,7 @@ const emailSchema = z
   .email('Enter a valid email address.')
   .transform((value) => value.toLowerCase());
 
-const fullNameSchema = z
+export const fullNameSchema = z
   .string()
   .trim()
   .min(3, 'Full name must be at least 3 characters.')
@@ -244,6 +244,18 @@ export const changePasswordSchema = z
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 /**
+ * DELETE /auth/me. The password is asked for again even though the caller is
+ * signed in: a session left open on a shared lab computer must not be enough
+ * to destroy an account.
+ */
+export const deleteAccountSchema = z
+  .object({
+    password: z.string().min(1, 'Enter your password.').max(128),
+  })
+  .strict();
+export type DeleteAccountInput = z.infer<typeof deleteAccountSchema>;
+
+/**
  * A profile photo, sent as a data URL. The body-size limit on this route (see
  * app.ts) is the primary guard against abuse; this length cap is a second,
  * independent one at the validation layer.
@@ -258,3 +270,34 @@ export const avatarSchema = z
   .strict();
 
 export type AvatarInput = z.infer<typeof avatarSchema>;
+
+/** The token from an invitation link (auth.invitation.ts). */
+const invitationTokenSchema = z.string().trim().min(16, 'This invitation link is not valid.').max(256);
+
+/** POST /auth/invitations/lookup */
+export const invitationLookupSchema = z.object({ token: invitationTokenSchema }).strict();
+export type InvitationLookupInput = z.infer<typeof invitationLookupSchema>;
+
+/** POST /auth/invitations/accept — the invitee chooses their own password. */
+export const acceptInvitationSchema = z
+  .object({
+    token: invitationTokenSchema,
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.password !== value.confirmPassword) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Passwords do not match.' });
+    }
+  });
+export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;
+
+/** An administrator or officer inviting someone: who they are. Scope comes from the route. */
+export const inviteeSchema = z
+  .object({
+    fullName: fullNameSchema,
+    email: emailSchema,
+  })
+  .strict();
+export type InviteeInput = z.infer<typeof inviteeSchema>;

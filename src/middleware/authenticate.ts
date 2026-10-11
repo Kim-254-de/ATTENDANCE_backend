@@ -4,6 +4,7 @@ import type { UserRole } from '../db/types.js';
 import { readAccessToken, verifyAccessToken } from '../modules/auth/auth.session.js';
 import {
   findSession,
+  type AdminPublic,
   type DepartmentOfficerPublic,
   type FacultyOfficerPublic,
   type LecturerPublic,
@@ -20,6 +21,8 @@ export interface AuthContext {
   department: DepartmentOfficerPublic | null;
   /** The signed-in faculty officer and the faculty they oversee; null for every other role. */
   faculty: FacultyOfficerPublic | null;
+  /** The signed-in administrator; null for every other role. */
+  admin: AdminPublic | null;
 }
 
 declare global {
@@ -58,6 +61,7 @@ export function requireAuth(...roles: UserRole[]) {
         student: session.student,
         department: session.department,
         faculty: session.faculty,
+        admin: session.admin,
       };
       next();
     } catch (error) {

@@ -3,7 +3,8 @@
 Oversight of every department in one faculty: the department module one
 level up, plus one new thing a department officer cannot see — how its
 departments compare against each other. Read-only except for creating
-departments and provisioning courses (see below).
+departments, provisioning courses, inviting department officers and deleting
+accounts (see below).
 
 ## Scoping
 
@@ -53,6 +54,12 @@ department, computed per department so they can be read side by side.
 | `POST` | `/api/v1/faculties/departments` | Faculty | Creates a department in the caller's own faculty |
 | `POST` | `/api/v1/faculties/departments/:departmentId/courses` | Faculty (own) | Provides a course to one of the caller's own departments — manually entered, no ERP check, no lecturer yet |
 | `GET` | `/api/v1/faculties/courses` | Faculty | Every course offering across every department, with `departmentName` and segments planned/filled |
+| `DELETE` | `/api/v1/faculties/lecturers/:lecturerUserId` | Faculty (own) | Deletes the account of a lecturer in one of the faculty's departments (anonymised) |
+| `DELETE` | `/api/v1/faculties/students/:studentUserId` | Faculty (on a faculty roster) | Deletes the account of a student on a roster of one of the faculty's units (anonymised) |
+| `GET` | `/api/v1/faculties/officers` | Faculty | The department officers of the faculty's departments, with invitation status |
+| `POST` | `/api/v1/faculties/departments/:departmentId/officers` | Faculty (own) | Invites the officer for one of the faculty's departments |
+| `POST` | `/api/v1/faculties/officers/:userId/resend` | Faculty (own) | Re-sends a pending invitation with a new link |
+| `POST` | `/api/v1/faculties/officers/:userId/deactivate` | Faculty (own) | Removes a department officer's access |
 
 ## Course provisioning (writes)
 
@@ -73,3 +80,16 @@ verify a faculty officer against, so accounts are provisioned directly. For
 local work: `npm run dev:seed-faculty`.
 
 Quality assurance is the next milestone.
+
+## Account deletion (writes)
+
+The department module's account deletion, one level up: lecturers in any of
+the faculty's departments, students on a roster of any of its units. See
+`src/modules/department/README.md` and `src/modules/auth/auth.deletion.ts`.
+
+## Department officers (writes)
+
+A faculty officer invites the officer for each of its own departments and
+removes their access when they leave the post. The invitee gets an email to
+choose their own password (`src/modules/auth/auth.invitation.ts`); nobody else
+ever sets it. A department outside the caller's faculty is a 404.

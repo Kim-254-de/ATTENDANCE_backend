@@ -1,8 +1,9 @@
 import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import { clientFingerprint } from '../../middleware/request-context.js';
 import * as departmentService from './department.service.js';
-import type { AllocateLecturerInput, LecturerUserIdParam, OfferingIdParam, SetSegmentCountInput, TimekeepingQuery } from './department.schema.js';
+import type { AllocateLecturerInput, LecturerUserIdParam, OfferingIdParam, SetSegmentCountInput, StudentUserIdParam, TimekeepingQuery } from './department.schema.js';
 
 /**
  * HTTP in and out only. The caller's department is never read from the
@@ -70,4 +71,18 @@ export async function allocateLecturer(req: Request, res: Response): Promise<voi
   const { offeringId } = req.params as unknown as OfferingIdParam;
   const { lecturerUserId } = req.body as AllocateLecturerInput;
   sendCreated(res, await departmentService.allocateLecturer(userId(req), offeringId, lecturerUserId));
+}
+
+/** DELETE /api/v1/departments/lecturers/:lecturerUserId */
+export async function deleteLecturer(req: Request, res: Response): Promise<void> {
+  const { lecturerUserId } = req.params as unknown as LecturerUserIdParam;
+  await departmentService.deleteLecturer(userId(req), lecturerUserId, { ...clientFingerprint(req), requestId: req.requestId });
+  res.status(204).end();
+}
+
+/** DELETE /api/v1/departments/students/:studentUserId */
+export async function deleteStudent(req: Request, res: Response): Promise<void> {
+  const { studentUserId } = req.params as unknown as StudentUserIdParam;
+  await departmentService.deleteStudent(userId(req), studentUserId, { ...clientFingerprint(req), requestId: req.requestId });
+  res.status(204).end();
 }

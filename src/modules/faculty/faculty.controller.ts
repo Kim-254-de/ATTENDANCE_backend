@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import { clientFingerprint } from '../../middleware/request-context.js';
 import * as facultyService from './faculty.service.js';
-import type { CreateDepartmentInput, DepartmentIdParam, LecturerUserIdParam, ProvideCourseInput, TimekeepingQuery } from './faculty.schema.js';
+import type { InviteeInput } from '../auth/auth.schema.js';
+import type { CreateDepartmentInput, DepartmentIdParam, LecturerUserIdParam, OfficerUserIdParam, ProvideCourseInput, StudentUserIdParam, TimekeepingQuery } from './faculty.schema.js';
 
 /**
  * HTTP in and out only. The caller's faculty is never read from the
@@ -78,4 +80,48 @@ export async function provideCourse(req: Request, res: Response): Promise<void> 
 /** GET /api/v1/faculties/courses */
 export async function courses(req: Request, res: Response): Promise<void> {
   sendSuccess(res, await facultyService.listCourses(userId(req)));
+}
+
+/** DELETE /api/v1/faculties/lecturers/:lecturerUserId */
+export async function deleteLecturer(req: Request, res: Response): Promise<void> {
+  const { lecturerUserId } = req.params as unknown as LecturerUserIdParam;
+  await facultyService.deleteLecturer(userId(req), lecturerUserId, { ...clientFingerprint(req), requestId: req.requestId });
+  res.status(204).end();
+}
+
+/** DELETE /api/v1/faculties/students/:studentUserId */
+export async function deleteStudent(req: Request, res: Response): Promise<void> {
+  const { studentUserId } = req.params as unknown as StudentUserIdParam;
+  await facultyService.deleteStudent(userId(req), studentUserId, { ...clientFingerprint(req), requestId: req.requestId });
+  res.status(204).end();
+}
+
+const facultyContext = (req: Request) => ({ ...clientFingerprint(req), requestId: req.requestId });
+const officerName = (req: Request) => req.auth?.faculty?.fullName ?? '';
+
+/** GET /api/v1/faculties/officers */
+export async function officers(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await facultyService.listDepartmentOfficers(userId(req)));
+}
+
+/** POST /api/v1/faculties/departments/:departmentId/officers */
+export async function inviteDepartmentOfficer(req: Request, res: Response): Promise<void> {
+  const { departmentId } = req.params as unknown as DepartmentIdParam;
+  sendCreated(
+    res,
+    await facultyService.inviteDepartmentOfficer(userId(req), officerName(req), departmentId, req.body as InviteeInput, facultyContext(req)),
+  );
+}
+
+/** POST /api/v1/faculties/officers/:userId/resend */
+export async function resendOfficerInvitation(req: Request, res: Response): Promise<void> {
+  const { userId: officerUserId } = req.params as unknown as OfficerUserIdParam;
+  sendSuccess(res, await facultyService.resendDepartmentOfficerInvitation(userId(req), officerName(req), officerUserId, facultyContext(req)));
+}
+
+/** POST /api/v1/faculties/officers/:userId/deactivate */
+export async function deactivateOfficer(req: Request, res: Response): Promise<void> {
+  const { userId: officerUserId } = req.params as unknown as OfficerUserIdParam;
+  await facultyService.deactivateDepartmentOfficer(userId(req), officerUserId, facultyContext(req));
+  res.status(204).end();
 }

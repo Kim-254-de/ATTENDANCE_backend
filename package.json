@@ -24,7 +24,9 @@
     "dev:seed-attendance": "node scripts/dev-seed-attendance.mjs",
     "dev:set-room": "node scripts/dev-set-room.mjs",
     "dev:seed-department": "node scripts/dev-seed-department.mjs",
-    "dev:seed-faculty": "node scripts/dev-seed-faculty.mjs"
+    "dev:seed-faculty": "node scripts/dev-seed-faculty.mjs",
+    "admin:invite": "node dist/cli/invite-admin.js",
+    "dev:invite-admin": "tsx src/cli/invite-admin.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

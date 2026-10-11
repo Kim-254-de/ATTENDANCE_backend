@@ -135,6 +135,17 @@ export const AuditAction = {
   EMAIL_VERIFICATION_CONFIRMED: 'EMAIL_VERIFICATION_CONFIRMED',
   ACCOUNT_APPROVED: 'ACCOUNT_APPROVED',
   ACCOUNT_STATUS_CHANGED: 'ACCOUNT_STATUS_CHANGED',
+  /** A student or lecturer account was anonymised and closed (auth.deletion.ts), by its owner or an officer. */
+  ACCOUNT_DELETED: 'ACCOUNT_DELETED',
+  /** An administrator, faculty officer or department officer was invited (auth.invitation.ts). */
+  OFFICER_INVITED: 'OFFICER_INVITED',
+  /** The invitation email was sent again, with a new link. */
+  OFFICER_INVITATION_RESENT: 'OFFICER_INVITATION_RESENT',
+  /** The invitee chose their password; the account is ACTIVE. */
+  OFFICER_INVITATION_ACCEPTED: 'OFFICER_INVITATION_ACCEPTED',
+  /** An officer's access was removed by whoever manages them. */
+  OFFICER_DEACTIVATED: 'OFFICER_DEACTIVATED',
+  FACULTY_CREATED: 'FACULTY_CREATED',
   LECTURER_PROFILE_UPDATED: 'LECTURER_PROFILE_UPDATED',
   LOGIN_SUCCEEDED: 'LOGIN_SUCCEEDED',
   LOGIN_FAILED: 'LOGIN_FAILED',

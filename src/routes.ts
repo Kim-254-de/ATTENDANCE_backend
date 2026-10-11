@@ -10,6 +10,7 @@ import { departmentRouter } from './modules/department/index.js';
 import { facultyRouter } from './modules/faculty/index.js';
 import { integrationRouter } from './modules/integration/index.js';
 import { verificationRouter } from './modules/verification/index.js';
+import { adminRouter } from './modules/admin/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -20,6 +21,7 @@ import { verificationRouter } from './modules/verification/index.js';
  *   /reports     - summaries and exports       (reporting module)
  *   /departments - department-wide oversight   (department module)
  *   /faculties   - faculty-wide oversight      (faculty module)
+ *   /admin       - faculties and invitations   (admin module)
  */
 export const apiRouter: Router = Router();
 
@@ -33,6 +35,7 @@ apiRouter.use('/reports', reportingRouter);
 apiRouter.use('/students', studentRouter);
 apiRouter.use('/departments', departmentRouter);
 apiRouter.use('/faculties', facultyRouter);
+apiRouter.use('/admin', adminRouter);
 /** Face check-in: /students/me/face*, /units/:id/students/:id/face, /sessions/:id/face/*. */
 apiRouter.use(verificationRouter);
 /** Calls from SMARTTT (API key, not a user session). */

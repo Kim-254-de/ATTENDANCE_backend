@@ -2,7 +2,7 @@
 
 Oversight of one department's teaching: who teaches what, how well attended
 it is, and whether classes start on time — read-only except for course
-provisioning (see below), which is the only writing this module does.
+provisioning and account deletion (see below).
 
 ## Scoping
 
@@ -65,6 +65,8 @@ not `0`, when no session is measurable, so "nothing measured" cannot read as
 | `GET` | `/api/v1/departments/courses` | Department | Courses faculty has provided, with segments planned/filled |
 | `PATCH` | `/api/v1/departments/courses/:offeringId` | Department (own) | Sets how many lecturer-taught sections a course needs |
 | `POST` | `/api/v1/departments/courses/:offeringId/segments` | Department (own) | Allocates one of the department's own lecturers to the next open section — immediate, creates a real `units` row |
+| `DELETE` | `/api/v1/departments/lecturers/:lecturerUserId` | Department (own dept) | Deletes the lecturer's account (anonymised; see Account deletion) |
+| `DELETE` | `/api/v1/departments/students/:studentUserId` | Department (on a dept roster) | Deletes the student's account (anonymised; see Account deletion) |
 
 ## Course provisioning (writes)
 
@@ -90,3 +92,12 @@ branch), and accounts are provisioned directly. For local work:
 A department officer cannot write anything: no approving units, no editing
 rosters, no closing sessions. A faculty-level role is the next milestone and is
 why `faculties` exists as a table already.
+
+## Account deletion (writes)
+
+An officer may delete the account of a lecturer in their department, or of a
+student on a roster of one of its units; anyone else is a 404, the same as
+the drill-down. The work is `src/modules/auth/auth.deletion.ts`, shared with
+a student's or lecturer's own `DELETE /auth/me`: the account is anonymised,
+not removed, so the department's figures still include the classes taught and
+attended. Deleted lecturers drop out of the lecturer list and head count.

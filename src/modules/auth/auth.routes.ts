@@ -9,10 +9,13 @@ import { managedBySmarttt } from './auth.password.service.js';
 import { registrationClosed } from './auth.service.js';
 import { smartttAccountsEnabled } from './auth.smarttt.js';
 import {
+  acceptInvitationSchema,
   avatarSchema,
   changePasswordSchema,
+  deleteAccountSchema,
   emailVerificationSchema,
   forgotPasswordSchema,
+  invitationLookupSchema,
   lecturerRegistrationSchema,
   loginSchema,
   resetPasswordSchema,
@@ -93,8 +96,8 @@ authRouter.post(
  */
 authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
 
-/** The signed-in lecturer, student, department officer or faculty officer, or 401. The portal calls this on load to restore the session. */
-authRouter.get('/me', asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY')), asyncHandler(authController.me));
+/** The signed-in lecturer, student, department officer, faculty officer or administrator, or 401. The portal calls this on load to restore the session. */
+authRouter.get('/me', asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN')), asyncHandler(authController.me));
 
 /** Updates title/department only — see updateProfileSchema for why name and email are excluded. */
 authRouter.patch(
@@ -132,6 +135,24 @@ authRouter.post(
   unlessSmartttAccounts(managedBySmarttt),
   validate({ body: changePasswordSchema }),
   asyncHandler(authController.changePassword),
+);
+
+/**
+ * Deletes the signed-in student's or lecturer's own account (auth.deletion.ts):
+ * anonymised, signed out everywhere, passkeys and biometrics removed.
+ * Attendance history stays, without their name on it.
+ *
+ * 204 - deleted; the session cookies are cleared
+ * 400 - password missing or wrong
+ * 429 - too many attempts
+ * 503 - SMARTTT accounts are on and SMARTTT could not check the password; nothing was deleted
+ */
+authRouter.delete(
+  '/me',
+  passwordResetLimiter,
+  asyncHandler(requireAuth('LECTURER', 'STUDENT')),
+  validate({ body: deleteAccountSchema }),
+  asyncHandler(authController.deleteAccount),
 );
 
 /** Rotates the refresh token and issues a new access token. */
@@ -173,4 +194,33 @@ authRouter.post(
   passwordResetLimiter,
   validate({ body: resetPasswordSchema }),
   asyncHandler(authController.resetPassword),
+);
+
+/**
+ * Who an invitation link is for (auth.invitation.ts), so the page can greet
+ * the invitee before they choose a password. POST so the token stays out of
+ * URLs and access logs.
+ *
+ * 200 - { fullName, email, role, scopeName, expiresAt }
+ * 400 - link invalid, expired, already used or withdrawn (one message for all)
+ */
+authRouter.post(
+  '/invitations/lookup',
+  passwordResetLimiter,
+  validate({ body: invitationLookupSchema }),
+  asyncHandler(authController.lookupInvitation),
+);
+
+/**
+ * Accepts an invitation: the invitee chooses their password and the account
+ * becomes ACTIVE. They then sign in at the staff sign-in page.
+ *
+ * 200 - accepted
+ * 400 - link invalid/expired/used, or the password was rejected
+ */
+authRouter.post(
+  '/invitations/accept',
+  passwordResetLimiter,
+  validate({ body: acceptInvitationSchema }),
+  asyncHandler(authController.acceptInvitation),
 );

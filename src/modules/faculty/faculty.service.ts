@@ -1,5 +1,10 @@
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { isUniqueViolation } from '../../db/database.js';
+import * as invitationService from '../auth/auth.invitation.js';
+import type { InviteeInput } from '../auth/auth.schema.js';
+import { deleteAccount } from '../auth/auth.deletion.js';
+import { listOfficers } from '../auth/auth.invitation.repository.js';
+import type { RegistrationContext } from '../auth/auth.service.js';
 import * as facultyRepository from './faculty.repository.js';
 
 /**
@@ -480,4 +485,84 @@ export interface FacultyCourseDto {
 export async function listCourses(userId: string): Promise<FacultyCourseDto[]> {
   const faculty = await requireOwnFaculty(userId);
   return facultyRepository.listFacultyCourseOfferings(faculty.facultyId);
+}
+
+/**
+ * DELETE /faculties/lecturers/:lecturerUserId
+ *
+ * Same ownership rule as the drill-down: 404 unless the lecturer's department
+ * is in the caller's faculty. The account is anonymised (auth.deletion.ts).
+ */
+export async function deleteLecturer(userId: string, lecturerUserId: string, context: RegistrationContext): Promise<void> {
+  const faculty = await requireOwnFaculty(userId);
+  if ((await facultyRepository.findLecturerFacultyId(lecturerUserId)) !== faculty.facultyId) {
+    throw AppError.notFound('No such lecturer in your faculty.');
+  }
+  await deleteAccount(lecturerUserId, 'LECTURER', { userId, kind: 'FACULTY' }, context);
+}
+
+/** DELETE /faculties/students/:studentUserId — 404 unless the student is on a roster of one of the faculty's units. */
+export async function deleteStudent(userId: string, studentUserId: string, context: RegistrationContext): Promise<void> {
+  const faculty = await requireOwnFaculty(userId);
+  if (!(await facultyRepository.isStudentInFaculty(faculty.facultyId, studentUserId))) {
+    throw AppError.notFound('No such student in your faculty.');
+  }
+  await deleteAccount(studentUserId, 'STUDENT', { userId, kind: 'FACULTY' }, context);
+}
+
+/** GET /faculties/officers — the department officers of the faculty's departments, invited or active. */
+export async function listDepartmentOfficers(userId: string): Promise<invitationService.OfficerDto[]> {
+  const faculty = await requireOwnFaculty(userId);
+  return (await listOfficers({ roles: ['DEPARTMENT'], facultyId: faculty.facultyId })).map(invitationService.officerDto);
+}
+
+/**
+ * POST /faculties/departments/:departmentId/officers
+ *
+ * A faculty officer invites the officer for one of its own departments
+ * (auth.invitation.ts). A department outside the faculty is a 404, like the
+ * drill-downs.
+ */
+export async function inviteDepartmentOfficer(
+  userId: string,
+  inviterName: string,
+  departmentId: string,
+  input: InviteeInput,
+  context: RegistrationContext,
+): Promise<invitationService.InvitationResult> {
+  const faculty = await requireOwnFaculty(userId);
+  if ((await facultyRepository.findDepartmentFacultyId(departmentId)) !== faculty.facultyId) {
+    throw AppError.notFound('No such department in your faculty.');
+  }
+  const departmentName = await facultyRepository.findDepartmentName(departmentId);
+  return invitationService.invite(
+    { email: input.email, fullName: input.fullName, scope: { role: 'DEPARTMENT', departmentId }, scopeName: departmentName },
+    { userId, fullName: inviterName },
+    context,
+  );
+}
+
+/** A department officer of one of the caller's departments, or 404. */
+async function requireOwnDepartmentOfficer(userId: string, officerUserId: string) {
+  const faculty = await requireOwnFaculty(userId);
+  const [officer] = await listOfficers({ roles: ['DEPARTMENT'], facultyId: faculty.facultyId, userId: officerUserId });
+  if (!officer) throw AppError.notFound('No such department officer in your faculty.');
+  return officer;
+}
+
+/** POST /faculties/officers/:userId/resend */
+export async function resendDepartmentOfficerInvitation(
+  userId: string,
+  inviterName: string,
+  officerUserId: string,
+  context: RegistrationContext,
+): Promise<invitationService.InvitationResult> {
+  const officer = await requireOwnDepartmentOfficer(userId, officerUserId);
+  return invitationService.resend(officer, { userId, fullName: inviterName }, context);
+}
+
+/** POST /faculties/officers/:userId/deactivate */
+export async function deactivateDepartmentOfficer(userId: string, officerUserId: string, context: RegistrationContext): Promise<void> {
+  const officer = await requireOwnDepartmentOfficer(userId, officerUserId);
+  await invitationService.deactivate(officer, userId, context);
 }

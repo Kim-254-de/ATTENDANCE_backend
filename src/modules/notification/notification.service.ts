@@ -105,6 +105,47 @@ export async function sendPasswordChanged(message: PasswordChangedMessage): Prom
   });
 }
 
+export interface OfficerInvitationMessage {
+  to: string;
+  fullName: string;
+  /** Plaintext token. Only ever leaves the system inside this email. */
+  token: string;
+  /** e.g. "faculty officer for the Faculty of Science". */
+  roleDescription: string;
+  /** Who sent it, when known. */
+  invitedByName: string | null;
+  expiresInHours: number;
+}
+
+/**
+ * An administrator, faculty officer or department officer being given access.
+ * The link sets their own password; nobody else ever knows it. The staff
+ * sign-in page is not linked from the public site, so it is given here.
+ */
+export async function sendOfficerInvitation(message: OfficerInvitationMessage): Promise<void> {
+  const base = env.APP_PUBLIC_URL.replace(/\/+$/, '');
+  await deliver({
+    to: message.to,
+    subject: 'You have been invited to Smart Attendance',
+    text: [
+      `Hello ${message.fullName},`,
+      '',
+      `${message.invitedByName ?? 'An administrator'} has given you access to Smart Attendance as ${message.roleDescription}.`,
+      '',
+      'Choose your password to activate your account:',
+      `${base}/accept-invite?token=${encodeURIComponent(message.token)}`,
+      '',
+      `This link expires in ${message.expiresInHours} hours and can only be used once.`,
+      '',
+      'Afterwards, sign in at the staff sign-in page (bookmark it - it is not linked',
+      'from the public site):',
+      `${base}/oversight`,
+      '',
+      'If you were not expecting this, you can ignore this message.',
+    ].join('\n'),
+  });
+}
+
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export interface UnitVerificationRequestMessage {

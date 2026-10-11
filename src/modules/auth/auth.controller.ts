@@ -6,12 +6,17 @@ import * as sessions from './auth.session.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as authService from './auth.service.js';
 import * as passwordService from './auth.password.service.js';
+import * as deletionService from './auth.deletion.js';
+import * as invitationService from './auth.invitation.js';
 import { findAvatarUrl } from './auth.repository.js';
 import type {
+  AcceptInvitationInput,
   AvatarInput,
   ChangePasswordInput,
+  DeleteAccountInput,
   EmailVerificationInput,
   ForgotPasswordInput,
+  InvitationLookupInput,
   LecturerRegistrationInput,
   LoginInput,
   ResetPasswordInput,
@@ -89,7 +94,7 @@ export async function login(req: Request, res: Response): Promise<void> {
  * fetched here, once, only for the endpoint that actually needs it.
  */
 export async function me(req: Request, res: Response): Promise<void> {
-  const account = req.auth?.lecturer ?? req.auth?.student ?? req.auth?.department ?? req.auth?.faculty ?? null;
+  const account = req.auth?.lecturer ?? req.auth?.student ?? req.auth?.department ?? req.auth?.faculty ?? req.auth?.admin ?? null;
   if (!account) {
     sendSuccess(res, null);
     return;
@@ -129,6 +134,15 @@ export async function removeAvatar(req: Request, res: Response): Promise<void> {
   if (!userId) throw AppError.unauthenticated('Please sign in.');
   const result = await authService.removeAvatar(userId, contextFrom(req));
   sendSuccess(res, result);
+}
+
+/** DELETE /api/v1/auth/me */
+export async function deleteAccount(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) throw AppError.unauthenticated('Please sign in.');
+  await deletionService.deleteOwnAccount(userId, (req.body as DeleteAccountInput).password, contextFrom(req));
+  sessions.clearAuthCookies(res); // every session was deleted with the account
+  res.status(204).end();
 }
 
 /** POST /api/v1/auth/refresh */
@@ -174,4 +188,16 @@ export async function resetPassword(req: Request, res: Response): Promise<void> 
   // dead. Clearing them avoids a confusing "signed in but unauthorised" state.
   sessions.clearAuthCookies(res);
   sendSuccess(res, result);
+}
+
+/** POST /api/v1/auth/invitations/lookup */
+export async function lookupInvitation(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await invitationService.lookup((req.body as InvitationLookupInput).token));
+}
+
+/** POST /api/v1/auth/invitations/accept */
+export async function acceptInvitation(req: Request, res: Response): Promise<void> {
+  const { token, password } = req.body as AcceptInvitationInput;
+  const { email } = await invitationService.accept(token, password, contextFrom(req));
+  sendSuccess(res, { email, message: 'Your account is ready. Sign in with your email and new password.' });
 }

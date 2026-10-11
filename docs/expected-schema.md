@@ -521,6 +521,33 @@ Index: `course_offerings(department_id)`.
 
 ---
 
+## Tables the invitation flow touches
+
+Administrators, faculty officers and department officers are invited, never
+self-registered (`src/modules/auth/auth.invitation.ts`). The invited `users`
+row is created at once with status `PENDING_VERIFICATION` and a password hash
+nothing matches (`'!'`), plus its `faculty_profiles` / `department_profiles`
+row; accepting the emailed link sets the password and makes it `ACTIVE`.
+
+### `account_invitations`
+
+Created by `db/migrations/026_account_invitations.sql`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | FK -> `users(id)` ON DELETE CASCADE — the invited account |
+| `token_hash` | `varchar(64)` | **UNIQUE** - SHA-256 hex. The plaintext lives only in the email |
+| `invited_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL; null for the command-line bootstrap |
+| `expires_at` | `timestamptz` | `OFFICER_INVITE_TTL_HOURS`, default 72 |
+| `consumed_at` | `timestamptz` null | Set when the password is chosen; the `IS NULL` guard makes it single-use |
+| `invalidated_at` | `timestamptz` null | Set when re-sent or when access is removed |
+| `created_at` | `timestamptz` | |
+
+Index: `account_invitations(user_id, created_at DESC)`.
+
+---
+
 ## If the real schema differs
 
 Column and table names live only in the SQL inside each module's

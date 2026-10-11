@@ -54,8 +54,17 @@ export interface FacultyOfficerPublic {
   status: AccountStatus;
 }
 
+/** A signed-in administrator: invites faculty officers and other administrators (src/modules/admin). No scope of its own. */
+export interface AdminPublic {
+  id: string;
+  role: 'admin';
+  fullName: string;
+  email: string;
+  status: AccountStatus;
+}
+
 /** Whoever is signed in: what GET /auth/me and sign-in return. */
-export type AccountPublic = LecturerPublic | StudentPublic | DepartmentOfficerPublic | FacultyOfficerPublic;
+export type AccountPublic = LecturerPublic | StudentPublic | DepartmentOfficerPublic | FacultyOfficerPublic | AdminPublic;
 
 export const toStudentPublic = (c: {
   id: string; fullName: string; email: string; registrationNumber: string;
@@ -73,7 +82,7 @@ export const toStudentPublic = (c: {
 
 export interface LoginCandidate {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN';
   email: string;
   fullName: string;
   passwordHash: string;
@@ -86,7 +95,7 @@ export interface LoginCandidate {
 
 interface LoginRow {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN';
   email: string;
   full_name: string;
   password_hash: string;
@@ -137,6 +146,9 @@ function accountFrom(row: {
       facultyId: row.faculty_id, facultyName: row.faculty_name, status: row.status,
     });
   }
+  if (row.role === 'ADMIN') {
+    return { id: row.id, role: 'admin', fullName: row.full_name, email: row.email, status: row.status };
+  }
   return null;
 }
 
@@ -181,7 +193,7 @@ export const toFacultyOfficerPublic = (c: {
 });
 
 /**
- * A lecturer, student or department-officer account for sign-in. `identifier` is already
+ * A lecturer, student, officer or administrator account for sign-in. `identifier` is already
  * normalised: a lower-cased email, or an upper-cased staff number
  * (lecturers) or registration number (students).
  */
@@ -210,7 +222,7 @@ async function findLoginCandidate(where: string, value: string): Promise<LoginCa
   LEFT JOIN departments         d   ON d.id = dp.department_id
   LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
   LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
-      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY')
+      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN')
         AND u.deleted_at IS NULL
         AND ${where}
       ORDER BY u.role
@@ -300,6 +312,7 @@ export interface LiveSession {
   student: StudentPublic | null;
   department: DepartmentOfficerPublic | null;
   faculty: FacultyOfficerPublic | null;
+  admin: AdminPublic | null;
 }
 
 /** A session with its owner, or null. Callers decide what "usable" means. */
@@ -345,6 +358,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
         student: account?.role === 'student' ? account : null,
         department: account?.role === 'department' ? account : null,
         faculty: account?.role === 'faculty' ? account : null,
+        admin: account?.role === 'admin' ? account : null,
       };
     })(),
   };

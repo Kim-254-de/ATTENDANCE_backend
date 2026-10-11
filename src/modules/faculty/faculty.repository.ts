@@ -86,8 +86,9 @@ export async function getOverview(
     `SELECT
        (SELECT COUNT(*) FROM departments WHERE faculty_id = $1)::int AS department_count,
 
-       (SELECT COUNT(*) FROM lecturer_profiles
-         WHERE department_id IN (SELECT id FROM departments WHERE faculty_id = $1))::int AS lecturer_count,
+       (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users usr ON usr.id = lp.user_id
+         WHERE lp.department_id IN (SELECT id FROM departments WHERE faculty_id = $1)
+           AND usr.deleted_at IS NULL)::int AS lecturer_count,
 
        (SELECT COUNT(*) FROM units u
          WHERE u.lecturer_user_id IN (${FACULTY_LECTURERS}))::int AS unit_count,
@@ -159,7 +160,8 @@ export async function listDepartments(
   }>(
     `SELECT d.id AS department_id, d.name AS department_name,
 
-            (SELECT COUNT(*) FROM lecturer_profiles WHERE department_id = d.id)::int AS lecturer_count,
+            (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users usr ON usr.id = lp.user_id
+              WHERE lp.department_id = d.id AND usr.deleted_at IS NULL)::int AS lecturer_count,
 
             (SELECT COUNT(*) FROM units u
               WHERE u.lecturer_user_id IN (SELECT user_id FROM lecturer_profiles WHERE department_id = d.id))::int AS unit_count,
@@ -222,7 +224,8 @@ export async function findLecturerFacultyId(lecturerUserId: string): Promise<str
     `SELECT d.faculty_id
        FROM lecturer_profiles lp
        JOIN departments d ON d.id = lp.department_id
-      WHERE lp.user_id = $1`,
+       JOIN users u       ON u.id = lp.user_id
+      WHERE lp.user_id = $1 AND u.deleted_at IS NULL`,
     [lecturerUserId],
   );
   return row ? row.faculty_id : null;
@@ -313,6 +316,18 @@ export async function listLecturers(
     avgLateMinutes: r.avg_late_minutes,
     onTimeRate: r.on_time_rate,
   }));
+}
+
+/** Whether a student is on any roster of the faculty's units — the scope an officer may delete a student account in. */
+export async function isStudentInFaculty(facultyId: string, studentUserId: string): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM unit_allocations a JOIN units u ON u.id = a.unit_id
+        WHERE a.student_user_id = $2 AND u.lecturer_user_id IN (${FACULTY_LECTURERS})
+     ) AS found`,
+    [facultyId, studentUserId],
+  );
+  return row?.found ?? false;
 }
 
 export interface LecturerHeaderRow {

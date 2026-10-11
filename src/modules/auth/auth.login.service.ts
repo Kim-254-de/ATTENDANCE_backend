@@ -179,7 +179,8 @@ export async function refreshSession(refreshToken: string | null, context: Regis
 
   const session = await repo.findSession(claims.sessionId);
   if (!session || session.userId !== claims.userId || session.revokedAt || session.expiresAt <= new Date()) throw denied;
-  const account = session.lecturer ?? session.student;
+  // Every role that signs in must be able to stay signed in past the access token's lifetime.
+  const account = session.lecturer ?? session.student ?? session.department ?? session.faculty ?? session.admin;
   if (session.status !== 'ACTIVE' || !account) throw denied;
 
   const presentedHash = sessions.hashRefreshToken(refreshToken);

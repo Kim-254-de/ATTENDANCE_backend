@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as departmentController from './department.controller.js';
-import { allocateLecturerSchema, lecturerUserIdParamSchema, offeringIdParamSchema, setSegmentCountSchema, timekeepingQuerySchema } from './department.schema.js';
+import { allocateLecturerSchema, lecturerUserIdParamSchema, offeringIdParamSchema, setSegmentCountSchema, studentUserIdParamSchema, timekeepingQuerySchema } from './department.schema.js';
 
 /**
  * Every route is gated to the DEPARTMENT role, and every handler resolves the
@@ -84,4 +84,24 @@ departmentRouter.post(
   asyncHandler(requireAuth('DEPARTMENT')),
   validate({ params: offeringIdParamSchema, body: allocateLecturerSchema }),
   asyncHandler(departmentController.allocateLecturer),
+);
+
+/**
+ * Deletes a lecturer's account: anonymised and signed out, their units and
+ * sessions kept in the figures (auth.deletion.ts). 404 unless the lecturer
+ * is in the caller's department.
+ */
+departmentRouter.delete(
+  '/lecturers/:lecturerUserId',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ params: lecturerUserIdParamSchema }),
+  asyncHandler(departmentController.deleteLecturer),
+);
+
+/** Deletes a student's account, the same way. 404 unless the student is on a roster of one of the department's units. */
+departmentRouter.delete(
+  '/students/:studentUserId',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ params: studentUserIdParamSchema }),
+  asyncHandler(departmentController.deleteStudent),
 );

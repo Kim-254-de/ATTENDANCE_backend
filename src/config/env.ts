@@ -71,6 +71,18 @@ const envSchema = z
     // account, so its useful life is measured in minutes, not days.
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
 
+    // --- Invited accounts (administrators, faculty and department officers) ---
+    // Longer than a reset link: the invitee may not open their mail the same day.
+    OFFICER_INVITE_TTL_HOURS: z.coerce.number().int().min(1).max(336).default(72),
+    /**
+     * Comma-separated email domains an invitation may be sent to, e.g.
+     * "university.ac.ke,staff.university.ac.ke". Empty allows any domain.
+     */
+    OFFICER_EMAIL_DOMAINS: z
+      .string()
+      .default('')
+      .transform((value) => value.split(',').map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean)),
+
     // --- ERP ---
     ERP_BASE_URL: z.string().url(),
     ERP_STAFF_LOOKUP_PATH: z

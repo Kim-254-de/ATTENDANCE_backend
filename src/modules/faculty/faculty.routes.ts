@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as facultyController from './faculty.controller.js';
-import { createDepartmentSchema, departmentIdParamSchema, lecturerUserIdParamSchema, provideCourseSchema, timekeepingQuerySchema } from './faculty.schema.js';
+import { createDepartmentSchema, departmentIdParamSchema, inviteDepartmentOfficerSchema, lecturerUserIdParamSchema, officerUserIdParamSchema, provideCourseSchema, studentUserIdParamSchema, timekeepingQuerySchema } from './faculty.schema.js';
 
 /**
  * Every route is gated to the FACULTY role, and every handler resolves the
@@ -99,4 +99,61 @@ facultyRouter.get(
   '/courses',
   asyncHandler(requireAuth('FACULTY')),
   asyncHandler(facultyController.courses),
+);
+
+/**
+ * Deletes a lecturer's account: anonymised and signed out, their units and
+ * sessions kept in the figures (auth.deletion.ts). 404 unless the lecturer
+ * is in the caller's faculty.
+ */
+facultyRouter.delete(
+  '/lecturers/:lecturerUserId',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: lecturerUserIdParamSchema }),
+  asyncHandler(facultyController.deleteLecturer),
+);
+
+/** Deletes a student's account, the same way. 404 unless the student is on a roster of one of the faculty's units. */
+facultyRouter.delete(
+  '/students/:studentUserId',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: studentUserIdParamSchema }),
+  asyncHandler(facultyController.deleteStudent),
+);
+
+/** The department officers of the faculty's departments, with invitation status. */
+facultyRouter.get(
+  '/officers',
+  asyncHandler(requireAuth('FACULTY')),
+  asyncHandler(facultyController.officers),
+);
+
+/**
+ * Invites the officer for one of the faculty's departments (auth.invitation.ts).
+ *
+ * 201 - { userId, emailSent }; emailSent false means re-send it
+ * 404 - the department is not in the caller's faculty
+ * 409 - someone already has an account with that email
+ */
+facultyRouter.post(
+  '/departments/:departmentId/officers',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: departmentIdParamSchema, body: inviteDepartmentOfficerSchema }),
+  asyncHandler(facultyController.inviteDepartmentOfficer),
+);
+
+/** Sends a department officer's pending invitation again. 404 outside the faculty. */
+facultyRouter.post(
+  '/officers/:userId/resend',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: officerUserIdParamSchema }),
+  asyncHandler(facultyController.resendOfficerInvitation),
+);
+
+/** Removes a department officer's access. 404 outside the faculty. */
+facultyRouter.post(
+  '/officers/:userId/deactivate',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: officerUserIdParamSchema }),
+  asyncHandler(facultyController.deactivateOfficer),
 );

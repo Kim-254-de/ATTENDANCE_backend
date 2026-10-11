@@ -1,4 +1,6 @@
 import { AppError } from '../../common/errors/index.js';
+import { deleteAccount } from '../auth/auth.deletion.js';
+import type { RegistrationContext } from '../auth/auth.service.js';
 import * as departmentRepository from './department.repository.js';
 
 /**
@@ -401,4 +403,33 @@ export async function allocateLecturer(
     throw AppError.conflict('This course already has a lecturer assigned to every planned section.');
   }
   return { unitId: result.unitId, code: result.code };
+}
+
+/**
+ * DELETE /departments/lecturers/:lecturerUserId
+ *
+ * Same ownership rule as the drill-down: 404 unless the lecturer is in the
+ * caller's department. The account is anonymised (auth.deletion.ts); the
+ * units and sessions they ran stay in the department's figures.
+ */
+export async function deleteLecturer(userId: string, lecturerUserId: string, context: RegistrationContext): Promise<void> {
+  const department = await requireOwnDepartment(userId);
+  if ((await departmentRepository.findLecturerDepartmentId(lecturerUserId)) !== department.departmentId) {
+    throw AppError.notFound('No such lecturer in your department.');
+  }
+  await deleteAccount(lecturerUserId, 'LECTURER', { userId, kind: 'DEPARTMENT' }, context);
+}
+
+/**
+ * DELETE /departments/students/:studentUserId
+ *
+ * A student is in a department's scope while they are on a roster of one of
+ * its units — the same rows GET /departments/students lists.
+ */
+export async function deleteStudent(userId: string, studentUserId: string, context: RegistrationContext): Promise<void> {
+  const department = await requireOwnDepartment(userId);
+  if (!(await departmentRepository.isStudentInDepartment(department.departmentId, studentUserId))) {
+    throw AppError.notFound('No such student in your department.');
+  }
+  await deleteAccount(studentUserId, 'STUDENT', { userId, kind: 'DEPARTMENT' }, context);
 }

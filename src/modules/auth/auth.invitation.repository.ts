@@ -1,0 +1,270 @@
+import type { PoolClient } from 'pg';
+import { query, queryOne, transaction } from '../../db/database.js';
+import type { AccountStatus } from '../../db/types.js';
+
+/**
+ * SQL for invited accounts (auth.invitation.ts): administrators, faculty
+ * officers and department officers. Every value goes through a bind parameter.
+ */
+
+export type InvitedRole = 'ADMIN' | 'FACULTY' | 'DEPARTMENT';
+
+/** What an invitation is for: the role, and the faculty or department it is scoped to. */
+export type InvitationScope =
+  | { role: 'ADMIN' }
+  | { role: 'FACULTY'; facultyId: string }
+  | { role: 'DEPARTMENT'; departmentId: string };
+
+export interface ExistingAccount {
+  userId: string;
+  role: string;
+  status: AccountStatus;
+}
+
+/** The live account holding this email, if any. */
+export async function findAccountByEmail(email: string): Promise<ExistingAccount | null> {
+  const row = await queryOne<{ id: string; role: string; status: AccountStatus }>(
+    `SELECT id, role, status FROM users WHERE email = $1 AND deleted_at IS NULL`,
+    [email],
+  );
+  return row ? { userId: row.id, role: row.role, status: row.status } : null;
+}
+
+/**
+ * Creates the invited account: PENDING_VERIFICATION, with a password hash
+ * nothing can match, plus its faculty or department profile.
+ */
+export async function createInvitedAccount(
+  client: PoolClient,
+  args: { email: string; fullName: string; scope: InvitationScope },
+): Promise<string> {
+  const { rows: [user] } = await query<{ id: string }>(
+    `INSERT INTO users (email, password_hash, full_name, role, status)
+     VALUES ($1, '!', $2, $3, 'PENDING_VERIFICATION') RETURNING id`,
+    [args.email, args.fullName, args.scope.role],
+    client,
+  );
+  await setScope(client, user!.id, args.scope);
+  return user!.id;
+}
+
+/**
+ * Re-invites a deactivated account of the same role (someone returning to the
+ * post): back to PENDING_VERIFICATION with no usable password, re-scoped to
+ * wherever the new invitation is for.
+ */
+export async function reopenInvitedAccount(
+  client: PoolClient,
+  args: { userId: string; fullName: string; scope: InvitationScope },
+): Promise<void> {
+  await query(
+    `UPDATE users
+        SET full_name = $2, password_hash = '!', status = 'PENDING_VERIFICATION',
+            email_verified_at = NULL, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW()
+      WHERE id = $1`,
+    [args.userId, args.fullName],
+    client,
+  );
+  await setScope(client, args.userId, args.scope);
+}
+
+async function setScope(client: PoolClient, userId: string, scope: InvitationScope): Promise<void> {
+  if (scope.role === 'FACULTY') {
+    await query(
+      `INSERT INTO faculty_profiles (user_id, faculty_id) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET faculty_id = EXCLUDED.faculty_id, updated_at = NOW()`,
+      [userId, scope.facultyId],
+      client,
+    );
+  } else if (scope.role === 'DEPARTMENT') {
+    await query(
+      `INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET department_id = EXCLUDED.department_id, updated_at = NOW()`,
+      [userId, scope.departmentId],
+      client,
+    );
+  }
+}
+
+/** Stores a new invitation and retires the account's earlier unused ones, so only the newest link works. */
+export async function issueInvitation(
+  client: PoolClient,
+  args: { userId: string; tokenHash: string; expiresAt: Date; invitedByUserId: string | null },
+): Promise<void> {
+  await query(
+    `UPDATE account_invitations SET invalidated_at = NOW()
+      WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+    [args.userId],
+    client,
+  );
+  await query(
+    `INSERT INTO account_invitations (user_id, token_hash, expires_at, invited_by_user_id)
+     VALUES ($1, $2, $3, $4)`,
+    [args.userId, args.tokenHash, args.expiresAt, args.invitedByUserId],
+    client,
+  );
+}
+
+export interface StoredInvitation {
+  id: string;
+  userId: string;
+  expiresAt: Date;
+  consumedAt: Date | null;
+  invalidatedAt: Date | null;
+  role: InvitedRole;
+  status: AccountStatus;
+  email: string;
+  fullName: string;
+  /** The faculty's or department's name; null for an administrator. */
+  scopeName: string | null;
+}
+
+export async function findInvitation(tokenHash: string): Promise<StoredInvitation | null> {
+  const row = await queryOne<{
+    id: string; user_id: string; expires_at: Date; consumed_at: Date | null; invalidated_at: Date | null;
+    role: InvitedRole; status: AccountStatus; email: string; full_name: string; deleted_at: Date | null;
+    scope_name: string | null;
+  }>(
+    `SELECT i.id, i.user_id, i.expires_at, i.consumed_at, i.invalidated_at,
+            u.role, u.status, u.email, u.full_name, u.deleted_at,
+            COALESCE(f.name, d.name) AS scope_name
+       FROM account_invitations i
+       JOIN users u ON u.id = i.user_id
+  LEFT JOIN faculty_profiles    fp ON fp.user_id = u.id
+  LEFT JOIN faculties           f  ON f.id = fp.faculty_id
+  LEFT JOIN department_profiles dp ON dp.user_id = u.id
+  LEFT JOIN departments         d  ON d.id = dp.department_id
+      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'FACULTY', 'DEPARTMENT')`,
+    [tokenHash],
+  );
+  if (!row || row.deleted_at) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    expiresAt: row.expires_at,
+    consumedAt: row.consumed_at,
+    invalidatedAt: row.invalidated_at,
+    role: row.role,
+    status: row.status,
+    email: row.email,
+    fullName: row.full_name,
+    scopeName: row.scope_name,
+  };
+}
+
+/**
+ * Accepts an invitation as one unit: consume the token (guarded, so the same
+ * link racing itself succeeds once), set the password, and make the account
+ * ACTIVE with its email confirmed. False when the token was already used.
+ */
+export async function acceptInvitation(args: { invitationId: string; userId: string; passwordHash: string }): Promise<boolean> {
+  return transaction(async (client) => {
+    const consumed = await query(
+      `UPDATE account_invitations SET consumed_at = NOW()
+        WHERE id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > NOW()`,
+      [args.invitationId],
+      client,
+    );
+    if (consumed.rowCount === 0) return false;
+    await query(
+      `UPDATE users
+          SET password_hash = $2, status = 'ACTIVE', email_verified_at = NOW(),
+              failed_login_attempts = 0, locked_until = NULL, updated_at = NOW()
+        WHERE id = $1 AND status = 'PENDING_VERIFICATION'`,
+      [args.userId, args.passwordHash],
+      client,
+    );
+    return true;
+  });
+}
+
+export interface OfficerRow {
+  userId: string;
+  role: InvitedRole;
+  fullName: string;
+  email: string;
+  status: AccountStatus;
+  facultyId: string | null;
+  facultyName: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  /** When the most recent invitation was sent. */
+  invitedAt: Date | null;
+  /** When the most recent unused invitation stops working; null once accepted or withdrawn. */
+  invitationExpiresAt: Date | null;
+  lastLoginAt: Date | null;
+}
+
+/**
+ * Administrators, faculty officers and department officers. A department
+ * officer's faculty is their department's, so filtering by `facultyId` finds
+ * the faculty's own officers and the officers of its departments.
+ */
+export async function listOfficers(filter: { roles: InvitedRole[]; facultyId?: string; userId?: string }): Promise<OfficerRow[]> {
+  const { rows } = await query<{
+    id: string; role: InvitedRole; full_name: string; email: string; status: AccountStatus;
+    faculty_id: string | null; faculty_name: string | null; department_id: string | null; department_name: string | null;
+    invited_at: Date | null; invitation_expires_at: Date | null; last_login_at: Date | null;
+  }>(
+    `SELECT u.id, u.role, u.full_name, u.email, u.status, u.last_login_at,
+            COALESCE(fp.faculty_id, d.faculty_id) AS faculty_id, f.name AS faculty_name,
+            d.id AS department_id, d.name AS department_name,
+            inv.created_at AS invited_at,
+            CASE WHEN inv.consumed_at IS NULL AND inv.invalidated_at IS NULL THEN inv.expires_at END AS invitation_expires_at
+       FROM users u
+  LEFT JOIN faculty_profiles    fp ON fp.user_id = u.id
+  LEFT JOIN department_profiles dp ON dp.user_id = u.id
+  LEFT JOIN departments         d  ON d.id = dp.department_id
+  LEFT JOIN faculties           f  ON f.id = COALESCE(fp.faculty_id, d.faculty_id)
+  LEFT JOIN LATERAL (
+         SELECT created_at, expires_at, consumed_at, invalidated_at FROM account_invitations
+          WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1
+       ) inv ON TRUE
+      WHERE u.deleted_at IS NULL
+        AND u.role = ANY($1::text[])
+        AND ($2::uuid IS NULL OR COALESCE(fp.faculty_id, d.faculty_id) = $2)
+        AND ($3::uuid IS NULL OR u.id = $3)
+      ORDER BY u.status = 'DEACTIVATED', f.name NULLS FIRST, d.name NULLS FIRST, u.full_name`,
+    [filter.roles, filter.facultyId ?? null, filter.userId ?? null],
+  );
+  return rows.map((r) => ({
+    userId: r.id,
+    role: r.role,
+    fullName: r.full_name,
+    email: r.email,
+    status: r.status,
+    facultyId: r.faculty_id,
+    facultyName: r.faculty_name,
+    departmentId: r.department_id,
+    departmentName: r.department_name,
+    invitedAt: r.invited_at,
+    invitationExpiresAt: r.invitation_expires_at,
+    lastLoginAt: r.last_login_at,
+  }));
+}
+
+/** Removes an officer's access: DEACTIVATED, every session revoked, every outstanding invitation withdrawn. */
+export async function deactivateAccount(userId: string): Promise<boolean> {
+  return transaction(async (client) => {
+    const updated = await query(
+      `UPDATE users SET status = 'DEACTIVATED', updated_at = NOW()
+        WHERE id = $1 AND status <> 'DEACTIVATED' AND deleted_at IS NULL`,
+      [userId],
+      client,
+    );
+    if (updated.rowCount === 0) return false;
+    await query(
+      `UPDATE account_invitations SET invalidated_at = NOW()
+        WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+      [userId],
+      client,
+    );
+    await query(
+      `UPDATE auth_sessions SET revoked_at = NOW(), revoked_reason = 'deactivated'
+        WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId],
+      client,
+    );
+    return true;
+  });
+}

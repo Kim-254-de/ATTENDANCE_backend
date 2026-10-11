@@ -104,7 +104,8 @@ export async function getOverview(
     on_time_rate: number | null;
   }>(
     `SELECT
-       (SELECT COUNT(*) FROM lecturer_profiles WHERE department_id = $1)::int AS lecturer_count,
+       (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users usr ON usr.id = lp.user_id
+         WHERE lp.department_id = $1 AND usr.deleted_at IS NULL)::int AS lecturer_count,
 
        (SELECT COUNT(*) FROM units u
          WHERE u.lecturer_user_id IN (${DEPT_LECTURERS}))::int AS unit_count,
@@ -226,10 +227,24 @@ export async function listLecturers(
  */
 export async function findLecturerDepartmentId(lecturerUserId: string): Promise<string | null> {
   const row = await queryOne<{ department_id: string | null }>(
-    `SELECT department_id FROM lecturer_profiles WHERE user_id = $1`,
+    `SELECT lp.department_id
+       FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
+      WHERE lp.user_id = $1 AND u.deleted_at IS NULL`,
     [lecturerUserId],
   );
   return row ? row.department_id : null;
+}
+
+/** Whether a student is on any roster of the department's units — the scope an officer may delete a student account in. */
+export async function isStudentInDepartment(departmentId: string, studentUserId: string): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM unit_allocations a JOIN units u ON u.id = a.unit_id
+        WHERE a.student_user_id = $2 AND u.lecturer_user_id IN (${DEPT_LECTURERS})
+     ) AS found`,
+    [departmentId, studentUserId],
+  );
+  return row?.found ?? false;
 }
 
 export interface LecturerHeaderRow {
