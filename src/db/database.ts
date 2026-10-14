@@ -137,6 +137,10 @@ export function isUniqueViolation(error: unknown): error is PostgresError {
   return isPostgresError(error) && error.code === PgErrorCode.UNIQUE_VIOLATION;
 }
 
+export function isForeignKeyViolation(error: unknown): error is PostgresError {
+  return isPostgresError(error) && error.code === PgErrorCode.FOREIGN_KEY_VIOLATION;
+}
+
 /**
  * Verifies the database is reachable and that the tables this service queries
  * actually exist. Called at boot so a missing table fails loudly at startup
