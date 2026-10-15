@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { auditRouter } from './audit.routes.js';
 import { capaRouter } from './capa.routes.js';
 import { checklistRouter } from './checklist.routes.js';
+import { directoryRouter } from './directory.routes.js';
 import { kpiRouter } from './kpi.routes.js';
 import { standardsRouter } from './standards.routes.js';
 
@@ -18,3 +19,4 @@ qaRouter.use('/checklist-templates', checklistRouter);
 qaRouter.use('/audits', auditRouter);
 qaRouter.use('/corrective-actions', capaRouter);
 qaRouter.use('/dashboard', kpiRouter);
+qaRouter.use(directoryRouter);

@@ -82,6 +82,8 @@ with what that department's own officer sees.
 | `GET` | `/api/v1/quality-assurance/corrective-actions/export.{csv,pdf}` | CAPA register |
 | `GET` | `/api/v1/quality-assurance/dashboard` | `?targetDepartmentId=&targetFacultyId=&from=&to=&groupBy=week\|month` |
 | `GET` | `/api/v1/quality-assurance/dashboard/export.{csv,pdf}` | Dashboard report |
+| `GET` | `/api/v1/quality-assurance/departments` | `{id, name}[]` — every department, for the audit-target picker |
+| `GET` | `/api/v1/quality-assurance/faculties` | `{id, name}[]` — every faculty, for the audit-target picker |
 
 Every route requires `requireAuth('QA')`.
 
