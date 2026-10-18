@@ -32,6 +32,20 @@ npm run dev:invite-admin -- someone@university.ac.ke "Jane Wanjiru"   # developm
 
 Without `RESEND_API_KEY` (development only) the link is printed instead.
 
+On a host with no shell (Render's free plan), set `BOOTSTRAP_ADMIN_EMAIL` and
+`BOOTSTRAP_ADMIN_NAME` on the service instead. Every start then calls
+`bootstrapAdmin` (`auth.invitation.ts`, from `server.ts`), which:
+
+| State | What happens |
+|---|---|
+| An administrator is ACTIVE | Nothing (remove the variables whenever you like) |
+| No account for the email | Invites it, as `admin:invite` does |
+| Invited, link still valid | Nothing, so restarts send no extra mail |
+| Invited, link expired | Sends a new link |
+| The email failed to send | Withdraws the link; the next start tries again |
+
+The outcome is logged with the prefix `bootstrap admin:`.
+
 ## Endpoints
 
 | Method | Path | Purpose |

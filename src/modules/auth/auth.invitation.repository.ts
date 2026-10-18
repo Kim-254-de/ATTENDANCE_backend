@@ -30,6 +30,25 @@ export async function findAccountByEmail(email: string): Promise<ExistingAccount
   return row ? { userId: row.id, role: row.role, status: row.status } : null;
 }
 
+/** Whether any administrator can sign in. */
+export async function hasActiveAdmin(): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' AND deleted_at IS NULL
+     ) AS found`,
+  );
+  return row?.found ?? false;
+}
+
+/** Withdraws an account's unused invitations; the account itself is left as it is. */
+export async function withdrawInvitations(userId: string): Promise<void> {
+  await query(
+    `UPDATE account_invitations SET invalidated_at = NOW()
+      WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+    [userId],
+  );
+}
+
 /**
  * Creates the invited account: PENDING_VERIFICATION, with a password hash
  * nothing can match, plus its faculty or department profile.
