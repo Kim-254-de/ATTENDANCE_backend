@@ -177,7 +177,7 @@ department portal's devices, enrolment and coverage screens (6.3).
 - A student with no attendance account yet has it created from SMARTTT on
   their first scan (decided 19 Oct 2026), so nobody has to sign in first.
 
-### 6.2 Terminal registration and setup
+### 6.2 Terminal registration and setup (built: see `terminals.md`)
 - `terminals` table: code (e.g. `TERM-01`), owning department, capabilities
   (barcode, fingerprint), hashed per-device key, status (active, lost,
   retired), last seen, battery, network, linked session.

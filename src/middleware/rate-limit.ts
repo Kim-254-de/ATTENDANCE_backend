@@ -61,8 +61,13 @@ const CHECK_IN_PATHS = new Set([
 ]);
 /** The face terminal and face enrollment. They have faceLimiter, per lecturer, instead. */
 const FACE_PATH = /^\/v1\/(sessions\/[^/]+\/face\/(identify|confirm)|units\/[^/]+\/students\/[^/]+\/face)$/;
+/**
+ * Paired terminals (src/modules/terminal). Many share one campus address, and on
+ * 4G one device changes address, so they are limited per device instead.
+ */
+const TERMINAL_PATH = /^\/v1\/terminals\//;
 export const isCheckInRequest = (req: Request): boolean =>
-  req.method === 'POST' && (CHECK_IN_PATHS.has(req.path) || FACE_PATH.test(req.path));
+  req.method === 'POST' && (CHECK_IN_PATHS.has(req.path) || FACE_PATH.test(req.path) || TERMINAL_PATH.test(req.path));
 
 export const globalLimiter = buildLimiter(
   env.RATE_LIMIT_MAX_REQUESTS,
@@ -142,4 +147,22 @@ export const passwordResetLimiter = buildLimiter(
   env.PASSWORD_RESET_RATE_LIMIT_MAX,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many password reset requests. Please wait before trying again.',
+);
+
+/**
+ * Per paired terminal (mounted after the device key is checked). Keyed by the
+ * terminal, not its address: see TERMINAL_PATH.
+ */
+export const terminalLimiter = buildLimiter(
+  env.TERMINAL_RATE_LIMIT_PER_DEVICE,
+  env.CHECKIN_RATE_LIMIT_WINDOW_MS,
+  'This terminal is sending too many requests. Wait a moment and try again.',
+  { keyGenerator: (req) => (req.terminal ? `terminal:${req.terminal.id}` : `ip:${req.ip ?? 'unknown'}`) },
+);
+
+/** Pairing, per address: the code is the only credential, so guesses are capped hard. */
+export const terminalPairLimiter = buildLimiter(
+  20,
+  15 * 60 * 1000,
+  'Too many pairing attempts. Wait 15 minutes and try again.',
 );
