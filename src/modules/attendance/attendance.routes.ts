@@ -9,6 +9,7 @@ import { requireAuth } from '../../middleware/authenticate.js';
 import { checkInLimiters } from '../../middleware/rate-limit.js';
 import * as attendanceController from './attendance.controller.js';
 import {
+  barcodeCheckInSchema,
   cardCheckInSchema,
   checkInSchema,
   fingerprintCheckInSchema,
@@ -55,6 +56,18 @@ attendanceRouter.post(
   checkInLimiters.perIp,
   validate({ body: cardCheckInSchema }),
   asyncHandler(attendanceController.cardCheckIn),
+);
+
+/**
+ * A student's ID card barcode is read at a terminal in the room and they are
+ * recorded. Same key and limits as the card swipe: same terminals, same card.
+ */
+attendanceRouter.post(
+  '/barcode-check-in',
+  requireCardTerminal,
+  checkInLimiters.perIp,
+  validate({ body: barcodeCheckInSchema }),
+  asyncHandler(attendanceController.barcodeCheckIn),
 );
 
 /**

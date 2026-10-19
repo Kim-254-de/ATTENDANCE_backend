@@ -3,6 +3,7 @@ import { hashCardUid } from '../../common/utils/card-uid.js';
 import { env } from '../../config/env.js';
 import { isUniqueViolation } from '../../db/database.js';
 import { auditService } from '../audit/index.js';
+import { provisionStudentFromSmarttt } from '../auth/index.js';
 import { sessionService, type SessionForQr, type StudentLocationInput } from '../session/index.js';
 import * as attendanceRepository from './attendance.repository.js';
 import * as cardRepository from './card.repository.js';
@@ -173,6 +174,109 @@ export async function checkInByCard(
       recordId: record.id,
       method: 'CARD',
       cardId: holder.cardId,
+    },
+  });
+
+  return {
+    recordId: record.id,
+    sessionId: verdict.sessionId,
+    unitCode: verdict.unitCode,
+    recordedAt: record.recordedAt.toISOString(),
+    student: { fullName: holder.fullName, registrationNumber: holder.registrationNumber },
+  };
+}
+
+/** Said for a barcode whose registration number neither this service nor SMARTTT can use. */
+const BARCODE_NOT_RECOGNISED =
+  'This ID card does not match a current student. See your department.';
+
+/**
+ * Check-in by the barcode on a student ID card, read at a terminal in the room.
+ *
+ * The barcode is the registration number, so there is nothing to enrol and
+ * nothing secret to protect: identity is whoever holds that number. Recorded
+ * as CARD, the same method as an NFC swipe, so the lecturer's "ID card" switch
+ * covers both. The rest is verifyTerminalCheckIn, as for card and fingerprint.
+ *
+ * A student who has never signed in has no account yet. Rather than turn them
+ * away, their account is created from SMARTTT on the spot, as their first
+ * sign-in would, and the scan goes ahead.
+ */
+export async function checkInByBarcode(
+  sessionId: string,
+  registrationNumber: string,
+  context: RequestContext,
+): Promise<CardCheckInResult> {
+  let holder = await cardRepository.findBarcodeHolder(registrationNumber);
+  if (!holder) {
+    const provisioned = await provisionStudentFromSmarttt(registrationNumber, context);
+    if (provisioned.status === 'UNAVAILABLE') {
+      throw new AppError(
+        503,
+        ErrorCode.SMARTTT_UNAVAILABLE,
+        'This ID card could not be checked right now. Try again, or use another check-in method.',
+      );
+    }
+    if (provisioned.status === 'CREATED' || provisioned.status === 'EXISTS') {
+      holder = await cardRepository.findBarcodeHolderByUserId(provisioned.userId);
+    }
+  }
+  if (!holder) {
+    await auditService.record({
+      action: 'ATTENDANCE_CARD_REJECTED',
+      outcome: 'FAILURE',
+      reason: 'barcode matched no current student',
+      subjectRegistrationNumber: registrationNumber,
+      requestId: context.requestId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      metadata: { sessionId, reader: 'BARCODE' },
+    });
+    throw AppError.notFound(BARCODE_NOT_RECOGNISED);
+  }
+
+  const verdict = await sessionService.verifyTerminalCheckIn(
+    sessionId,
+    holder.studentUserId,
+    'CARD',
+    context,
+  );
+
+  let record: { id: string; recordedAt: Date };
+  try {
+    record = await attendanceRepository.insertRecord({
+      sessionId: verdict.sessionId,
+      unitId: verdict.unitId,
+      studentUserId: holder.studentUserId,
+      // No rotating code, and no reading to fence against: the student was at
+      // the terminal, which is in the room.
+      qrAgeSeconds: null,
+      verificationMethod: 'CARD',
+      geofenceResult: 'NOT_CHECKED',
+      distanceMetres: null,
+      locationAccuracyMetres: null,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+  } catch (error) {
+    // Two scans raced past verifyTerminalCheckIn's advisory check.
+    if (isUniqueViolation(error)) throw AppError.conflict(ALREADY_RECORDED, ErrorCode.CONFLICT);
+    throw error;
+  }
+
+  await auditService.record({
+    action: 'ATTENDANCE_RECORDED',
+    outcome: 'SUCCESS',
+    userId: holder.studentUserId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: {
+      sessionId: verdict.sessionId,
+      unitCode: verdict.unitCode,
+      recordId: record.id,
+      method: 'CARD',
+      reader: 'BARCODE',
     },
   });
 

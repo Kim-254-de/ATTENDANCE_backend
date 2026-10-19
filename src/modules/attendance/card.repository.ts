@@ -49,6 +49,45 @@ export async function findCardHolder(cardUidHmac: string): Promise<CardHolder | 
   };
 }
 
+export interface BarcodeHolder {
+  studentUserId: string;
+  fullName: string;
+  registrationNumber: string;
+}
+
+/**
+ * The student whose registration number a barcode carries, or null.
+ *
+ * No enrolment table: the barcode printed on the ID card is the registration
+ * number itself. A student who has never signed in has no account yet, so
+ * resolves to nobody here.
+ */
+export async function findBarcodeHolder(registrationNumber: string): Promise<BarcodeHolder | null> {
+  return findStudent('p.registration_number = $1', registrationNumber);
+}
+
+/** The same, by account: for a student whose account was just created from SMARTTT. */
+export async function findBarcodeHolderByUserId(userId: string): Promise<BarcodeHolder | null> {
+  return findStudent('p.user_id = $1', userId);
+}
+
+async function findStudent(match: string, value: string): Promise<BarcodeHolder | null> {
+  const row = await queryOne<{ student_user_id: string; full_name: string; registration_number: string }>(
+    `SELECT p.user_id AS student_user_id, u.full_name, p.registration_number
+       FROM student_profiles p
+       JOIN users u ON u.id = p.user_id
+      WHERE ${match}
+        AND u.deleted_at IS NULL`,
+    [value],
+  );
+  if (!row) return null;
+  return {
+    studentUserId: row.student_user_id,
+    fullName: row.full_name,
+    registrationNumber: row.registration_number,
+  };
+}
+
 export interface EnrolCardArgs {
   studentUserId: string;
   cardUidHmac: string;

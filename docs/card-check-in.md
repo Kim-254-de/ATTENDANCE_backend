@@ -102,7 +102,41 @@ at the door should not be a way to find out which cards exist.
 
 ---
 
-## 4. Practical notes
+## 4. Barcode cards
+
+The university's student ID cards carry a **barcode holding the registration
+number**, not an NFC chip. A terminal with a barcode reader posts to its own
+route with the same key:
+
+```
+POST /api/v1/attendance/barcode-check-in
+X-API-Key: <CARD_TERMINAL_API_KEY>
+Content-Type: application/json
+
+{ "sessionId": "8f1c...", "barcode": "SCT211-0001/2022" }
+```
+
+- `barcode` is the decoded text as the scanner reports it: 3 to 64
+  characters, letters, digits, `/`, `.`, `_`, `-`. Surrounding whitespace
+  (including a trailing CR/LF) is ignored and case does not matter.
+- No enrolment: the number is matched against the student's account. A
+  student who has never signed in has their account **created from SMARTTT on
+  the spot** (student lookup, same rules as a first sign-in: current student,
+  has an email, no clash) and the scan goes ahead. It is linked to their
+  SMARTTT account by registration number at their first sign-in.
+- `404` "This ID card does not match a current student" when neither
+  attendance nor SMARTTT can use the number. `503` `SMARTTT_UNAVAILABLE` when
+  SMARTTT could not be asked: tell the student to retry or use another method.
+- Recorded as method `CARD`, so the lecturer's "ID card" switch covers both
+  NFC and barcode. Every other answer (`201`, `403`, `409`, `429`) is the same
+  as for an NFC swipe above.
+- The barcode is printed, so a photo of someone else's card works too. That
+  risk was accepted (see `hardware-specs.md`); the lecturer watching the
+  terminal is the check.
+
+---
+
+## 5. Practical notes
 
 **Retry carefully.** Check-in is not idempotent in the usual sense, but it is
 safe to retry: a second swipe for a student already recorded returns `409`, not

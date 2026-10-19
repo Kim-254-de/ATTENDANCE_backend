@@ -55,6 +55,7 @@ function buildLimiter(
 const CHECK_IN_PATHS = new Set([
   '/v1/attendance/check-in',
   '/v1/attendance/card-check-in',
+  '/v1/attendance/barcode-check-in',
   '/v1/attendance/fingerprint-check-in',
   '/v1/sessions/scan',
 ]);
