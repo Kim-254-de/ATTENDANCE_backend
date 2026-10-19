@@ -11,7 +11,7 @@ import { facultyRouter } from './modules/faculty/index.js';
 import { integrationRouter } from './modules/integration/index.js';
 import { verificationRouter } from './modules/verification/index.js';
 import { adminRouter } from './modules/admin/index.js';
-import { departmentTerminalRouter, sessionTerminalRouter, terminalRouter } from './modules/terminal/index.js';
+import { departmentEnrolmentRouter, departmentTerminalRouter, sessionTerminalRouter, terminalRouter } from './modules/terminal/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -36,6 +36,7 @@ apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/reports', reportingRouter);
 apiRouter.use('/students', studentRouter);
 apiRouter.use('/departments/terminals', departmentTerminalRouter);
+apiRouter.use('/departments/enrolment', departmentEnrolmentRouter);
 apiRouter.use('/departments', departmentRouter);
 apiRouter.use('/terminals', terminalRouter);
 apiRouter.use('/faculties', facultyRouter);

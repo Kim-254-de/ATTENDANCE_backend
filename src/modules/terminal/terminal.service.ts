@@ -9,6 +9,7 @@ import { auditService } from '../audit/index.js';
 import { departmentService } from '../department/index.js';
 import { findSessionById, type SessionForQr } from '../session/index.js';
 import { checkLinkCode, issueLinkCode, parseLinkCode } from './terminal.link.js';
+import * as enrolmentRepository from './enrolment.repository.js';
 import * as terminalRepository from './terminal.repository.js';
 import type { Terminal, TerminalCapability, TerminalNetwork } from './terminal.repository.js';
 import type { CreateTerminalInput, TerminalCheckInInput, UpdateTerminalInput } from './terminal.schema.js';
@@ -322,9 +323,10 @@ export async function heartbeat(
   terminal: Terminal,
   report: { batteryPercent?: number; network?: TerminalNetwork; appVersion?: string },
   context: RequestContext,
-): Promise<DeviceStateDto> {
+): Promise<DeviceStateDto & { pendingCommands: number }> {
   await terminalRepository.recordHeartbeat(terminal.id, { ipAddress: context.ipAddress, ...report });
-  return deviceState(terminal, await currentSession(terminal));
+  // Tells the device to fetch GET /terminals/commands when the department has queued work.
+  return { ...deviceState(terminal, await currentSession(terminal)), pendingCommands: await enrolmentRepository.countPending(terminal.id) };
 }
 
 /** POST /terminals/link - the device scanned the code on the lecturer's screen. */

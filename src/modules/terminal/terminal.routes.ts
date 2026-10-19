@@ -6,6 +6,12 @@ import { validate } from '../../middleware/validate.js';
 import * as terminalController from './terminal.controller.js';
 import { requireTerminal } from './terminal.middleware.js';
 import {
+  commandIdParamSchema,
+  completeCommandSchema,
+  coverageQuerySchema,
+  failCommandSchema,
+  fingerprintIdParamSchema,
+  requestEnrolmentSchema,
   createTerminalSchema,
   heartbeatSchema,
   linkSchema,
@@ -73,4 +79,44 @@ sessionTerminalRouter.get(
   requireAuth('LECTURER'),
   validate({ params: sessionIdParamSchema }),
   asyncHandler(terminalController.linkCode),
+);
+
+/** Work the department queued for this device (fingerprint enrolments and removals). */
+terminalRouter.get('/commands', ...device, asyncHandler(terminalController.commands));
+terminalRouter.post(
+  '/commands/:commandId/complete',
+  ...device,
+  validate({ params: commandIdParamSchema, body: completeCommandSchema }),
+  asyncHandler(terminalController.completeCommand),
+);
+terminalRouter.post(
+  '/commands/:commandId/fail',
+  ...device,
+  validate({ params: commandIdParamSchema, body: failCommandSchema }),
+  asyncHandler(terminalController.failCommand),
+);
+
+/** Queue a fingerprint enrolment on one of the department's devices. */
+departmentTerminalRouter.post(
+  '/:terminalId/enrolments',
+  officer,
+  validate({ params: terminalIdParamSchema, body: requestEnrolmentSchema }),
+  asyncHandler(terminalController.requestEnrolment),
+);
+
+/** The department's enrolment coverage and corrections, mounted at /departments/enrolment. */
+export const departmentEnrolmentRouter: Router = Router();
+
+departmentEnrolmentRouter.get('/students', officer, validate({ query: coverageQuerySchema }), asyncHandler(terminalController.coverage));
+departmentEnrolmentRouter.post(
+  '/commands/:commandId/cancel',
+  officer,
+  validate({ params: commandIdParamSchema }),
+  asyncHandler(terminalController.cancelCommand),
+);
+departmentEnrolmentRouter.delete(
+  '/fingerprints/:fingerprintId',
+  officer,
+  validate({ params: fingerprintIdParamSchema }),
+  asyncHandler(terminalController.revokeFingerprint),
 );

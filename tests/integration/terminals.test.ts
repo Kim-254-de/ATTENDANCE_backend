@@ -425,3 +425,144 @@ describe('checking in at a linked terminal', () => {
   });
 });
 
+
+describe('fingerprint enrolment by the department', () => {
+  const enrolment = (officer: { auth: string }) => ({
+    request: (terminalId: string, payload: Record<string, unknown>) =>
+      request(app).post(`/api/v1/departments/terminals/${terminalId}/enrolments`).set('Authorization', officer.auth).send(payload),
+    coverage: (q?: string) =>
+      request(app).get('/api/v1/departments/enrolment/students').query(q ? { q } : {}).set('Authorization', officer.auth),
+    cancel: (commandId: string) =>
+      request(app).post(`/api/v1/departments/enrolment/commands/${commandId}/cancel`).set('Authorization', officer.auth),
+    revoke: (fingerprintId: string) =>
+      request(app).delete(`/api/v1/departments/enrolment/fingerprints/${fingerprintId}`).set('Authorization', officer.auth),
+  });
+  const commandsOf = (key: string) => request(app).get('/api/v1/terminals/commands').set('X-Terminal-Key', key);
+  const complete = (key: string, id: string, payload: Record<string, unknown> = {}) =>
+    request(app).post(`/api/v1/terminals/commands/${id}/complete`).set('X-Terminal-Key', key).send(payload);
+  const fail = (key: string, id: string, reason: string) =>
+    request(app).post(`/api/v1/terminals/commands/${id}/fail`).set('X-Terminal-Key', key).send({ reason });
+
+  it('queues an enrolment, the device takes the finger, and the student can then check in with it', async () => {
+    const ctx = await setUp();
+    const student = await makeStudent();
+    const cls = await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [student]);
+    const api = enrolment(ctx.officer);
+
+    const queued = await api.request(ctx.terminal.id, { registrationNumber: student.reg.toLowerCase(), label: 'right index' });
+    expect(queued.status).toBe(201);
+    const { commandId } = body<{ commandId: string }>(queued).data;
+
+    expect(body(await ctx.device.heartbeat()).data).toMatchObject({ pendingCommands: 1 });
+    const listed = body<Array<Record<string, unknown>>>(await commandsOf(ctx.key)).data;
+    expect(listed).toEqual([expect.objectContaining({
+      id: commandId, kind: 'ENROL_FINGERPRINT', label: 'right index',
+      student: { fullName: student.fullName, registrationNumber: student.reg },
+    })]);
+
+    // Asking twice is refused while the first is waiting.
+    expect((await api.request(ctx.terminal.id, { registrationNumber: student.reg })).status).toBe(409);
+
+    const done = await complete(ctx.key, commandId, { fingerRef: '12' });
+    expect(done.status).toBe(200);
+    const { fingerprintId } = body<{ fingerprintId: string }>(done).data;
+    expect(fingerprintId).toEqual(expect.any(String));
+    expect(body(await ctx.device.heartbeat()).data).toMatchObject({ pendingCommands: 0 });
+
+    const [row] = body<Array<{ fingerprints: unknown[]; pending: unknown[] }>>(await api.coverage(student.reg)).data;
+    expect(row).toMatchObject({ fingerprints: [expect.objectContaining({ id: fingerprintId, terminalCode: ctx.terminal.code })], pending: [] });
+
+    await linkTo(ctx, cls.sessionId);
+    expect((await ctx.device.checkIn({ fingerRef: '12' })).status).toBe(201);
+  });
+
+  it('removes an enrolment at once, and tells the device to free the slot', async () => {
+    const ctx = await setUp();
+    const student = await makeStudent();
+    const cls = await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [student]);
+    const api = enrolment(ctx.officer);
+    const { commandId } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: student.reg })).data;
+    const { fingerprintId } = body<{ fingerprintId: string }>(await complete(ctx.key, commandId, { fingerRef: '5' })).data;
+
+    expect((await api.revoke(fingerprintId)).status).toBe(200);
+    expect((await api.revoke(fingerprintId)).status).toBe(409);
+
+    await linkTo(ctx, cls.sessionId);
+    expect((await ctx.device.checkIn({ fingerRef: '5' })).status).toBe(404);
+
+    const [deletion] = body<Array<{ id: string; kind: string; fingerprintId: string }>>(await commandsOf(ctx.key)).data;
+    expect(deletion).toMatchObject({ kind: 'DELETE_FINGERPRINT', fingerprintId });
+    expect((await complete(ctx.key, deletion!.id)).status).toBe(200);
+    expect(body<unknown[]>(await commandsOf(ctx.key)).data).toEqual([]);
+
+    // The slot is free for someone else now.
+    const other = await makeStudent();
+    await pool.query(
+      `INSERT INTO unit_allocations (unit_id, registration_number, student_user_id, full_name, status, source)
+       VALUES ($1, $2, $3, 'Student', 'ACTIVE', 'ERP')`, [cls.unitId, other.reg, other.id]);
+    const { commandId: next } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: other.reg })).data;
+    expect((await complete(ctx.key, next, { fingerRef: '5' })).status).toBe(200);
+  });
+
+  it('lets the officer cancel a waiting request, and the device report a failed one', async () => {
+    const ctx = await setUp();
+    const [a, b] = [await makeStudent(), await makeStudent()];
+    await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [a, b]);
+    const api = enrolment(ctx.officer);
+    const { commandId: first } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: a.reg })).data;
+    const { commandId: second } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: b.reg })).data;
+
+    expect((await api.cancel(first)).status).toBe(200);
+    expect((await complete(ctx.key, first, { fingerRef: '1' })).status).toBe(409);
+    expect((await api.cancel(first)).status).toBe(409);
+
+    expect((await fail(ctx.key, second, 'finger too dry after 5 attempts')).status).toBe(200);
+    expect(body<unknown[]>(await commandsOf(ctx.key)).data).toEqual([]);
+    const { rows: [c] } = await pool.query<{ status: string; failure_reason: string }>(
+      `SELECT status, failure_reason FROM terminal_commands WHERE id = $1`, [second]);
+    expect(c).toMatchObject({ status: 'FAILED', failure_reason: 'finger too dry after 5 attempts' });
+  });
+
+  it('wants the slot when completing an enrolment, and refuses a slot already taken', async () => {
+    const ctx = await setUp();
+    const [a, b] = [await makeStudent(), await makeStudent()];
+    await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [a, b]);
+    const api = enrolment(ctx.officer);
+    const { commandId: first } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: a.reg })).data;
+    const { commandId: second } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: b.reg })).data;
+
+    expect((await complete(ctx.key, first)).status).toBe(400);
+    expect((await complete(ctx.key, first, { fingerRef: '9' })).status).toBe(200);
+    expect((await complete(ctx.key, second, { fingerRef: '9' })).status).toBe(409);
+  });
+
+  it("keeps enrolment to the department's own students and devices", async () => {
+    const ctx = await setUp();
+    const outsider = await makeStudent();
+    await makeLiveClass(await makeLecturer(await makeDepartment()).then((l) => l.id), ['FINGERPRINT'], [outsider]);
+    const api = enrolment(ctx.officer);
+    expect((await api.request(ctx.terminal.id, { registrationNumber: outsider.reg })).status).toBe(404);
+    expect(body<unknown[]>(await api.coverage(outsider.reg)).data).toEqual([]);
+
+    const strangerCtx = await setUp();
+    const mine = await makeStudent();
+    await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [mine]);
+    expect((await api.request(strangerCtx.terminal.id, { registrationNumber: mine.reg })).status).toBe(404);
+
+    // Another device cannot see or complete this device's work.
+    const { commandId } = body<{ commandId: string }>(await api.request(ctx.terminal.id, { registrationNumber: mine.reg })).data;
+    expect(body<unknown[]>(await commandsOf(strangerCtx.key)).data).toEqual([]);
+    expect((await complete(strangerCtx.key, commandId, { fingerRef: '1' })).status).toBe(404);
+  });
+
+  it('refuses a device without a fingerprint reader, or one not yet paired', async () => {
+    const ctx = await setUp(['BARCODE']);
+    const student = await makeStudent();
+    await makeLiveClass(ctx.lecturer.id, ['FINGERPRINT'], [student]);
+    expect((await enrolment(ctx.officer).request(ctx.terminal.id, { registrationNumber: student.reg })).status).toBe(409);
+
+    const created = await officerApi(ctx.officer).create({ code: `NEW-${uniq()}`, capabilities: ['FINGERPRINT'] });
+    const unpaired = body<{ terminal: { id: string } }>(created).data.terminal.id;
+    expect((await enrolment(ctx.officer).request(unpaired, { registrationNumber: student.reg })).status).toBe(409);
+  });
+});

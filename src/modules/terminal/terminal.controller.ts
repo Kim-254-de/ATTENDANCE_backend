@@ -3,8 +3,15 @@ import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import type { Terminal } from './terminal.repository.js';
+import * as enrolmentService from './enrolment.service.js';
 import type {
+  CommandIdParam,
+  CompleteCommandInput,
+  CoverageQuery,
   CreateTerminalInput,
+  FailCommandInput,
+  FingerprintIdParam,
+  RequestEnrolmentInput,
   HeartbeatInput,
   LinkInput,
   PairInput,
@@ -105,4 +112,52 @@ export async function unlink(req: Request, res: Response): Promise<void> {
 /** POST /api/v1/terminals/check-in */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   sendCreated(res, await terminalService.checkIn(device(req), req.body as TerminalCheckInInput, context(req)));
+}
+
+// --- Fingerprint enrolment (enrolment.service.ts) ----------------------------
+
+/** GET /api/v1/departments/enrolment/students */
+export async function coverage(req: Request, res: Response): Promise<void> {
+  const { q, limit } = req.query as unknown as CoverageQuery;
+  sendSuccess(res, await enrolmentService.listCoverage(userId(req), q, limit));
+}
+
+/** POST /api/v1/departments/terminals/:terminalId/enrolments */
+export async function requestEnrolment(req: Request, res: Response): Promise<void> {
+  const { terminalId } = req.params as unknown as TerminalIdParam;
+  sendCreated(res, await enrolmentService.requestEnrolment(userId(req), terminalId, req.body as RequestEnrolmentInput, context(req)));
+}
+
+/** POST /api/v1/departments/enrolment/commands/:commandId/cancel */
+export async function cancelCommand(req: Request, res: Response): Promise<void> {
+  const { commandId } = req.params as unknown as CommandIdParam;
+  await enrolmentService.cancelCommand(userId(req), commandId, context(req));
+  sendSuccess(res, { cancelled: true });
+}
+
+/** DELETE /api/v1/departments/enrolment/fingerprints/:fingerprintId */
+export async function revokeFingerprint(req: Request, res: Response): Promise<void> {
+  const { fingerprintId } = req.params as unknown as FingerprintIdParam;
+  await enrolmentService.revokeFingerprint(userId(req), fingerprintId, context(req));
+  sendSuccess(res, { revoked: true });
+}
+
+/** GET /api/v1/terminals/commands */
+export async function commands(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await enrolmentService.listCommands(device(req)));
+}
+
+/** POST /api/v1/terminals/commands/:commandId/complete */
+export async function completeCommand(req: Request, res: Response): Promise<void> {
+  const { commandId } = req.params as unknown as CommandIdParam;
+  const { fingerRef } = req.body as CompleteCommandInput;
+  sendSuccess(res, await enrolmentService.completeCommand(device(req), commandId, fingerRef, context(req)));
+}
+
+/** POST /api/v1/terminals/commands/:commandId/fail */
+export async function failCommand(req: Request, res: Response): Promise<void> {
+  const { commandId } = req.params as unknown as CommandIdParam;
+  const { reason } = req.body as FailCommandInput;
+  await enrolmentService.failCommand(device(req), commandId, reason, context(req));
+  sendSuccess(res, { failed: true });
 }

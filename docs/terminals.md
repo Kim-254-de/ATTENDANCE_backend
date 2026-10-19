@@ -45,6 +45,15 @@ retired or re-paired. Show "Not paired: see your department" and stop.
 
 Another department's device is a `404`.
 
+### Fingerprint enrolment
+
+| Call | Does |
+|---|---|
+| `GET /departments/enrolment/students?q=&limit=` | Students on the department's lecturers' class lists, each with `fingerprints` (active, on this department's devices) and `pending` requests. `q` searches name or registration number |
+| `POST /departments/terminals/:id/enrolments` `{ registrationNumber, label? }` | Queues an enrolment on a paired device with a fingerprint reader. A student with no account gets one from SMARTTT first. `201 { commandId, studentUserId }` |
+| `POST /departments/enrolment/commands/:id/cancel` | Withdraws a request the device has not done yet |
+| `DELETE /departments/enrolment/fingerprints/:id` | Stops the finger counting at once and queues its removal from the device |
+
 ## 3. Lecturer (signed in as LECTURER)
 
 `GET /sessions/:sessionId/terminal-link` returns
@@ -92,6 +101,21 @@ No `sessionId`: the linked class is used. Answers are those of
 `409` "not linked to a class" and `403` for a reader the device was not set up
 with. Fingerprint slots are filed under the device's `code`, so enrol on the
 same device that will read them.
+
+### Commands (enrolment and removal)
+The heartbeat's `pendingCommands` says when the department has queued work.
+
+- `GET /terminals/commands`: pending requests, oldest first:
+  `{ id, kind: "ENROL_FINGERPRINT" | "DELETE_FINGERPRINT", student: { fullName, registrationNumber }, fingerprintId, label, createdAt }`.
+- **ENROL:** show the student's name, take the finger into a free slot, then
+  `POST /terminals/commands/:id/complete` `{ "fingerRef": "<slot>" }`.
+  The reply's `fingerprintId` **must be stored on the device against that
+  slot**: a later DELETE names the `fingerprintId`, never the slot.
+  `409` means the slot is already someone else's here, or the request was
+  cancelled meanwhile: free the slot.
+- **DELETE:** free the slot stored against `fingerprintId`, then
+  `POST /terminals/commands/:id/complete` with no body.
+- Could not do it (e.g. no usable finger): `POST /terminals/commands/:id/fail` `{ "reason": "..." }`.
 
 ### Unlink
 `POST /terminals/unlink` when the lecturer hands the device back.

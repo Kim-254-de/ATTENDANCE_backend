@@ -166,8 +166,14 @@ At about 3 seconds per student, one terminal handles a class of 200 in roughly
 Order: 6.1 first because it is small and stands alone; 6.2 before 6.3
 because fingerprint enrolment is tied to a registered terminal.
 
-Frontend work needed: the lecturer's "link a terminal" QR code (6.2) and the
-department portal's devices, enrolment and coverage screens (6.3).
+Frontend (built): the lecturer's "Link a terminal" button on the live session
+screen (6.2) and the department portal's Terminals and Fingerprint enrolment
+pages (6.3).
+
+Terminal software (built, alongside the backend and frontend repos):
+`ATTENDANCE_terminal_android` (Option A; fingerprint reader is a pluggable
+interface with a simulated stand-in until the handheld model is chosen) and
+`ATTENDANCE_terminal_esp32` (Option B: R503 + GM65 + OLED, Wi-Fi only).
 
 ### 6.1 Barcode check-in (built: `POST /attendance/barcode-check-in`, see `card-check-in.md` §4)
 - New terminal route that accepts the registration number as printed
@@ -192,7 +198,7 @@ department portal's devices, enrolment and coverage screens (6.3).
 - The shared `CARD_TERMINAL_API_KEY` and `FINGERPRINT_TERMINAL_API_KEY` keep
   working until every device is paired, then are removed.
 
-### 6.3 Department screens
+### 6.3 Department screens (built: backend in `terminals.md`, portal pages Terminals and Fingerprint enrolment)
 - **Devices:** register, pair, rename, mark lost (key stops working at
   once), retire; see last seen, battery and linked class.
 - **Fingerprint enrolment:** the officer picks a student and a device; the
