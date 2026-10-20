@@ -3,7 +3,7 @@ import { isUniqueViolation } from '../../db/database.js';
 import { auditService } from '../audit/index.js';
 import * as invitationService from '../auth/auth.invitation.js';
 import type { RegistrationContext } from '../auth/auth.service.js';
-import { listOfficers } from '../auth/auth.invitation.repository.js';
+import { listOfficers, type InvitedRole } from '../auth/auth.invitation.repository.js';
 import type { AdminInvitationInput } from './admin.schema.js';
 import * as adminRepository from './admin.repository.js';
 import * as placement from '../lecturer/lecturer.placement.js';
@@ -49,9 +49,12 @@ export async function createFaculty(name: string, actor: Actor, context: Registr
   }
 }
 
-/** GET /admin/officers — every administrator, faculty officer and department officer. */
+/** Every role an administrator manages; QA officers sit outside faculties, so only the admin console lists them. */
+const OFFICER_ROLES: InvitedRole[] = ['ADMIN', 'FACULTY', 'DEPARTMENT', 'QA'];
+
+/** GET /admin/officers — every administrator, faculty, department and QA officer. */
 export async function listAllOfficers(): Promise<invitationService.OfficerDto[]> {
-  return (await listOfficers({ roles: ['ADMIN', 'FACULTY', 'DEPARTMENT'] })).map(invitationService.officerDto);
+  return (await listOfficers({ roles: OFFICER_ROLES })).map(invitationService.officerDto);
 }
 
 /** POST /admin/invitations */
@@ -61,8 +64,9 @@ export async function invite(
   context: RegistrationContext,
 ): Promise<invitationService.InvitationResult> {
   const inviter = { userId: actor.userId, fullName: actor.fullName };
-  if (input.role === 'admin') {
-    return invitationService.invite({ email: input.email, fullName: input.fullName, scope: { role: 'ADMIN' }, scopeName: null }, inviter, context);
+  if (input.role === 'admin' || input.role === 'qa') {
+    const scope = input.role === 'admin' ? { role: 'ADMIN' as const } : { role: 'QA' as const };
+    return invitationService.invite({ email: input.email, fullName: input.fullName, scope, scopeName: null }, inviter, context);
   }
   const facultyName = await adminRepository.findFacultyName(input.facultyId);
   if (!facultyName) throw AppError.badRequest('That faculty does not exist.');
@@ -74,7 +78,7 @@ export async function invite(
 }
 
 async function requireOfficer(userId: string) {
-  const [officer] = await listOfficers({ roles: ['ADMIN', 'FACULTY', 'DEPARTMENT'], userId });
+  const [officer] = await listOfficers({ roles: OFFICER_ROLES, userId });
   if (!officer) throw AppError.notFound('No such officer or administrator.');
   return officer;
 }

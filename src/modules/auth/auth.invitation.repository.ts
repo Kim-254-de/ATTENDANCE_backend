@@ -4,14 +4,15 @@ import type { AccountStatus } from '../../db/types.js';
 
 /**
  * SQL for invited accounts (auth.invitation.ts): administrators, faculty
- * officers and department officers. Every value goes through a bind parameter.
+ * officers, department officers and QA officers. Every value goes through a bind parameter.
  */
 
-export type InvitedRole = 'ADMIN' | 'FACULTY' | 'DEPARTMENT';
+export type InvitedRole = 'ADMIN' | 'FACULTY' | 'DEPARTMENT' | 'QA';
 
-/** What an invitation is for: the role, and the faculty or department it is scoped to. */
+/** What an invitation is for: the role, and the faculty or department it is scoped to (QA is institution-wide). */
 export type InvitationScope =
   | { role: 'ADMIN' }
+  | { role: 'QA' }
   | { role: 'FACULTY'; facultyId: string }
   | { role: 'DEPARTMENT'; departmentId: string };
 
@@ -83,6 +84,8 @@ async function setScope(client: PoolClient, userId: string, scope: InvitationSco
       [userId, scope.departmentId],
       client,
     );
+  } else if (scope.role === 'QA') {
+    await query(`INSERT INTO qa_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [userId], client);
   }
 }
 
@@ -134,7 +137,7 @@ export async function findInvitation(tokenHash: string): Promise<StoredInvitatio
   LEFT JOIN faculties           f  ON f.id = fp.faculty_id
   LEFT JOIN department_profiles dp ON dp.user_id = u.id
   LEFT JOIN departments         d  ON d.id = dp.department_id
-      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'FACULTY', 'DEPARTMENT')`,
+      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'FACULTY', 'DEPARTMENT', 'QA')`,
     [tokenHash],
   );
   if (!row || row.deleted_at) return null;
@@ -196,7 +199,7 @@ export interface OfficerRow {
 }
 
 /**
- * Administrators, faculty officers and department officers. A department
+ * Administrators, faculty, department and QA officers. A department
  * officer's faculty is their department's, so filtering by `facultyId` finds
  * the faculty's own officers and the officers of its departments.
  */

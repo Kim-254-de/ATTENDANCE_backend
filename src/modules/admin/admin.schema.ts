@@ -8,9 +8,10 @@ export const createFacultySchema = z
   .strict();
 export type CreateFacultyInput = z.infer<typeof createFacultySchema>;
 
-/** An administrator invites another administrator, or a faculty officer for one faculty. */
+/** An administrator invites another administrator, a QA officer, or a faculty officer for one faculty. */
 export const adminInvitationSchema = z.discriminatedUnion('role', [
   inviteeSchema.extend({ role: z.literal('admin') }).strict(),
+  inviteeSchema.extend({ role: z.literal('qa') }).strict(),
   inviteeSchema.extend({ role: z.literal('faculty'), facultyId: z.string().uuid('Choose a faculty.') }).strict(),
 ]);
 export type AdminInvitationInput = z.infer<typeof adminInvitationSchema>;

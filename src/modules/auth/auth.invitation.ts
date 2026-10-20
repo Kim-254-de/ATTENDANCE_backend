@@ -43,6 +43,7 @@ const ROLE_LABEL: Record<InvitedRole, string> = {
   ADMIN: 'an administrator',
   FACULTY: 'faculty officer',
   DEPARTMENT: 'department officer',
+  QA: 'quality assurance officer',
 };
 
 /** Only these domains may be invited, when OFFICER_EMAIL_DOMAINS lists any. */
@@ -158,7 +159,7 @@ export async function deactivate(officer: OfficerRow, actorUserId: string, conte
 export interface InvitationDetails {
   fullName: string;
   email: string;
-  role: 'admin' | 'faculty' | 'department';
+  role: Lowercase<InvitedRole>;
   scopeName: string | null;
   expiresAt: string;
 }
@@ -206,7 +207,7 @@ export async function accept(token: string, password: string, context: Registrat
 
 export const officerDto = (r: OfficerRow) => ({
   userId: r.userId,
-  role: r.role.toLowerCase() as 'admin' | 'faculty' | 'department',
+  role: r.role.toLowerCase() as Lowercase<InvitedRole>,
   fullName: r.fullName,
   email: r.email,
   status: r.status,
