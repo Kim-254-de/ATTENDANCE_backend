@@ -4,7 +4,7 @@ import { query, queryOne } from '../../db/database.js';
  * All SQL for portable terminals. Every query is parameterised.
  *
  * Keys and pairing codes are only ever looked up by their SHA-256; neither is
- * stored in the clear (db/migrations/027_terminals.sql).
+ * stored in the clear (db/migrations/033_terminals.sql).
  */
 
 export type TerminalCapability = 'BARCODE' | 'CARD' | 'FINGERPRINT';

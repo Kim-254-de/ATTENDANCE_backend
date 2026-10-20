@@ -3,7 +3,7 @@ import { query, queryOne } from '../../db/database.js';
 
 /**
  * All SQL for department fingerprint enrolment and the commands queued for
- * terminals (db/migrations/028_terminal_commands.sql). Every query is
+ * terminals (db/migrations/034_terminal_commands.sql). Every query is
  * parameterised.
  *
  * A department's students are those with an ACTIVE place on a unit taught by
