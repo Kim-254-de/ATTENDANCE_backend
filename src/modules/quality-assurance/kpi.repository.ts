@@ -91,7 +91,8 @@ export interface AttendanceTrendRow {
  * Attendance rate per department, bucketed by period. Same per-session rate
  * shape as `department.repository.ts`'s `avgAttendanceRate` (checked-in
  * records ÷ ACTIVE allocations per session), widened to every department —
- * or the filtered subset — instead of one officer's own.
+ * or the filtered subset — instead of one officer's own. A session counts
+ * under the department that owns its unit, as everywhere else.
  */
 export async function getAttendanceTrends(
   filters: DashboardFilters,
@@ -106,8 +107,8 @@ export async function getAttendanceTrends(
                          WHERE al.unit_id = s.unit_id AND al.status = 'ACTIVE'), 0) * 100
             )::float8 AS avg_attendance_rate
        FROM attendance_sessions s
-       JOIN lecturer_profiles lp ON lp.user_id = s.lecturer_user_id
-       JOIN departments d ON d.id = lp.department_id
+       JOIN units u ON u.id = s.unit_id
+       JOIN departments d ON d.id = u.department_id
       WHERE s.scheduled_start_at IS NOT NULL
         AND ($1::uuid IS NULL OR d.id = $1)
         AND ($2::uuid IS NULL OR d.faculty_id = $2)

@@ -3,7 +3,9 @@ import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as departmentService from './department.service.js';
-import type { AllocateLecturerInput, LecturerUserIdParam, OfferingIdParam, SetSegmentCountInput, StudentUserIdParam, TimekeepingQuery } from './department.schema.js';
+import type { EligibilityQuery } from '../eligibility/eligibility.schema.js';
+import type { RoundIdParam } from '../quality-assurance/evaluation.schema.js';
+import type { AllocateLecturerInput, LecturerSearchQuery, LecturerUserIdParam, OfferingIdParam, SetSegmentCountInput, StudentUserIdParam, TimekeepingQuery } from './department.schema.js';
 
 /**
  * HTTP in and out only. The caller's department is never read from the
@@ -66,6 +68,12 @@ export async function setSegmentCount(req: Request, res: Response): Promise<void
   sendSuccess(res, { offeringId, segmentsPlanned });
 }
 
+/** GET /api/v1/departments/lecturer-directory */
+export async function lecturerDirectory(req: Request, res: Response): Promise<void> {
+  const { q } = req.query as unknown as LecturerSearchQuery;
+  sendSuccess(res, await departmentService.searchLecturers(userId(req), q));
+}
+
 /** POST /api/v1/departments/courses/:offeringId/segments */
 export async function allocateLecturer(req: Request, res: Response): Promise<void> {
   const { offeringId } = req.params as unknown as OfferingIdParam;
@@ -85,4 +93,21 @@ export async function deleteStudent(req: Request, res: Response): Promise<void> 
   const { studentUserId } = req.params as unknown as StudentUserIdParam;
   await departmentService.deleteStudent(userId(req), studentUserId, { ...clientFingerprint(req), requestId: req.requestId });
   res.status(204).end();
+}
+
+/** GET /api/v1/departments/eligibility */
+export async function eligibility(req: Request, res: Response): Promise<void> {
+  const { all } = req.query as unknown as EligibilityQuery;
+  sendSuccess(res, await departmentService.getEligibility(userId(req), all));
+}
+
+/** GET /api/v1/departments/evaluations */
+export async function evaluations(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await departmentService.listEvaluations(userId(req)));
+}
+
+/** GET /api/v1/departments/evaluations/:id */
+export async function evaluationResults(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as RoundIdParam;
+  sendSuccess(res, await departmentService.getEvaluationResults(userId(req), id));
 }

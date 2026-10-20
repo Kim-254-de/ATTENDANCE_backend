@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as adminController from './admin.controller.js';
-import { adminInvitationSchema, createFacultySchema, officerUserIdParamSchema } from './admin.schema.js';
+import { adminInvitationSchema, aliasIdParamSchema, createFacultySchema, departmentIdParamSchema, lecturerListQuerySchema, mergeDepartmentSchema, lecturerUserIdParamSchema, moveLecturerSchema, officerUserIdParamSchema } from './admin.schema.js';
 
 /** Every route is gated to the ADMIN role. */
 export const adminRouter: Router = Router();
@@ -50,4 +50,45 @@ adminRouter.post(
   asyncHandler(requireAuth('ADMIN')),
   validate({ params: officerUserIdParamSchema }),
   asyncHandler(adminController.deactivate),
+);
+
+/** Every department with its faculty, for placing a lecturer. */
+adminRouter.get('/departments', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.departments));
+
+/** Lecturers, unassigned ones first. `?q=&unassigned=true` */
+adminRouter.get(
+  '/lecturers',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ query: lecturerListQuerySchema }),
+  asyncHandler(adminController.lecturers),
+);
+
+/** Places or moves a lecturer in any department, across faculties too. Units stay with their owners. */
+adminRouter.patch(
+  '/lecturers/:lecturerUserId/department',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ params: lecturerUserIdParamSchema, body: moveLecturerSchema }),
+  asyncHandler(adminController.moveLecturer),
+);
+
+/** Department spellings learned from placements and merges (db/migrations/036_department_spelling.sql). */
+adminRouter.get('/department-aliases', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.departmentAliases));
+
+/** Removes a wrongly learned spelling. Lecturers already placed stay where they are. */
+adminRouter.delete(
+  '/department-aliases/:aliasId',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ params: aliasIdParamSchema }),
+  asyncHandler(adminController.deleteDepartmentAlias),
+);
+
+/** Groups of departments whose names mean the same thing, for merging. */
+adminRouter.get('/department-duplicates', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.duplicateDepartments));
+
+/** Folds :departmentId into `intoDepartmentId`; its name becomes a spelling of the one kept. Cannot be undone. */
+adminRouter.post(
+  '/departments/:departmentId/merge',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ params: departmentIdParamSchema, body: mergeDepartmentSchema }),
+  asyncHandler(adminController.mergeDepartment),
 );

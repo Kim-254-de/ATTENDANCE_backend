@@ -148,6 +148,14 @@ export const AuditAction = {
   /** An officer's access was removed by whoever manages them. */
   OFFICER_DEACTIVATED: 'OFFICER_DEACTIVATED',
   FACULTY_CREATED: 'FACULTY_CREATED',
+  /** A faculty officer or administrator placed a lecturer in a department, or moved them (lecturer.placement.ts). */
+  LECTURER_DEPARTMENT_CHANGED: 'LECTURER_DEPARTMENT_CHANGED',
+  /** An administrator folded a duplicate department into another; its name became an alias. */
+  DEPARTMENTS_MERGED: 'DEPARTMENTS_MERGED',
+  /** An administrator removed a learned department spelling. */
+  DEPARTMENT_ALIAS_REMOVED: 'DEPARTMENT_ALIAS_REMOVED',
+  /** The QA officer changed the minimum attendance to sit exams (attendance_policy). */
+  ATTENDANCE_POLICY_UPDATED: 'ATTENDANCE_POLICY_UPDATED',
   LECTURER_PROFILE_UPDATED: 'LECTURER_PROFILE_UPDATED',
   LOGIN_SUCCEEDED: 'LOGIN_SUCCEEDED',
   LOGIN_FAILED: 'LOGIN_FAILED',

@@ -12,6 +12,7 @@ import { integrationRouter } from './modules/integration/index.js';
 import { verificationRouter } from './modules/verification/index.js';
 import { adminRouter } from './modules/admin/index.js';
 import { qaRouter } from './modules/quality-assurance/index.js';
+import { attendancePolicyRouter } from './modules/eligibility/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -24,6 +25,7 @@ import { qaRouter } from './modules/quality-assurance/index.js';
  *   /faculties   - faculty-wide oversight      (faculty module)
  *   /admin       - faculties and invitations   (admin module)
  *   /quality-assurance - standards, audits, CAPA (quality-assurance module)
+ *   /attendance-policy - minimum attendance to sit exams (eligibility module)
  */
 export const apiRouter: Router = Router();
 
@@ -39,6 +41,7 @@ apiRouter.use('/departments', departmentRouter);
 apiRouter.use('/faculties', facultyRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/quality-assurance', qaRouter);
+apiRouter.use('/attendance-policy', attendancePolicyRouter);
 /** Face check-in: /students/me/face*, /units/:id/students/:id/face, /sessions/:id/face/*. */
 apiRouter.use(verificationRouter);
 /** Calls from SMARTTT (API key, not a user session). */

@@ -3,7 +3,9 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as facultyController from './faculty.controller.js';
-import { createDepartmentSchema, departmentIdParamSchema, inviteDepartmentOfficerSchema, lecturerUserIdParamSchema, officerUserIdParamSchema, provideCourseSchema, studentUserIdParamSchema, timekeepingQuerySchema } from './faculty.schema.js';
+import { facultyEligibilityQuerySchema } from '../eligibility/eligibility.schema.js';
+import { facultyResultsQuerySchema, roundIdParamSchema } from '../quality-assurance/evaluation.schema.js';
+import { createDepartmentSchema, departmentIdParamSchema, inviteDepartmentOfficerSchema, lecturerUserIdParamSchema, officerUserIdParamSchema, provideCourseSchema, studentUserIdParamSchema, timekeepingQuerySchema, moveLecturerSchema, placementQuerySchema } from './faculty.schema.js';
 
 /**
  * Every route is gated to the FACULTY role, and every handler resolves the
@@ -156,4 +158,50 @@ facultyRouter.post(
   asyncHandler(requireAuth('FACULTY')),
   validate({ params: officerUserIdParamSchema }),
   asyncHandler(facultyController.deactivateOfficer),
+);
+
+/**
+ * Lecturers to place in a department: every unassigned lecturer (no SMARTTT
+ * department name matched), then the faculty's own staff. `?q=&unassigned=true`
+ */
+facultyRouter.get(
+  '/lecturer-placement',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ query: placementQuerySchema }),
+  asyncHandler(facultyController.placementLecturers),
+);
+
+/**
+ * Places a lecturer in one of the faculty's departments, or moves them between
+ * its departments. 404 unless the lecturer is unassigned or in the faculty;
+ * 400 unless the department is the faculty's. Units stay with their owners.
+ */
+facultyRouter.patch(
+  '/lecturers/:lecturerUserId/department',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: lecturerUserIdParamSchema, body: moveLecturerSchema }),
+  asyncHandler(facultyController.moveLecturer),
+);
+
+/** Exam eligibility across the faculty's units. `?departmentId=&all=true` */
+facultyRouter.get(
+  '/eligibility',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ query: facultyEligibilityQuerySchema }),
+  asyncHandler(facultyController.eligibility),
+);
+
+/** Student course evaluation rounds that have opened. */
+facultyRouter.get(
+  '/evaluations',
+  asyncHandler(requireAuth('FACULTY')),
+  asyncHandler(facultyController.evaluations),
+);
+
+/** One round's results across the faculty's units. `?departmentId=` */
+facultyRouter.get(
+  '/evaluations/:id',
+  asyncHandler(requireAuth('FACULTY')),
+  validate({ params: roundIdParamSchema, query: facultyResultsQuerySchema }),
+  asyncHandler(facultyController.evaluationResults),
 );

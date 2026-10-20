@@ -2,6 +2,8 @@ import { AppError } from '../../common/errors/index.js';
 import { deleteAccount } from '../auth/auth.deletion.js';
 import type { RegistrationContext } from '../auth/auth.service.js';
 import * as departmentRepository from './department.repository.js';
+import { eligibilityService } from '../eligibility/index.js';
+import { evaluationService } from '../quality-assurance/index.js';
 
 /**
  * Department oversight: what one department's officer may see about the
@@ -14,9 +16,12 @@ import * as departmentRepository from './department.repository.js';
  *    never from a query parameter, and never from the account cached on the
  *    session. Nothing an officer sends can widen what they see.
  *
- * 2. **Ownership is checked before anything is returned.** The only endpoint
- *    that names another user (the lecturer drill-down) resolves that
- *    lecturer's own `department_id` first and refuses unless it matches.
+ * 2. **Ownership is checked before anything is returned.** The lecturer
+ *    drill-down refuses unless the lecturer is the department's own staff or
+ *    teaches one of its units; deleting an account needs the former.
+ *
+ * Teaching (units, students, sessions, rates) belongs to the department that
+ * owns the unit, whoever teaches it — see `department.repository.ts`.
  *
  * Everything here is read-only, so nothing is audited — the same precedent the
  * reporting module's GET endpoints set. An officer reading their department's
@@ -114,7 +119,13 @@ export interface DepartmentLecturerDto {
   userId: string;
   fullName: string;
   staffNumber: string;
+  /** False for a lecturer from another department (or unassigned) who teaches one of this department's units. */
+  isOwnStaff: boolean;
+  homeDepartmentName: string | null;
+  /** This department's units only; every figure below is over these. */
   unitsTaught: number;
+  /** Units the lecturer teaches for other departments. */
+  unitsElsewhere: number;
   studentsTaught: number;
   avgAttendanceRate: number;
   sessionsHeld: number;
@@ -131,7 +142,10 @@ export async function listLecturers(userId: string): Promise<DepartmentLecturerD
     userId: r.userId,
     fullName: r.fullName,
     staffNumber: r.staffNumber,
+    isOwnStaff: r.homeDepartmentId === department.departmentId,
+    homeDepartmentName: r.homeDepartmentName,
     unitsTaught: r.unitsTaught,
+    unitsElsewhere: r.unitsElsewhere,
     studentsTaught: r.studentsTaught,
     avgAttendanceRate: round1(r.avgAttendanceRate),
     sessionsHeld: r.sessionsHeld,
@@ -209,15 +223,14 @@ export async function getLecturerDetail(
 ): Promise<DepartmentLecturerDetailDto> {
   const department = await requireOwnDepartment(userId);
 
-  const lecturerDepartmentId = await departmentRepository.findLecturerDepartmentId(lecturerUserId);
-  if (lecturerDepartmentId !== department.departmentId) {
+  if (!(await departmentRepository.isLecturerInDepartmentScope(department.departmentId, lecturerUserId))) {
     throw AppError.notFound('No such lecturer in your department.');
   }
 
   const [header, units, sessions] = await Promise.all([
     departmentRepository.findLecturerHeader(lecturerUserId),
     departmentRepository.listUnits(department.departmentId, lecturerUserId),
-    departmentRepository.listLecturerSessions(lecturerUserId, DRILLDOWN_SESSION_LIMIT),
+    departmentRepository.listLecturerSessions(department.departmentId, lecturerUserId, DRILLDOWN_SESSION_LIMIT),
   ]);
   if (!header) throw AppError.notFound('No such lecturer in your department.');
 
@@ -328,8 +341,8 @@ export async function listTimekeeping(
 /**
  * Course provisioning, the department's half: faculty has already provided
  * the course (`faculty.service.ts provideCourse`); from here the department
- * decides how many lecturer-taught segments it needs and assigns its own
- * lecturers to them. Allocating is immediate — no confirmation step, no
+ * decides how many lecturer-taught segments it needs and assigns lecturers to
+ * them — its own, or borrowed from another department. Allocating is immediate — no confirmation step, no
  * ERP check — and reuses `units.base_code`/`class_group`, so the resulting
  * unit is a completely ordinary one to every other module in this codebase.
  */
@@ -382,20 +395,20 @@ export interface AllocatedUnitDto {
 /**
  * POST /departments/courses/:offeringId/segments
  *
- * The lecturer must belong to this department — the same ownership rule the
- * oversight endpoints use, now enforced on a write: a department can only
- * assign its own staff, never borrow another department's lecturer.
+ * Any active lecturer may be allocated, from this department or another: the
+ * unit belongs to the offering's department either way, so borrowing a Basic
+ * Sciences lecturer to teach a Computer Science unit keeps the unit (and its
+ * figures) in Computer Science. The lecturer's home department is unchanged.
  */
 export async function allocateLecturer(
   userId: string,
   offeringId: string,
   lecturerUserId: string,
 ): Promise<AllocatedUnitDto> {
-  const department = await requireOwnOffering(userId, offeringId);
+  await requireOwnOffering(userId, offeringId);
 
-  const lecturerDepartmentId = await departmentRepository.findLecturerDepartmentId(lecturerUserId);
-  if (lecturerDepartmentId !== department.departmentId) {
-    throw AppError.badRequest('That lecturer is not in your department.');
+  if (!(await departmentRepository.isActiveLecturer(lecturerUserId))) {
+    throw AppError.badRequest('No such lecturer.');
   }
 
   const result = await departmentRepository.allocateLecturerToSegment(offeringId, lecturerUserId);
@@ -405,11 +418,20 @@ export async function allocateLecturer(
   return { unitId: result.unitId, code: result.code };
 }
 
+/** Most lecturers the allocation picker returns at once. */
+const LECTURER_SEARCH_LIMIT = 25;
+
+/** GET /departments/lecturer-directory?q= — who can be allocated to a section, own staff first. */
+export async function searchLecturers(userId: string, search?: string): Promise<departmentRepository.LecturerDirectoryRow[]> {
+  const department = await requireOwnDepartment(userId);
+  return departmentRepository.searchLecturers(department.departmentId, search?.trim() || null, LECTURER_SEARCH_LIMIT);
+}
+
 /**
  * DELETE /departments/lecturers/:lecturerUserId
  *
- * Same ownership rule as the drill-down: 404 unless the lecturer is in the
- * caller's department. The account is anonymised (auth.deletion.ts); the
+ * 404 unless the lecturer is the caller's department's own staff: borrowing a
+ * lecturer to teach a unit gives no say over their account. The account is anonymised (auth.deletion.ts); the
  * units and sessions they ran stay in the department's figures.
  */
 export async function deleteLecturer(userId: string, lecturerUserId: string, context: RegistrationContext): Promise<void> {
@@ -432,4 +454,22 @@ export async function deleteStudent(userId: string, studentUserId: string, conte
     throw AppError.notFound('No such student in your department.');
   }
   await deleteAccount(studentUserId, 'STUDENT', { userId, kind: 'DEPARTMENT' }, context);
+}
+
+/** GET /departments/eligibility — students at risk of, or already below, the minimum attendance on the department's units. */
+export async function getEligibility(userId: string, includeAll = false): Promise<eligibilityService.EligibilityReportDto> {
+  const department = await requireOwnDepartment(userId);
+  return eligibilityService.buildReport({ departmentId: department.departmentId }, { includeAll });
+}
+
+/** GET /departments/evaluations — evaluation rounds that have opened; results are per department. */
+export async function listEvaluations(userId: string): Promise<evaluationService.RoundDto[]> {
+  await requireOwnDepartment(userId);
+  return evaluationService.listStartedRounds();
+}
+
+/** GET /departments/evaluations/:id — the round's results for units this department owned when students answered. */
+export async function getEvaluationResults(userId: string, roundId: string): Promise<evaluationService.RoundResultsDto> {
+  const department = await requireOwnDepartment(userId);
+  return evaluationService.getResults(roundId, { departmentId: department.departmentId });
 }

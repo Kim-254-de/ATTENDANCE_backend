@@ -58,7 +58,7 @@ The attendance-rate trend reuses `department.repository.ts`'s per-session
 rate shape exactly (`attendance_records` ÷ `ACTIVE` `unit_allocations` per
 session, averaged), widened from one officer's department to every
 department or the filtered subset, bucketed by `date_trunc(groupBy,
-scheduled_start_at)`. A department's QA-dashboard figure therefore reconciles
+scheduled_start_at)`, each session under the department that owns its unit. A department's QA-dashboard figure therefore reconciles
 with what that department's own officer sees.
 
 ## Endpoints
@@ -84,13 +84,62 @@ with what that department's own officer sees.
 | `GET` | `/api/v1/quality-assurance/dashboard/export.{csv,pdf}` | Dashboard report |
 | `GET` | `/api/v1/quality-assurance/departments` | `{id, name}[]` — every department, for the audit-target picker |
 | `GET` | `/api/v1/quality-assurance/faculties` | `{id, name}[]` — every faculty, for the audit-target picker |
+| `GET`/`PUT` | `/api/v1/quality-assurance/attendance-policy` | The minimum attendance to sit exams, and the at-risk margin; PUT is audited |
+| `GET` | `/api/v1/quality-assurance/eligibility` | `?departmentId=&facultyId=&all=true` — exam eligibility, institution-wide unless narrowed |
+| `GET`/`POST` | `/api/v1/quality-assurance/evaluations` | Student course evaluation rounds |
+| `GET`/`PATCH`/`DELETE` | `/api/v1/quality-assurance/evaluations/:id` | One round; questions fixed (409) and DELETE refused (409) once anyone has answered |
+| `POST` | `/api/v1/quality-assurance/evaluations/:id/close` | Ends the round now |
+| `GET` | `/api/v1/quality-assurance/evaluations/:id/results` | `?departmentId=&facultyId=` |
 
 Every route requires `requireAuth('QA')`.
 
+## Exam eligibility
+
+Each Senate sets its own minimum attendance to sit an exam: two-thirds at
+some universities, 75% at others. So the minimum is one institution-wide
+setting, `attendance_policy` (`db/migrations/034_attendance_policy.sql`),
+rather than a constant. It defaults to 75% with a 10-point at-risk margin.
+QA edits it, every signed-in user reads it at `GET /attendance-policy`, and
+each change is audited as `ATTENDANCE_POLICY_UPDATED` with before and after.
+
+Each active (student, unit) pair is judged separately against the classes
+held so far: below the minimum is `NOT_ELIGIBLE`, below minimum + margin is
+`AT_RISK`, anything higher is `ELIGIBLE`, and a unit with no classes yet is
+`NOT_YET_MEASURED`. The comparison uses the unrounded ratio. Department and
+faculty officers get the same report for their own scope
+(`/departments/eligibility`, `/faculties/eligibility`). The code is in
+`src/modules/eligibility`.
+
+## Course evaluations
+
+QA opens a **round**: a title, a window (`opensAt`–`closesAt`), a minimum
+number of responses, and questions that are either a 1–5 `RATING` or a free
+`TEXT` comment. While a round is open, each student evaluates each unit they
+are actively on, once (`GET`/`POST /students/me/evaluations...`). QA sees
+every result. A faculty officer sees their faculty's results and a department
+officer their department's, matched on the department that owned the unit
+when the student answered (`/faculties/evaluations`, `/departments/evaluations`).
+Officers cannot see rounds that have not opened yet.
+
+Anonymity is built into the schema (`db/migrations/035_qa_course_evaluations.sql`):
+
+- `qa_evaluation_submissions` records only that a student evaluated a unit,
+  which is what stops a second submission.
+- The responses and answers have no student column and no timestamp, so
+  they cannot be joined back to a submission by id or by time.
+- Comments come back in alphabetical order, never in the order they were
+  written.
+- A unit's ratings and comments stay hidden until it has the round's
+  `minResponses` responses (default 3). The scope-wide `overall` figures
+  follow the same rule.
+
+Once anyone has answered, a round's questions are fixed, because changing a
+question would change what the earlier answers mean. Such a round can only
+be closed, not deleted.
+
 ## Not built
 
-No EQA account type — see "Scoping" above. No course evaluations, program/
-self-assessment reviews, accreditation tracker, document repository, or QA
+No EQA account type — see "Scoping" above. No program/self-assessment reviews, accreditation tracker, document repository, or QA
 committee meeting minutes: those are a later phase, deliberately left off
 this one.
 

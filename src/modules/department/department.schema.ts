@@ -45,3 +45,11 @@ export const allocateLecturerSchema = z
   })
   .strict();
 export type AllocateLecturerInput = z.infer<typeof allocateLecturerSchema>;
+
+/** GET /departments/lecturer-directory */
+export const lecturerSearchQuerySchema = z
+  .object({
+    q: z.string().trim().max(100).optional(),
+  })
+  .strict();
+export type LecturerSearchQuery = z.infer<typeof lecturerSearchQuerySchema>;
