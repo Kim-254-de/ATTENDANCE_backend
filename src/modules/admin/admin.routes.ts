@@ -3,7 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as adminController from './admin.controller.js';
-import { adminInvitationSchema, createFacultySchema, officerUserIdParamSchema } from './admin.schema.js';
+import { adminInvitationSchema, createFacultySchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
 
 /** Every route is gated to the ADMIN role. */
 export const adminRouter: Router = Router();
@@ -50,4 +50,21 @@ adminRouter.post(
   asyncHandler(requireAuth('ADMIN')),
   validate({ params: officerUserIdParamSchema }),
   asyncHandler(adminController.deactivate),
+);
+
+/** Units still PENDING_VERIFICATION (the timetable doesn't list their lecturer), oldest first. */
+adminRouter.get('/units/pending', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.pendingUnits));
+
+/**
+ * Confirms the lecturer is allocated to teach the unit: PENDING_VERIFICATION -> VERIFIED.
+ *
+ * 200 - { unitId, code, status: 'VERIFIED' }
+ * 404 - no such unit
+ * 409 - already verified
+ */
+adminRouter.post(
+  '/units/:unitId/verify',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ params: unitIdParamSchema }),
+  asyncHandler(adminController.verifyUnit),
 );

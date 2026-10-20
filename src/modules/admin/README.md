@@ -56,6 +56,8 @@ The outcome is logged with the prefix `bootstrap admin:`.
 | `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }` or `{ role: 'faculty', facultyId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
 | `POST` | `/api/v1/admin/officers/:userId/resend` | Re-sends a pending invitation; the old link stops working |
 | `POST` | `/api/v1/admin/officers/:userId/deactivate` | Removes access: DEACTIVATED, signed out, invitation withdrawn. Not oneself |
+| `GET` | `/api/v1/admin/units/pending` | Units still `PENDING_VERIFICATION` (the timetable doesn't list their lecturer), oldest first, with lecturer and weekly slots |
+| `POST` | `/api/v1/admin/units/:unitId/verify` | Confirms the lecturer-unit assignment: `VERIFIED`, audited as `UNIT_VERIFIED`. 404 unknown, 409 already verified |
 
 All are `ADMIN` only. Invitations are limited to `OFFICER_EMAIL_DOMAINS` when
 it is set. Re-inviting a deactivated person (same role) re-opens their account.

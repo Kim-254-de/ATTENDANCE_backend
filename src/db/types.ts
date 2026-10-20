@@ -89,10 +89,8 @@ export type GeofenceResult = (typeof GeofenceResult)[keyof typeof GeofenceResult
 /**
  * How a student proves they are the one present. A lecturer ticks any
  * combination when activating a class (QR and FACE when none are chosen); a
- * check-in by a method the class did not enable is refused. QR, FACE and CARD
- * are built; FINGERPRINT is accepted in the session's list so the UI can offer
- * all four, but nothing can check in with it yet
- * (src/modules/verification/README.md). Stored per record in
+ * check-in by a method the class did not enable is refused. All four are
+ * built (a barcode ID card records as CARD). Stored per record in
  * attendance_records.verification_method.
  */
 export const VerificationMethod = {

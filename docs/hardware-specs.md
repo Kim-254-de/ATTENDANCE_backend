@@ -170,10 +170,10 @@ Frontend (built): the lecturer's "Link a terminal" button on the live session
 screen (6.2) and the department portal's Terminals and Fingerprint enrolment
 pages (6.3).
 
-Terminal software (built, alongside the backend and frontend repos):
-`ATTENDANCE_terminal_android` (Option A; fingerprint reader is a pluggable
+Terminal software (built, in this repo):
+`terminals/android` (Option A; fingerprint reader is a pluggable
 interface with a simulated stand-in until the handheld model is chosen) and
-`ATTENDANCE_terminal_esp32` (Option B: R503 + GM65 + OLED, Wi-Fi only).
+`terminals/esp32` (Option B: R503 + GM65 + OLED, Wi-Fi only).
 
 ### 6.1 Barcode check-in (built: `POST /attendance/barcode-check-in`, see `card-check-in.md` §4)
 - New terminal route that accepts the registration number as printed

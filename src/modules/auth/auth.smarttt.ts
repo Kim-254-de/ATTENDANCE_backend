@@ -52,7 +52,7 @@ export async function signInWithSmarttt(identifier: string, password: string, co
     throw new AppError(
       503,
       ErrorCode.SMARTTT_UNAVAILABLE,
-      'Sign-in is unavailable right now: SMARTTT could not be reached. Try again in a minute, or sign in with a passkey.',
+      'Sign-in is unavailable right now: SMARTTT could not be reached. Try again in a minute.',
     );
   }
 

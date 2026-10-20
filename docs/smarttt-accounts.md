@@ -37,7 +37,8 @@ Against an older SMARTTT, attendance logs an error and answers sign-ins with
    - `{"authenticated": false}` → 401 `INVALID_CREDENTIALS`. If the
      identifier matched a local account, it counts towards that account's lock.
    - Network error, wrong key, unreadable answer → 503 `SMARTTT_UNAVAILABLE`.
-     Nobody is let in on an unanswered check. Passkeys still work.
+     Nobody is let in on an unanswered check. (Passkeys are not a way round
+     this: they are added to an account that is already signed in.)
 4. The SMARTTT account must be usable for attendance, or the sign-in is refused
    with 403 `SMARTTT_ACCOUNT_INCOMPLETE` and a message saying what to fix:
    - role is `student` or `lecturer`;

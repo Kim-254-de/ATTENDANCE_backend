@@ -90,3 +90,28 @@ export async function resendInvitation(userId: string, actor: Actor, context: Re
 export async function deactivate(userId: string, actor: Actor, context: RegistrationContext): Promise<void> {
   await invitationService.deactivate(await requireOfficer(userId), actor.userId, context);
 }
+
+/** GET /admin/units/pending — lecturer-unit assignments the timetable could not confirm. */
+export async function listPendingUnits(): Promise<adminRepository.PendingUnitRow[]> {
+  return adminRepository.listPendingUnits();
+}
+
+/**
+ * POST /admin/units/:unitId/verify — confirms the lecturer is allocated to the
+ * unit, so they can activate classes for it. 409 when it is already verified.
+ */
+export async function verifyUnit(unitId: string, actor: Actor, context: RegistrationContext): Promise<{ unitId: string; code: string; status: 'VERIFIED' }> {
+  const result = await adminRepository.verifyUnit(unitId);
+  if (!result) throw AppError.notFound('No such unit.');
+  if (!result.verified) throw AppError.conflict(`${result.code} is already verified.`);
+  await auditService.record({
+    action: 'UNIT_VERIFIED',
+    outcome: 'SUCCESS',
+    userId: actor.userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { unitId, unitCode: result.code, lecturerUserId: result.lecturerUserId },
+  });
+  return { unitId, code: result.code, status: 'VERIFIED' };
+}

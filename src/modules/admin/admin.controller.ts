@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
-import type { AdminInvitationInput, CreateFacultyInput, OfficerUserIdParam } from './admin.schema.js';
+import type { AdminInvitationInput, CreateFacultyInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
 import * as adminService from './admin.service.js';
 
 /** HTTP in and out only. */
@@ -47,4 +47,15 @@ export async function deactivate(req: Request, res: Response): Promise<void> {
   const { userId } = req.params as unknown as OfficerUserIdParam;
   await adminService.deactivate(userId, actor(req), context(req));
   res.status(204).end();
+}
+
+/** GET /api/v1/admin/units/pending */
+export async function pendingUnits(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.listPendingUnits());
+}
+
+/** POST /api/v1/admin/units/:unitId/verify */
+export async function verifyUnit(req: Request, res: Response): Promise<void> {
+  const { unitId } = req.params as unknown as UnitIdParam;
+  sendSuccess(res, await adminService.verifyUnit(unitId, actor(req), context(req)));
 }

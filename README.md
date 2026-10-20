@@ -4,8 +4,9 @@ REST API for the Smart Attendance System. Built for production use: validated
 configuration, structured logging, an audit trail, and a registration flow
 gated on the institutional ERP.
 
-**Status:** lecturer registration is implemented. Every other module is a
-documented placeholder.
+**Status:** every module under `src/modules/` is built and mounted in
+`src/routes.ts`; each has its own README. Reporting is the thinnest (no PDF
+export yet).
 
 ---
 
@@ -67,7 +68,7 @@ live, change `ERP_BASE_URL`, `ERP_STAFF_LOOKUP_PATH`, `ERP_AUTH_SCHEME`, `ERP_AP
 
 ```bash
 cp .env.example .env               # then fill in secrets; ERP block below is for the mock
-npm run db:up                      # Postgres in Docker (docker-compose.yml)
+docker compose up -d db           # Postgres in Docker (docker-compose.yml)
 npm run db:migrate                 # creates the tables in db/migrations/ (the API never does this itself)
 
 cd mock-erp && cp .env.example .env && npm install && npm start   # http://localhost:4100 (creates + seeds erp_mock)
@@ -171,21 +172,27 @@ src/
 ├── middleware/
 │   ├── request-context  Correlation id on every request
 │   ├── validate         Zod validation that replaces req.body with parsed output
-│   ├── rate-limit       Global / registration / sign-in buckets
+│   ├── rate-limit       Global / sign-in / check-in / terminal buckets, counted in Postgres (rate-limit-store)
 │   └── error-handler    The only place an error becomes a response
 ├── integrations/
-│   └── erp/             Institutional ERP client — see its own README
+│   ├── erp/             Institutional ERP client — see its own README
+│   └── smarttt/         University timetable service: accounts, units, rosters
 ├── modules/
-│   ├── auth/            Lecturer registration + email verification   [BUILT]
-│   ├── audit/           Append-only audit trail                      [BUILT]
-│   ├── notification/    Outbound email (no provider wired yet)       [STUB]
-│   ├── lecturer/        Profile management                           [PLACEHOLDER]
-│   ├── student/         Student registration                         [PLACEHOLDER]
-│   ├── unit/            Units and allocations                        [PLACEHOLDER]
-│   ├── session/         Sessions and QR issuance                     [PLACEHOLDER]
-│   ├── attendance/      Check-in and records                         [PLACEHOLDER]
-│   ├── verification/    Face check-in: consent, enroll, terminal     [BUILT]
-│   └── reporting/       Summaries and exports                        [PLACEHOLDER]
+│   ├── auth/            SMARTTT sign-in, sessions, invitations, passkeys, password reset
+│   ├── admin/           Faculties, officer invitations, unit verification
+│   ├── faculty/         Faculty-wide oversight and writes
+│   ├── department/      Department-wide oversight, course offerings
+│   ├── lecturer/        The lecturer's profile, overview, students
+│   ├── student/         The student's units and attendance
+│   ├── unit/            Units, SMARTTT sync, rosters, verification status
+│   ├── session/         Classes, rotating QR, geofence
+│   ├── attendance/      Check-in (QR, card, barcode, fingerprint) and records
+│   ├── verification/    Face check-in: consent, enroll, terminal
+│   ├── terminal/        Portable department terminals and fingerprint enrolment
+│   ├── reporting/       Summaries and CSV exports (no PDF yet)
+│   ├── integration/     Endpoints SMARTTT calls (API key)
+│   ├── notification/    Outbound email through Resend (logged without a key)
+│   └── audit/           Append-only audit trail
 ├── routes.ts            Mounts module routers under /api/v1
 ├── app.ts               Express wiring (testable without a port)
 └── server.ts            Boot, listen, graceful shutdown
@@ -193,12 +200,29 @@ src/
 
 Each module follows the same five-file shape — `schema` → `routes` →
 `controller` → `service` → `repository`. Business rules live in the service;
-controllers only translate HTTP. Each placeholder folder has a README naming
-the files to add.
+controllers only translate HTTP.
+
+Alongside `src/`, three folders are separate programs that are not part of the
+API build:
+
+| Folder | What it is | How it ships |
+|---|---|---|
+| `mock-erp/` | Stand-in for the university ERP | Run locally (see above) |
+| `face-service/` | Face embeddings (Python) | Its own container (`docker-compose.yml`) |
+| `terminals/android`, `terminals/esp32` | Check-in terminal app and firmware (`docs/terminals.md`) | Installed on devices, never deployed: build the APK or flash the firmware, see each README |
+
+The API's lint, typecheck and tests skip them. On Render, add `terminals/**` to
+the service's ignored build paths so a terminal-only change does not redeploy
+the API.
 
 ---
 
 ## Lecturer registration
+
+> With `SMARTTT_ACCOUNTS` on (the deployed setting), this route and student
+> registration answer **410**: lecturers and students sign in with their SMARTTT
+> account instead, and the account is created on first sign-in
+> (`docs/smarttt-accounts.md`). What follows applies only with it off.
 
 `POST /api/v1/auth/lecturer/register`
 
@@ -313,9 +337,10 @@ how to point it at the real endpoint.
 
 ## Database
 
-This service **connects to an existing database**. It does not create it,
-migrate it, or own its schema — there is no migration tooling in this repo on
-purpose.
+This service **connects to an existing database**; it does not create it.
+The schema is `db/migrations/*.sql`, applied in filename order, once each, by
+`npm run db:migrate` (`db/migrate.mjs`, tracked in `schema_migrations`). The
+API never migrates on its own. A new migration takes the next unused number.
 
 [`docs/expected-schema.md`](docs/expected-schema.md) documents the tables and
 columns the queries expect. At boot the service checks those tables exist and

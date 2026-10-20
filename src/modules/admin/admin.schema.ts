@@ -19,3 +19,8 @@ export const officerUserIdParamSchema = z
   .object({ userId: z.string().uuid('Not a valid identifier.') })
   .strict();
 export type OfficerUserIdParam = z.infer<typeof officerUserIdParamSchema>;
+
+export const unitIdParamSchema = z
+  .object({ unitId: z.string().uuid('Not a valid identifier.') })
+  .strict();
+export type UnitIdParam = z.infer<typeof unitIdParamSchema>;

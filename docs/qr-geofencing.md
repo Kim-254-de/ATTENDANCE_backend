@@ -12,7 +12,7 @@ portal: `ATTENDANCE_fronted`.
 | 5. Student-app specification | Docs | ✅ Done ([`student-app-checkin.md`](student-app-checkin.md)) |
 | Extra: check-in rate limiting | Backend | ✅ Done |
 | 6.0 Backend additions for the portal (B1-B3) | Backend | ✅ Done |
-| **6. Lecturer portal** | **Frontend** | ⏳ **To do** (section 6 below) |
+| **6. Lecturer portal** | **Frontend** | 🟡 Partly done: activation and the phone hand-off are built; distances in the attendee list and reports are not (section 6) |
 | 7. Tests | Backend | ✅ Done (written with each phase) · frontend tests are part of phase 6 |
 
 ---
@@ -108,11 +108,15 @@ backstop (`CHECKIN_RATE_LIMIT_*` in `.env.example`).
 
 ---
 
-## Phase 6: Lecturer portal (frontend) ⏳
+## Phase 6: Lecturer portal (frontend) 🟡
 
-**Why this is urgent:** since Phase 3, activating a class in an **unsurveyed
-room fails with 422**, because the portal does not send a location yet. Until
-6.1 ships, the only workaround is sending `geofence: 'OFF'`.
+**Status (2026-10-20).** Built differently from the plan below: a class in an
+unsurveyed room starts in `AWAITING_LOCATION` with no code showing, and the
+lecturer opens Share location on their phone (`ShareLocationPage.tsx`, which
+calls `PATCH /sessions/:id/geofence`) or turns the check off. The live page
+polls until the fence is set. **Not built yet:** showing `distanceMetres` /
+`geofenceResult` per attendee (6.2) and `geofenceMode` in reports (6.3). The
+plan below is kept for those parts.
 
 ### 6.0 Backend additions the portal needs ✅ done
 

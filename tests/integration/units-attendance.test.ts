@@ -58,7 +58,8 @@ const erpStudents: Record<string, { status: string; fullName: string } | 'DOWN'>
  * "not found on the timetable"). Keyed by normalised code; tests assign a
  * lecturer's staff number here to exercise the auto-verify path.
  */
-const erpCourseStaff: Record<string, string | null | 'DOWN' | 'NOT_FOUND'> = {};
+/** A staff number, null for none, or the sentinels 'DOWN' and 'NOT_FOUND'. */
+const erpCourseStaff: Record<string, string | null> = {};
 
 /**
  * Who the ERP currently enrols in each course — a unit's real roster, keyed
@@ -802,7 +803,7 @@ describe('geofence', () => {
       return { lecturer, student, unit, room, sessionId, qr, checkIn };
     }
 
-    const record = async (sessionId: string) => (await pool.query(
+    const record = async (sessionId: string) => (await pool.query<{ geofence_result: string; distance_m: number; location_accuracy_m: number }>(
       `SELECT geofence_result, distance_m, location_accuracy_m FROM attendance_records WHERE session_id = $1`, [sessionId])).rows[0];
     const rejections = async (sessionId: string) => (await pool.query<{ reason: string; metadata: Record<string, unknown> }>(
       `SELECT reason, metadata FROM audit_logs WHERE action = 'ATTENDANCE_SCAN_REJECTED' AND metadata->>'sessionId' = $1 ORDER BY created_at`,
@@ -816,7 +817,7 @@ describe('geofence', () => {
       expect(body<{ distanceMetres: number }>(res).data.distanceMetres).toBeCloseTo(12, 0);
       const row = await record(sessionId);
       expect(row).toMatchObject({ geofence_result: 'INSIDE', location_accuracy_m: 8 });
-      expect(row.distance_m).toBeCloseTo(12, 0);
+      expect(row!.distance_m).toBeCloseTo(12, 0);
 
       const { rows: [columns] } = await pool.query<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM information_schema.columns

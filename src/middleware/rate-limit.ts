@@ -3,19 +3,21 @@ import type { Request, RequestHandler, Response } from 'express';
 import { env, isTest } from '../config/env.js';
 import { ErrorCode } from '../common/errors/index.js';
 import type { ErrorEnvelope } from '../common/http/index.js';
+import { PostgresRateLimitStore } from './rate-limit-store.js';
 
 /**
  * Throttling (README section 4.1). Registration and sign-in get their own,
  * much tighter buckets than general traffic: registration because each attempt
  * costs an outbound ERP call, sign-in to blunt credential stuffing.
  *
- * Each limiter has its own store, so the buckets are already independent —
- * no custom key generator is needed, and the built-in one handles IPv6
+ * Each limiter has its own store, named so its rows in Postgres never mix
+ * with another's (rate-limit-store.ts), so no custom key generator is needed, and the built-in one handles IPv6
  * correctly (a hand-rolled `req.ip` key would let an attacker rotate through
  * a /64 to sidestep the limit).
  */
 
 function buildLimiter(
+  name: string,
   max: number,
   windowMs: number,
   message: string,
@@ -28,6 +30,11 @@ function buildLimiter(
     // does NOT disable the limiter - it rejects every request - hence `skip`.)
     skip: options.skip ?? (() => isTest),
     ...(options.keyGenerator ? { keyGenerator: options.keyGenerator } : {}),
+    // Shared by every instance. Tests keep the memory store: they have no database to spare
+    // for it, and the few that enforce limits build their own limiters.
+    ...(isTest ? {} : { store: new PostgresRateLimitStore(name) }),
+    // If the database is down the request will fail anyway; don't add a 500 from the limiter.
+    passOnStoreError: true,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     handler: (req: Request, res: Response) => {
@@ -70,6 +77,7 @@ export const isCheckInRequest = (req: Request): boolean =>
   req.method === 'POST' && (CHECK_IN_PATHS.has(req.path) || FACE_PATH.test(req.path) || TERMINAL_PATH.test(req.path));
 
 export const globalLimiter = buildLimiter(
+  'global',
   env.RATE_LIMIT_MAX_REQUESTS,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many requests. Please slow down and try again shortly.',
@@ -93,12 +101,14 @@ export function createCheckInLimiters(
   const skip = () => isTest && !options.enforceInTests;
   return {
     perIp: buildLimiter(
+      'check-in-ip',
       options.perIp ?? env.CHECKIN_RATE_LIMIT_PER_IP,
       windowMs,
       'Too many check-ins from this network right now. Wait a moment and scan again.',
       { skip },
     ),
     perStudent: buildLimiter(
+      'check-in-student',
       options.perStudent ?? env.CHECKIN_RATE_LIMIT_PER_STUDENT,
       windowMs,
       'Too many check-in attempts. Wait a few minutes before scanning again.',
@@ -120,6 +130,7 @@ export const checkInLimiters = createCheckInLimiters();
  * person, would stop it partway through a lecture.
  */
 export const faceLimiter = buildLimiter(
+  'face',
   env.FACE_RATE_LIMIT_PER_LECTURER,
   env.CHECKIN_RATE_LIMIT_WINDOW_MS,
   'Too many face check-in requests. Wait a moment and try again.',
@@ -127,12 +138,14 @@ export const faceLimiter = buildLimiter(
 );
 
 export const registrationLimiter = buildLimiter(
+  'registration',
   env.REGISTER_RATE_LIMIT_MAX,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many registration attempts from this device. Please try again later.',
 );
 
 export const loginLimiter = buildLimiter(
+  'login',
   env.LOGIN_RATE_LIMIT_MAX,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many sign-in attempts. Please wait before trying again.',
@@ -144,6 +157,7 @@ export const loginLimiter = buildLimiter(
  * inbox from any browser.
  */
 export const passwordResetLimiter = buildLimiter(
+  'password-reset',
   env.PASSWORD_RESET_RATE_LIMIT_MAX,
   env.RATE_LIMIT_WINDOW_MS,
   'Too many password reset requests. Please wait before trying again.',
@@ -154,6 +168,7 @@ export const passwordResetLimiter = buildLimiter(
  * terminal, not its address: see TERMINAL_PATH.
  */
 export const terminalLimiter = buildLimiter(
+  'terminal',
   env.TERMINAL_RATE_LIMIT_PER_DEVICE,
   env.CHECKIN_RATE_LIMIT_WINDOW_MS,
   'This terminal is sending too many requests. Wait a moment and try again.',
@@ -162,6 +177,7 @@ export const terminalLimiter = buildLimiter(
 
 /** Pairing, per address: the code is the only credential, so guesses are capped hard. */
 export const terminalPairLimiter = buildLimiter(
+  'terminal-pair',
   20,
   15 * 60 * 1000,
   'Too many pairing attempts. Wait 15 minutes and try again.',

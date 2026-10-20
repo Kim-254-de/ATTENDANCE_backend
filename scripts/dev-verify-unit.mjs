@@ -1,7 +1,7 @@
 // DEV ONLY. The unit's existence/schedule is already verified automatically against the
 // ERP timetable (unit.service.ts createUnit); this script stands in for the one part that
-// still needs a human — confirming the lecturer-unit assignment — since there's no admin
-// endpoint for that yet:
+// still needs a human — confirming the lecturer-unit assignment. Administrators do it on the
+// admin console's Units page (POST /admin/units/:unitId/verify); this is the local shortcut:
 //   npm run dev:verify-unit -- "COSC 100"
 // Moves a unit that landed PENDING_VERIFICATION to VERIFIED and writes an audit row.
 // Refuses to run against production.
