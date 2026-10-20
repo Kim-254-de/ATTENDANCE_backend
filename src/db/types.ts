@@ -169,6 +169,23 @@ export const AuditAction = {
   /** A reader's enrolment slot was bound to a student, or taken out of use. */
   STUDENT_FINGERPRINT_ENROLLED: 'STUDENT_FINGERPRINT_ENROLLED',
   STUDENT_FINGERPRINT_REVOKED: 'STUDENT_FINGERPRINT_REVOKED',
+  /** A department added a portable terminal, or issued it a fresh pairing code (which also cuts off its old key). */
+  TERMINAL_CREATED: 'TERMINAL_CREATED',
+  TERMINAL_PAIRING_ISSUED: 'TERMINAL_PAIRING_ISSUED',
+  /** A device presented its pairing code and received its key. */
+  TERMINAL_PAIRED: 'TERMINAL_PAIRED',
+  /** Label or capabilities changed, or the device was marked lost or retired. */
+  TERMINAL_UPDATED: 'TERMINAL_UPDATED',
+  TERMINAL_STATUS_CHANGED: 'TERMINAL_STATUS_CHANGED',
+  /** A terminal was linked to a class by scanning the lecturer's code, or let go of it. */
+  TERMINAL_LINKED: 'TERMINAL_LINKED',
+  TERMINAL_LINK_REFUSED: 'TERMINAL_LINK_REFUSED',
+  TERMINAL_UNLINKED: 'TERMINAL_UNLINKED',
+  /** A department queued a fingerprint enrolment for a terminal, or withdrew a queued command. */
+  FINGERPRINT_ENROLMENT_REQUESTED: 'FINGERPRINT_ENROLMENT_REQUESTED',
+  TERMINAL_COMMAND_CANCELLED: 'TERMINAL_COMMAND_CANCELLED',
+  /** A terminal reported it could not carry out a queued command. */
+  TERMINAL_COMMAND_FAILED: 'TERMINAL_COMMAND_FAILED',
   UNIT_CREATED: 'UNIT_CREATED',
   UNIT_VERIFIED: 'UNIT_VERIFIED',
   ATTENDANCE_RECORDED: 'ATTENDANCE_RECORDED',

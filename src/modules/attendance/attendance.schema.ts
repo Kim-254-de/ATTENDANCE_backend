@@ -46,6 +46,27 @@ export const cardCheckInSchema = z
 export type CardCheckInInput = z.infer<typeof cardCheckInSchema>;
 
 /**
+ * A student ID card's barcode, read at a terminal.
+ *
+ * The barcode holds the student's registration number as printed, e.g.
+ * `SCT211-0001/2022`, so unlike a card UID the `/` and `-` are part of the
+ * value and are kept. Matched upper-cased, as student_profiles stores it.
+ */
+export const barcodeCheckInSchema = z
+  .object({
+    sessionId: uuid,
+    barcode: z
+      .string()
+      .trim()
+      .min(3, 'Not a valid ID card.')
+      .max(64, 'Not a valid ID card.')
+      .regex(/^[A-Za-z0-9][A-Za-z0-9/._-]*$/, 'Not a valid ID card.')
+      .transform((value) => value.toUpperCase()),
+  })
+  .strict();
+export type BarcodeCheckInInput = z.infer<typeof barcodeCheckInSchema>;
+
+/**
  * A finger matched at a terminal.
  *
  * `fingerRef` is the reader's own enrolment reference for the template it

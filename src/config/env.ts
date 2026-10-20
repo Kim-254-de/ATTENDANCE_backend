@@ -188,6 +188,9 @@ const envSchema = z
     // Backstop against a flood from one address before sign-in is even checked.
     // Sized for the biggest hall retrying at once, not for one person.
     CHECKIN_RATE_LIMIT_PER_IP: z.coerce.number().int().positive().default(3000),
+    // Per paired terminal, over CHECKIN_RATE_LIMIT_WINDOW_MS: every read, heartbeat
+    // and link it sends. Two scans a second for five minutes, well past any queue.
+    TERMINAL_RATE_LIMIT_PER_DEVICE: z.coerce.number().int().positive().default(600),
 
     // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
     /** Consecutive wrong passwords before the account is temporarily locked. */
