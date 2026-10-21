@@ -231,6 +231,54 @@ describe('first sign-in with a SMARTTT account', () => {
   });
 });
 
+describe('a lecturer\'s department', () => {
+  const departmentOf = async (staffNumber: string) =>
+    (await pool.query<{ department_id: string | null }>(
+      `SELECT department_id FROM lecturer_profiles WHERE staff_number = $1`, [staffNumber])).rows[0]!.department_id;
+
+  it('is linked at first sign-in when SMARTTT\'s department name matches one here, ignoring case and spaces', async () => {
+    const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Mathematics') RETURNING id`);
+    const l = smartttLecturer();
+    l.staff!.department = '  MATHEMATICS ';
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(d!.id);
+  });
+
+  it('is left unassigned when no department has that name, instead of inventing one', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Department of Nowhere';
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBeNull();
+    const { rows } = await pool.query(`SELECT 1 FROM departments WHERE name = 'Department of Nowhere'`);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('is filled at a later sign-in once the department exists, and the lecturer\'s units follow', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Statistics';
+    const userId = body(await login(l.universityId!)).data!['id'] as string;
+    const { rows: [u] } = await pool.query<{ id: string; department_id: string | null }>(
+      `INSERT INTO units (code, name, lecturer_user_id, status) VALUES ('STA 100', 'Stats', $1, 'VERIFIED') RETURNING id, department_id`, [userId]);
+    expect(u!.department_id).toBeNull();
+
+    const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Statistics') RETURNING id`);
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(d!.id);
+    const { rows: [after] } = await pool.query<{ department_id: string }>(`SELECT department_id FROM units WHERE id = $1`, [u!.id]);
+    expect(after!.department_id).toBe(d!.id);
+  });
+
+  it('is never moved back by sign-in once someone has placed the lecturer elsewhere', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Mathematics';
+    await login(l.universityId!);
+    const { rows: [other] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Physics') RETURNING id`);
+    await pool.query(`UPDATE lecturer_profiles SET department_id = $1 WHERE staff_number = $2`, [other!.id, l.universityId]);
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(other!.id);
+  });
+});
+
 describe('later sign-ins', () => {
   it('find the same account by SMARTTT id, and copy SMARTTT\'s changed name, email and number', async () => {
     const s = smartttStudent();

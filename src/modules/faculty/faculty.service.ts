@@ -6,6 +6,9 @@ import { deleteAccount } from '../auth/auth.deletion.js';
 import { listOfficers } from '../auth/auth.invitation.repository.js';
 import type { RegistrationContext } from '../auth/auth.service.js';
 import * as facultyRepository from './faculty.repository.js';
+import * as placement from '../lecturer/lecturer.placement.js';
+import { eligibilityService } from '../eligibility/index.js';
+import { evaluationService } from '../quality-assurance/index.js';
 
 /**
  * Faculty oversight: what one faculty's officer may see about the teaching
@@ -135,9 +138,14 @@ export interface FacultyLecturerDto {
   userId: string;
   fullName: string;
   staffNumber: string;
-  departmentId: string;
-  departmentName: string;
+  /** Home department; null while unassigned, and possibly outside the faculty for a borrowed lecturer. */
+  departmentId: string | null;
+  departmentName: string | null;
+  /** False for a lecturer from elsewhere teaching one of the faculty's (or department's) units. */
+  isOwnStaff: boolean;
+  /** Units in scope only; every figure below is over these. */
   unitsTaught: number;
+  unitsElsewhere: number;
   studentsTaught: number;
   avgAttendanceRate: number;
   sessionsHeld: number;
@@ -151,7 +159,9 @@ const toLecturerDto = (r: facultyRepository.FacultyLecturerRow): FacultyLecturer
   staffNumber: r.staffNumber,
   departmentId: r.departmentId,
   departmentName: r.departmentName,
+  isOwnStaff: r.isOwnStaff,
   unitsTaught: r.unitsTaught,
+  unitsElsewhere: r.unitsElsewhere,
   studentsTaught: r.studentsTaught,
   avgAttendanceRate: round1(r.avgAttendanceRate),
   sessionsHeld: r.sessionsHeld,
@@ -270,8 +280,8 @@ export interface FacultyLecturerDetailDto {
     staffNumber: string;
     title: string | null;
     email: string;
-    departmentId: string;
-    departmentName: string;
+    departmentId: string | null;
+    departmentName: string | null;
   };
   units: FacultyUnitDto[];
   sessions: LecturerSessionDto[];
@@ -290,15 +300,14 @@ export async function getLecturerDetail(
 ): Promise<FacultyLecturerDetailDto> {
   const faculty = await requireOwnFaculty(userId);
 
-  const lecturerFacultyId = await facultyRepository.findLecturerFacultyId(lecturerUserId);
-  if (lecturerFacultyId !== faculty.facultyId) {
+  if (!(await facultyRepository.isLecturerInFacultyScope(faculty.facultyId, lecturerUserId))) {
     throw AppError.notFound('No such lecturer in your faculty.');
   }
 
   const [header, units, sessions] = await Promise.all([
     facultyRepository.findLecturerHeader(lecturerUserId),
     facultyRepository.listUnits(faculty.facultyId, { lecturerUserId }),
-    facultyRepository.listLecturerSessions(lecturerUserId, DRILLDOWN_SESSION_LIMIT),
+    facultyRepository.listLecturerSessions(faculty.facultyId, lecturerUserId, DRILLDOWN_SESSION_LIMIT),
   ]);
   if (!header) throw AppError.notFound('No such lecturer in your faculty.');
 
@@ -418,6 +427,14 @@ export async function listTimekeeping(
 /** POST /faculties/departments */
 export async function createDepartment(userId: string, name: string): Promise<{ departmentId: string; departmentName: string }> {
   const faculty = await requireOwnFaculty(userId);
+  // "Department of Computer Science" next to "Computer Science" is the same
+  // department spelled twice; refuse it before the exact-name constraint would.
+  const existing = await facultyRepository.findDepartmentForName(name);
+  if (existing) {
+    throw AppError.conflict(`"${name}" is the same department as "${existing.name}", which already exists.`, ErrorCode.CONFLICT, {
+      details: [{ field: 'name', message: `Already exists as "${existing.name}".` }],
+    });
+  }
   try {
     const department = await facultyRepository.createDepartment(faculty.facultyId, name);
     return { departmentId: department.id, departmentName: department.name };
@@ -490,8 +507,8 @@ export async function listCourses(userId: string): Promise<FacultyCourseDto[]> {
 /**
  * DELETE /faculties/lecturers/:lecturerUserId
  *
- * Same ownership rule as the drill-down: 404 unless the lecturer's department
- * is in the caller's faculty. The account is anonymised (auth.deletion.ts).
+ * 404 unless the lecturer's own department is in the caller's faculty:
+ * teaching one of its units gives the faculty no say over the account. The account is anonymised (auth.deletion.ts).
  */
 export async function deleteLecturer(userId: string, lecturerUserId: string, context: RegistrationContext): Promise<void> {
   const faculty = await requireOwnFaculty(userId);
@@ -565,4 +582,86 @@ export async function resendDepartmentOfficerInvitation(
 export async function deactivateDepartmentOfficer(userId: string, officerUserId: string, context: RegistrationContext): Promise<void> {
   const officer = await requireOwnDepartmentOfficer(userId, officerUserId);
   await invitationService.deactivate(officer, userId, context);
+}
+
+/** Most lecturers the placement list returns at once. */
+const PLACEMENT_LIMIT = 100;
+
+/**
+ * GET /faculties/lecturer-placement — lecturers the officer may place:
+ * every unassigned lecturer in the institution (they belong to no faculty
+ * yet, so any faculty may claim them), then the faculty's own staff.
+ */
+export async function listPlacementLecturers(
+  userId: string,
+  options: { search?: string; unassignedOnly?: boolean } = {},
+): Promise<placement.PlacementLecturerRow[]> {
+  const faculty = await requireOwnFaculty(userId);
+  return placement.listLecturers({
+    facultyId: faculty.facultyId,
+    unassignedOnly: options.unassignedOnly,
+    search: options.search?.trim() || null,
+    limit: PLACEMENT_LIMIT,
+  });
+}
+
+/**
+ * PATCH /faculties/lecturers/:lecturerUserId/department
+ *
+ * The lecturer must be unassigned or already in one of the faculty's
+ * departments (404 otherwise, as everywhere), and the target must be one of
+ * the faculty's departments. Moving a lecturer to another faculty is an
+ * administrator's call, since neither faculty officer sees both sides.
+ */
+export async function moveLecturer(
+  userId: string,
+  lecturerUserId: string,
+  departmentId: string,
+  context: RegistrationContext,
+): Promise<placement.MoveResult> {
+  const faculty = await requireOwnFaculty(userId);
+  const lecturer = await placement.findLecturer(lecturerUserId);
+  if (!lecturer || (lecturer.departmentId !== null && lecturer.facultyId !== faculty.facultyId)) {
+    throw AppError.notFound('No such lecturer in your faculty.');
+  }
+  const department = await placement.findDepartment(departmentId);
+  if (!department || department.facultyId !== faculty.facultyId) {
+    throw AppError.badRequest('Choose one of your faculty\'s departments.');
+  }
+  if (lecturer.departmentId === department.id) return { ...lecturer, learnedSpelling: null, alsoPlaced: 0 };
+  return placement.moveLecturer(lecturer, department, { userId, kind: 'FACULTY' }, context);
+}
+
+/** GET /faculties/eligibility — `?departmentId=` narrows to one of the faculty's departments (404 for any other). */
+export async function getEligibility(
+  userId: string,
+  options: { departmentId?: string; includeAll?: boolean } = {},
+): Promise<eligibilityService.EligibilityReportDto> {
+  const faculty = await requireOwnFaculty(userId);
+  if (options.departmentId && (await facultyRepository.findDepartmentFacultyId(options.departmentId)) !== faculty.facultyId) {
+    throw AppError.notFound('No such department in your faculty.');
+  }
+  return eligibilityService.buildReport(
+    options.departmentId ? { departmentId: options.departmentId } : { facultyId: faculty.facultyId },
+    { includeAll: options.includeAll },
+  );
+}
+
+/** GET /faculties/evaluations — evaluation rounds that have opened. */
+export async function listEvaluations(userId: string): Promise<evaluationService.RoundDto[]> {
+  await requireOwnFaculty(userId);
+  return evaluationService.listStartedRounds();
+}
+
+/** GET /faculties/evaluations/:id — `?departmentId=` narrows to one of the faculty's departments (404 for any other). */
+export async function getEvaluationResults(
+  userId: string,
+  roundId: string,
+  departmentId?: string,
+): Promise<evaluationService.RoundResultsDto> {
+  const faculty = await requireOwnFaculty(userId);
+  if (departmentId && (await facultyRepository.findDepartmentFacultyId(departmentId)) !== faculty.facultyId) {
+    throw AppError.notFound('No such department in your faculty.');
+  }
+  return evaluationService.getResults(roundId, departmentId ? { departmentId } : { facultyId: faculty.facultyId });
 }

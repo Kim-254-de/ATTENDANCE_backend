@@ -216,6 +216,23 @@ describe('inviting a faculty officer', () => {
     const { res } = await signIn(email);
     expect(body(res).data).toMatchObject({ role: 'admin', fullName: 'Second Admin' });
   });
+
+  it('invites a QA officer, who is listed, signs in as one and can use the QA portal', async () => {
+    const email = 'quinn.qa@uni.ac.ke';
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'qa', fullName: 'Quinn QA', email })).status).toBe(201);
+    expect(sent.at(-1)!.roleDescription).toBe('quality assurance officer');
+
+    const officers = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
+    expect(officers.find((o) => o.email === email)).toMatchObject({ role: 'qa', status: 'PENDING_VERIFICATION', facultyName: null });
+
+    const token = lastTokenFor(email);
+    expect(body(await publicPost('/auth/invitations/lookup', { token })).data).toMatchObject({ role: 'qa', scopeName: null });
+    expect((await accept(token)).status).toBe(200);
+
+    const { res, cookies } = await signIn(email);
+    expect(body(res).data).toMatchObject({ role: 'qa', fullName: 'Quinn QA' });
+    expect((await request(app).get('/api/v1/quality-assurance/faculties').set('Cookie', cookies)).status).toBe(200);
+  });
 });
 
 describe('a faculty officer inviting department officers', () => {

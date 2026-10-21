@@ -4,6 +4,7 @@ import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as studentController from './student.controller.js';
 import { attendanceHistoryQuerySchema } from './student.schema.js';
+import { submitEvaluationSchema, submitParamSchema } from '../quality-assurance/evaluation.schema.js';
 
 export const studentRouter: Router = Router();
 
@@ -16,4 +17,15 @@ studentRouter.get(
   requireAuth('STUDENT'),
   validate({ query: attendanceHistoryQuerySchema }),
   asyncHandler(studentController.myAttendance),
+);
+
+/** Open course evaluation rounds, each with the student's units and which they have already evaluated. */
+studentRouter.get('/me/evaluations', requireAuth('STUDENT'), asyncHandler(studentController.myEvaluations));
+
+/** Evaluates one unit in one round, anonymously and once. 404 if not open or not their unit; 409 if already done. */
+studentRouter.post(
+  '/me/evaluations/:roundId/units/:unitId',
+  requireAuth('STUDENT'),
+  validate({ params: submitParamSchema, body: submitEvaluationSchema }),
+  asyncHandler(studentController.submitEvaluation),
 );

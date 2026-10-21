@@ -287,6 +287,12 @@ const envSchema = z
 
     LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+
+    // --- Quality assurance reports (src/common/pdf, src/modules/quality-assurance) ---
+    /** Printed on every generated report's cover page and footer. */
+    QA_INSTITUTION_NAME: z.string().min(1).default('University'),
+    /** Path to a logo image for the report cover page; unset = no logo box drawn. */
+    QA_REPORT_LOGO_PATH: emptyAsUnset(z.string().optional()),
   })
   // Credentials must actually be present for whichever ERP auth scheme is chosen,
   // otherwise every lookup would fail at runtime with a 401 that looks like an

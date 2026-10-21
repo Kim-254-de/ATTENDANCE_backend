@@ -64,3 +64,18 @@ export const officerUserIdParamSchema = z
   .object({ userId: z.string().uuid('Not a valid identifier.') })
   .strict();
 export type OfficerUserIdParam = z.infer<typeof officerUserIdParamSchema>;
+
+/** GET /faculties/lecturer-placement */
+export const placementQuerySchema = z
+  .object({
+    q: z.string().trim().max(100).optional(),
+    unassigned: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+  })
+  .strict();
+export type PlacementQuery = z.infer<typeof placementQuerySchema>;
+
+/** PATCH /faculties/lecturers/:lecturerUserId/department */
+export const moveLecturerSchema = z
+  .object({ departmentId: z.string().uuid('Choose a department.') })
+  .strict();
+export type MoveLecturerInput = z.infer<typeof moveLecturerSchema>;

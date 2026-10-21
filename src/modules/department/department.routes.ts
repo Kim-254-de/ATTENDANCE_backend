@@ -3,7 +3,9 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as departmentController from './department.controller.js';
-import { allocateLecturerSchema, lecturerUserIdParamSchema, offeringIdParamSchema, setSegmentCountSchema, studentUserIdParamSchema, timekeepingQuerySchema } from './department.schema.js';
+import { eligibilityQuerySchema } from '../eligibility/eligibility.schema.js';
+import { roundIdParamSchema } from '../quality-assurance/evaluation.schema.js';
+import { allocateLecturerSchema, lecturerSearchQuerySchema, lecturerUserIdParamSchema, offeringIdParamSchema, setSegmentCountSchema, studentUserIdParamSchema, timekeepingQuerySchema } from './department.schema.js';
 
 /**
  * Every route is gated to the DEPARTMENT role, and every handler resolves the
@@ -33,7 +35,7 @@ departmentRouter.get(
   asyncHandler(departmentController.lecturers),
 );
 
-/** One lecturer's units and recent sessions. 404 unless that lecturer is in the caller's department. */
+/** One lecturer's units and recent sessions in this department. 404 unless they are its staff or teach one of its units. */
 departmentRouter.get(
   '/lecturers/:lecturerUserId',
   asyncHandler(requireAuth('DEPARTMENT')),
@@ -78,7 +80,15 @@ departmentRouter.patch(
   asyncHandler(departmentController.setSegmentCount),
 );
 
-/** Allocates one of the department's own lecturers to the next open segment — immediate, creates a real unit. */
+/** Lecturers anywhere in the institution, own staff first, for the allocation picker. `?q=` searches name or staff number. */
+departmentRouter.get(
+  '/lecturer-directory',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ query: lecturerSearchQuerySchema }),
+  asyncHandler(departmentController.lecturerDirectory),
+);
+
+/** Allocates a lecturer (own staff or borrowed) to the next open segment — immediate, creates a real unit owned by this department. */
 departmentRouter.post(
   '/courses/:offeringId/segments',
   asyncHandler(requireAuth('DEPARTMENT')),
@@ -104,4 +114,27 @@ departmentRouter.delete(
   asyncHandler(requireAuth('DEPARTMENT')),
   validate({ params: studentUserIdParamSchema }),
   asyncHandler(departmentController.deleteStudent),
+);
+
+/** Exam eligibility on the department's units: at-risk and not-eligible students, worst first. `?all=true` for everyone. */
+departmentRouter.get(
+  '/eligibility',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ query: eligibilityQuerySchema }),
+  asyncHandler(departmentController.eligibility),
+);
+
+/** Student course evaluation rounds that have opened. */
+departmentRouter.get(
+  '/evaluations',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  asyncHandler(departmentController.evaluations),
+);
+
+/** One round's results for the department's units. Units under the round's minimum responses show counts only. */
+departmentRouter.get(
+  '/evaluations/:id',
+  asyncHandler(requireAuth('DEPARTMENT')),
+  validate({ params: roundIdParamSchema }),
+  asyncHandler(departmentController.evaluationResults),
 );

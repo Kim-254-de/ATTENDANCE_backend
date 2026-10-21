@@ -59,7 +59,45 @@ The outcome is logged with the prefix `bootstrap admin:`.
 | `GET` | `/api/v1/admin/units/pending` | Units still `PENDING_VERIFICATION` (the timetable doesn't list their lecturer), oldest first, with lecturer and weekly slots |
 | `POST` | `/api/v1/admin/units/:unitId/verify` | Confirms the lecturer-unit assignment: `VERIFIED`, audited as `UNIT_VERIFIED`. 404 unknown, 409 already verified |
 
+| `GET` | `/api/v1/admin/departments` | Every department with its faculty and staff count, for placing a lecturer |
+| `GET` | `/api/v1/admin/lecturers` | `?q=&unassigned=true` — lecturers, unassigned ones first, with the department SMARTTT reported |
+| `PATCH` | `/api/v1/admin/lecturers/:lecturerUserId/department` | `{ departmentId }` — places or moves a lecturer in any department, across faculties too; audited |
+| `GET` | `/api/v1/admin/department-duplicates` | Groups of departments whose names mean the same thing, busiest first |
+| `POST` | `/api/v1/admin/departments/:departmentId/merge` | `{ intoDepartmentId }` — folds the duplicate into the one kept; audited, cannot be undone |
+| `GET` | `/api/v1/admin/department-aliases` | Spellings learned from placements and merges |
+| `DELETE` | `/api/v1/admin/department-aliases/:aliasId` | Removes a wrongly learned spelling; audited |
+
 All are `ADMIN` only. Invitations are limited to `OFFICER_EMAIL_DOMAINS` when
 it is set. Re-inviting a deactivated person (same role) re-opens their account.
 Public counterparts: `POST /auth/invitations/lookup` and
 `POST /auth/invitations/accept` (auth module).
+
+## Placing lecturers
+
+A lecturer whose SMARTTT department name matches no department signs in
+unassigned and counts toward no department. A faculty officer can place them
+in one of its own departments. An administrator can place or move anyone,
+including across faculties, which no faculty officer can do. The rules are in
+`src/modules/faculty/README.md` ("Placing lecturers"), and the shared code is
+`src/modules/lecturer/lecturer.placement.ts`.
+
+## One department, one spelling
+
+SMARTTT names departments in free text. `db/migrations/036_department_spelling.sql`
+makes every spelling of a department resolve to the same one:
+
+- `department_key()` reduces a name to a canonical form. It lower-cases,
+  joins dotted initials, drops punctuation, reads `&` as "and", removes a
+  leading "Department of", and expands common abbreviations, so
+  "Dept. of Comp. Sci & IT" and "Computer Science and Information Technology"
+  are the same name.
+- `department_aliases` holds spellings learned when an unassigned lecturer is
+  placed, plus the old names of merged departments.
+- `merge_departments()` folds a duplicate into the department kept: lecturers,
+  officers, course offerings, units, QA audits and evaluation results all
+  move, and the duplicate is deleted. If the duplicate's name differs from
+  the kept one even after normalising, it is kept as an alias.
+  `DEPARTMENTS_MERGED` records both names.
+
+The administrator's Departments page lists duplicates to merge and the
+learned spellings.
