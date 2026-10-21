@@ -38,6 +38,8 @@ interface SmartttUser {
   password: string;
   student?: Record<string, unknown> | null;
   staff?: Record<string, unknown> | null;
+  /** A SMARTTT administrator (staff status, not a student's or lecturer's account). */
+  isAdmin?: boolean;
 }
 const smartttUsers: SmartttUser[] = [];
 let smartttMode: 'UP' | 'DOWN' | 'BAD_KEY' = 'UP';
@@ -58,7 +60,7 @@ function stubFetch() {
     if (!user || user.password !== sent['password']) return Promise.resolve(Response.json({ authenticated: false }));
     return Promise.resolve(Response.json({
       authenticated: true,
-      account: { id: user.id, role: user.role, university_id: user.universityId, email: user.email, full_name: user.fullName },
+      account: { id: user.id, role: user.role, university_id: user.universityId, email: user.email, full_name: user.fullName, is_admin: user.isAdmin ?? false },
       student: user.student ?? null,
       staff: user.staff ?? null,
     }));
@@ -92,6 +94,16 @@ function smartttLecturer(over: Partial<SmartttUser> = {}): SmartttUser {
       department: 'Computer Science', faculty: 'Science', title: 'Dr.', has_account: true, is_active: true,
     },
     ...over,
+  };
+  smartttUsers.push(user);
+  return user;
+}
+
+function smartttAdmin(over: Partial<SmartttUser> = {}): SmartttUser {
+  const n = uniq();
+  const user: SmartttUser = {
+    id: randomUUID(), role: 'admin', universityId: null, email: `registry${n}@uni.ac.ke`,
+    fullName: `Registry Officer ${n}`, password: PASSWORD, student: null, staff: null, isAdmin: true, ...over,
   };
   smartttUsers.push(user);
   return user;
@@ -337,7 +349,7 @@ describe('refused sign-ins', () => {
     ['no admission number', () => smartttStudent({ universityId: null, student: null }), /no admission number/i],
     ['not a current student', () => smartttStudent({ student: { registration_number: `EBT1/${uniq()}7/18`, full_name: 'G', email: null, programme: null, year_of_study: 4, is_active: false } }), /no longer a current student/i],
     ['a lecturer off the staff list', () => smartttLecturer({ staff: null }), /approved staff list/i],
-    ['a registrar', () => smartttStudent({ role: 'registrar', student: null }), /only students and lecturers/i],
+    ['a registrar', () => smartttStudent({ role: 'registrar', student: null }), /only students, lecturers and SMARTTT administrators/i],
   ])('%s is told what to fix in SMARTTT', async (_name, make, message) => {
     const u = make();
     const res = await login(u.email);
@@ -412,5 +424,80 @@ describe('what stays with attendance', () => {
     await legacyStudent(reg);
     expect((await login(reg, 'OldAttendancePw1')).status).toBe(200);
     expect(smartttCalls).toHaveLength(0);
+  });
+});
+
+describe('SMARTTT administrators', () => {
+  /** An administrator invited here before administrators moved to SMARTTT, with their own password. */
+  async function legacyAdmin(email: string, status = 'ACTIVE') {
+    const hash = await (await import('../../src/common/utils/password.js')).hashPassword('OldAdminPassw0rd');
+    const { rows: [u] } = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, $2, 'Old Admin', 'ADMIN', $3) RETURNING id`,
+      [email, hash, status]);
+    await pool.query(
+      `INSERT INTO account_invitations (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 day')`,
+      [u!.id, `hash-${uniq()}`]);
+    return u!.id;
+  }
+
+  it('sign in to the admin console with their SMARTTT account, created here the first time', async () => {
+    const a = smartttAdmin();
+    const res = await login(a.email);
+    expect(res.status).toBe(200);
+    expect(body(res).data).toMatchObject({ role: 'admin', fullName: a.fullName, email: a.email, status: 'ACTIVE' });
+
+    const { rows: [u] } = await pool.query<{ role: string; smarttt_user_id: string }>(
+      `SELECT role, smarttt_user_id FROM users WHERE email = $1`, [a.email]);
+    expect(u).toEqual({ role: 'ADMIN', smarttt_user_id: a.id });
+    expect((await audits('SMARTTT_ACCOUNT_CREATED')).some((r) => r.metadata['role'] === 'ADMIN')).toBe(true);
+
+    // The second sign-in finds the same account by SMARTTT id.
+    expect((await login(a.email)).status).toBe(200);
+    expect((await pool.query(`SELECT 1 FROM users WHERE email = $1`, [a.email])).rowCount).toBe(1);
+  });
+
+  it('an administrator invited here keeps their account; SMARTTT checks the password from then on', async () => {
+    const a = smartttAdmin();
+    const userId = await legacyAdmin(a.email, 'PENDING_VERIFICATION');
+
+    const res = await login(a.email);
+    expect(res.status).toBe(200);
+    const { rows: [u] } = await pool.query<{ id: string; status: string; smarttt_user_id: string }>(
+      `SELECT id, status, smarttt_user_id FROM users WHERE email = $1`, [a.email]);
+    expect(u).toEqual({ id: userId, status: 'ACTIVE', smarttt_user_id: a.id });
+    const { rows: open } = await pool.query(
+      `SELECT 1 FROM account_invitations WHERE user_id = $1 AND invalidated_at IS NULL AND consumed_at IS NULL`, [userId]);
+    expect(open).toHaveLength(0);
+    expect((await login(a.email, 'OldAdminPassw0rd')).status).toBe(401);
+  });
+
+  it('a deactivated administrator stays shut out', async () => {
+    const a = smartttAdmin();
+    await legacyAdmin(a.email, 'DEACTIVATED');
+    const res = await login(a.email);
+    expect(res.status).toBe(403);
+    expect(body(res).error?.code).toBe('ACCOUNT_NOT_ACTIVE');
+  });
+
+  it('a SMARTTT administrator whose account here is a lecturer\'s is a conflict', async () => {
+    const lecturer = smartttLecturer();
+    await login(lecturer.universityId!).expect(200);
+    lecturer.isAdmin = true;
+    const res = await login(lecturer.universityId!);
+    expect(res.status).toBe(409);
+    expect(body(res).error?.code).toBe('SMARTTT_ACCOUNT_CONFLICT');
+  });
+
+  it('is not invited or bootstrapped here any more', async () => {
+    const a = smartttAdmin();
+    await login(a.email).expect(200);
+    const cookies = cookiesOf(await login(a.email));
+    const res = await request(app).post('/api/v1/admin/invitations').set('Cookie', cookies)
+      .send({ role: 'admin', fullName: 'Someone New', email: `new${uniq()}@uni.ac.ke` });
+    expect(res.status).toBe(409);
+    expect(body(res).error?.code).toBe('ACCOUNTS_MANAGED_BY_SMARTTT');
+
+    const { bootstrapAdmin } = await import('../../src/modules/auth/auth.invitation.js');
+    expect(await bootstrapAdmin(`boot${uniq()}@uni.ac.ke`, 'Boot Admin')).toBe('MANAGED_BY_SMARTTT');
   });
 });

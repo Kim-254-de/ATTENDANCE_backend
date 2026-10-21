@@ -133,3 +133,63 @@ export async function refreshLinkedAccount(args: {
     );
   }
 }
+
+// -- administrators ------------------------------------------------------------------
+
+/**
+ * The attendance account for a SMARTTT administrator: the one already linked
+ * to its SMARTTT id (whatever its role, so a clash can be reported), else an
+ * administrator with the same email (one invited here before administrators
+ * moved to SMARTTT, who keeps their history).
+ */
+export async function findAdminLinkCandidate(smartttUserId: string, email: string | null): Promise<LinkCandidate | null> {
+  const row = await queryOne<{ id: string; role: string; status: AccountStatus; smarttt_user_id: string | null; by_id: boolean }>(
+    `SELECT u.id, u.role, u.status, u.smarttt_user_id,
+            (u.smarttt_user_id IS NOT DISTINCT FROM $1) AS by_id
+       FROM users u
+      WHERE u.deleted_at IS NULL
+        AND (u.smarttt_user_id = $1 OR (u.role = 'ADMIN' AND $2::text IS NOT NULL AND u.email = $2))
+      ORDER BY by_id DESC
+      LIMIT 1`,
+    [smartttUserId, email],
+  );
+  if (!row) return null;
+  return { userId: row.id, role: row.role, status: row.status, smartttUserId: row.smarttt_user_id, number: null, byId: row.by_id };
+}
+
+/**
+ * Brings a linked administrator up to date with SMARTTT at sign-in. A pending
+ * one (invited here, never accepted) becomes ACTIVE and its invitation link
+ * stops working; a deactivated one stays as an administrator left it.
+ */
+export async function refreshLinkedAdmin(args: { userId: string; smartttUserId: string; fullName: string | null; email: string | null }): Promise<void> {
+  await query(
+    `UPDATE users
+        SET smarttt_user_id = $2,
+            full_name = COALESCE($3, full_name),
+            email = COALESCE($4, email),
+            status = CASE WHEN status IN ('PENDING_VERIFICATION', 'PENDING_APPROVAL') THEN 'ACTIVE' ELSE status END,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [args.userId, args.smartttUserId, args.fullName, args.email],
+  );
+  await query(
+    `UPDATE account_invitations SET invalidated_at = NOW()
+      WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+    [args.userId],
+  );
+}
+
+/** A new ACTIVE administrator linked to their SMARTTT account. `passwordHash` is never used: SMARTTT checks the password. */
+export async function createAdminAccount(
+  client: PoolClient,
+  args: { email: string; fullName: string; passwordHash: string; smartttUserId: string },
+): Promise<string> {
+  const { rows: [user] } = await query<{ id: string }>(
+    `INSERT INTO users (email, password_hash, full_name, role, status, smarttt_user_id)
+     VALUES ($1, $2, $3, 'ADMIN', 'ACTIVE', $4) RETURNING id`,
+    [args.email, args.passwordHash, args.fullName, args.smartttUserId],
+    client,
+  );
+  return user!.id;
+}

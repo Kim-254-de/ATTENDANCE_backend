@@ -31,6 +31,7 @@ const BOOTSTRAP_MESSAGES: Record<invitationService.BootstrapOutcome, string> = {
   RESENT: 'bootstrap admin: the earlier invitation expired; a new one was sent',
   INVITATION_PENDING: 'bootstrap admin: invitation already sent and not yet accepted',
   EMAIL_FAILED: 'bootstrap admin: the invitation email could not be sent (check RESEND_API_KEY and EMAIL_FROM); retrying at next start',
+  MANAGED_BY_SMARTTT: 'bootstrap admin: administrators sign in with their SMARTTT account (staff status in SMARTTT); BOOTSTRAP_ADMIN_EMAIL is ignored and can be removed',
 };
 
 /**

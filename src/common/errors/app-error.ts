@@ -37,6 +37,12 @@ export const ErrorCode = {
   SMARTTT_ACCOUNT_CONFLICT: 'SMARTTT_ACCOUNT_CONFLICT',
   /** Registration and passwords for students and lecturers live in SMARTTT, not here. */
   ACCOUNTS_MANAGED_BY_SMARTTT: 'ACCOUNTS_MANAGED_BY_SMARTTT',
+  /** The admin console's SMARTTT functions: the administrator is no longer a SMARTTT administrator. */
+  NOT_SMARTTT_ADMIN: 'NOT_SMARTTT_ADMIN',
+  /** SMARTTT rejected this service's key (SMARTTT_API_KEY here, ATTENDANCE_API_KEY there). */
+  SMARTTT_MISCONFIGURED: 'SMARTTT_MISCONFIGURED',
+  /** The administrator signed in before admin accounts moved to SMARTTT; they sign in again with it. */
+  SMARTTT_LINK_REQUIRED: 'SMARTTT_LINK_REQUIRED',
 
   // Geofenced check-in (session.geofence.ts)
   LOCATION_REQUIRED: 'LOCATION_REQUIRED',

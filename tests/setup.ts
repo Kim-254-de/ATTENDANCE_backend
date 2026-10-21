@@ -15,3 +15,7 @@ process.env.QR_ACCEPT_PREVIOUS_WINDOWS ??= '1';
 // in with attendance's own passwords unless they turn SMARTTT accounts on
 // themselves (tests/integration/smarttt-accounts.test.ts).
 process.env.SMARTTT_ACCOUNTS ??= 'false';
+// Faculties and departments are created in SMARTTT whenever SMARTTT_BASE_URL is
+// set (src/modules/directory). Tests that want SMARTTT stub it at `fetch` and set
+// the URL themselves; everything else stays local, whatever the developer's .env says.
+process.env.SMARTTT_BASE_URL ??= '';

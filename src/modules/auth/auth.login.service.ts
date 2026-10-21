@@ -26,8 +26,10 @@ import type { RegistrationContext } from './auth.service.js';
  * With SMARTTT accounts on (auth.smarttt.ts), students and lecturers don't
  * have passwords here: SMARTTT checks theirs, and their attendance account is
  * created or linked on first sign-in. Steps 2 and 4 still apply to it, and a
- * wrong password still counts towards the lock. Department and faculty
- * officers, who are not in SMARTTT, keep the password check below.
+ * wrong password still counts towards the lock. So do administrators, who
+ * are SMARTTT's administrators (the one admin console for the platform).
+ * Department and faculty officers, who are not in SMARTTT, keep the password
+ * check below.
  */
 
 export interface IssuedSession {
@@ -64,7 +66,7 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
 
   const user = await repo.findAccountForLogin(identifier);
 
-  if (smartttAccountsEnabled() && (!user || user.role === 'STUDENT' || user.role === 'LECTURER')) {
+  if (smartttAccountsEnabled() && (!user || user.role === 'STUDENT' || user.role === 'LECTURER' || user.role === 'ADMIN')) {
     return loginWithSmarttt(input, user, context, fail);
   }
 
@@ -92,7 +94,7 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
 }
 
 /**
- * A student or lecturer: SMARTTT checks the password. `local` is the
+ * A student, lecturer or administrator: SMARTTT checks the password. `local` is the
  * attendance account the identifier found, if any, for the lock; the account
  * signed in is the one SMARTTT's answer resolves to.
  */

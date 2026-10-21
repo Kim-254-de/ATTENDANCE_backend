@@ -8,12 +8,15 @@ import { tokenHashesMatch } from '../../common/utils/tokens.js';
 import { env } from '../../config/env.js';
 import { normaliseUnitCode } from '../../integrations/smarttt/index.js';
 import { validate } from '../../middleware/validate.js';
+import { directoryService } from '../directory/index.js';
 import { unitService } from '../unit/index.js';
 
 /**
- * Calls SMARTTT makes to us, the other way round from src/integrations/smarttt.
- * Authenticated by the same shared key both ways: SMARTTT_API_KEY here equals
- * ATTENDANCE_API_KEY there.
+ * Calls other systems make to us:
+ *  - SMARTTT, the other way round from src/integrations/smarttt, with the same
+ *    shared key both ways (SMARTTT_API_KEY here = ATTENDANCE_API_KEY there);
+ *  - the Timetable Generator, reading the departments faculty officers create
+ *    here, with its own key (GENERATOR_API_KEY here = ATTENDANCE_API_KEY there).
  */
 export const integrationRouter: Router = Router();
 
@@ -55,5 +58,30 @@ integrationRouter.post(
       unitCodes: [...new Set(body.unit_codes.map(normaliseUnitCode))],
     });
     sendSuccess(res, result);
+  }),
+);
+
+/** X-API-Key must equal GENERATOR_API_KEY. Fails closed when the key is unset. */
+function requireGeneratorKey(req: Request, _res: Response, next: NextFunction): void {
+  const expected = env.GENERATOR_API_KEY;
+  const presented = req.get('X-API-Key');
+  if (!expected || !presented || !tokenHashesMatch(presented, expected)) {
+    next(new AppError(401, ErrorCode.INVALID_API_KEY, 'Invalid API key.'));
+    return;
+  }
+  next();
+}
+
+/**
+ * The departments, for the Timetable Generator: faculty officers create them
+ * here (in SMARTTT first, which owns them), and the Generator plans each
+ * term's units against them. `smartttDepartmentId` is null for one not yet in
+ * SMARTTT; `lecturerCount` is the active lecturers placed in it here.
+ */
+integrationRouter.get(
+  '/generator/departments',
+  requireGeneratorKey,
+  asyncHandler(async (_req: Request, res: Response) => {
+    sendSuccess(res, { departments: await directoryService.departmentsForTimetabling() });
   }),
 );

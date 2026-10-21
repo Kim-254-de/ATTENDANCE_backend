@@ -1,4 +1,4 @@
-import { query, queryOne, transaction } from '../../db/database.js';
+import { query, queryOne } from '../../db/database.js';
 
 /**
  * All SQL for the faculty module. Every query is parameterised.
@@ -669,37 +669,6 @@ export async function findDepartmentForName(name: string): Promise<{ id: string;
     `SELECT d.id, d.name FROM departments d WHERE d.id = department_for_name($1)`,
     [name],
   );
-}
-
-export interface NewDepartment {
-  id: string;
-  name: string;
-}
-
-/**
- * Creates a department in the given faculty. A duplicate name is a
- * unique-constraint violation the service layer turns into a 409.
- *
- * Unassigned lecturers whose SMARTTT department name matches are placed in it
- * at once, the same match sign-in makes (`department_for_name`): they signed
- * in before the department existed.
- */
-export async function createDepartment(facultyId: string, name: string): Promise<NewDepartment> {
-  return transaction(async (client) => {
-    const row = await queryOne<{ id: string; name: string }>(
-      `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id, name`,
-      [name, facultyId],
-      client,
-    );
-    if (!row) throw new Error('departments insert returned no row');
-    await query(
-      `UPDATE lecturer_profiles SET department_id = $1, updated_at = NOW()
-        WHERE department_id IS NULL AND department_for_name(department) = $1`,
-      [row.id],
-      client,
-    );
-    return row;
-  });
 }
 
 export interface NewCourseOffering {

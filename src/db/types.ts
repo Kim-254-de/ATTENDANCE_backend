@@ -209,6 +209,10 @@ export const AuditAction = {
   FACE_ENROLLMENT_REMOVED: 'FACE_ENROLLMENT_REMOVED',
   /** A terminal frame matched nobody, or two students too closely to choose. */
   ATTENDANCE_FACE_NOT_MATCHED: 'ATTENDANCE_FACE_NOT_MATCHED',
+  /** An administrator used one of SMARTTT's admin functions from the admin console (method, path, SMARTTT's answer). */
+  SMARTTT_ADMIN_ACTION: 'SMARTTT_ADMIN_ACTION',
+  /** Faculties and departments were brought in line with SMARTTT, which owns them. */
+  DIRECTORY_SYNCED: 'DIRECTORY_SYNCED',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

@@ -164,6 +164,24 @@ const envSchema = z
     SMARTTT_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(8000),
     // Per lecturer. Stops every units-page load from calling SMARTTT.
     SMARTTT_SYNC_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(60),
+    /**
+     * The admin console's SMARTTT functions (master timetable, terms,
+     * lecturer allocation, notifications, staff IDs, venues): SMARTTT's
+     * integrations/admin/ endpoints, called for the signed-in administrator.
+     */
+    SMARTTT_ADMIN_PATH: z.string().min(1).default('/api/v1/integrations/admin/'),
+    // A timetable upload is parsed while the administrator waits; give it time.
+    SMARTTT_ADMIN_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(120_000),
+    // Faculties and departments are SMARTTT's; attendance re-reads them at most this often.
+    SMARTTT_DIRECTORY_SYNC_SECONDS: z.coerce.number().int().min(0).default(60),
+    SMARTTT_FACULTIES_PATH: z.string().min(1).default('/api/v1/integrations/attendance/faculties/'),
+    SMARTTT_DEPARTMENTS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/departments/'),
+
+    // --- Timetable Generator ---
+    // The Generator reads the departments faculty officers create here
+    // (GET /integrations/generator/departments, X-API-Key). Must equal
+    // ATTENDANCE_API_KEY in the Generator. Unset = the Generator can't connect.
+    GENERATOR_API_KEY: emptyAsUnset(z.string().optional()),
 
     // --- WebAuthn / phone biometrics ---
     WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),

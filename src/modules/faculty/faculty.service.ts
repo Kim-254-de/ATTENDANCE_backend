@@ -5,6 +5,7 @@ import type { InviteeInput } from '../auth/auth.schema.js';
 import { deleteAccount } from '../auth/auth.deletion.js';
 import { listOfficers } from '../auth/auth.invitation.repository.js';
 import type { RegistrationContext } from '../auth/auth.service.js';
+import { directoryService } from '../directory/index.js';
 import * as facultyRepository from './faculty.repository.js';
 import * as placement from '../lecturer/lecturer.placement.js';
 import { eligibilityService } from '../eligibility/index.js';
@@ -130,6 +131,8 @@ const toDepartmentDto = (r: facultyRepository.FacultyDepartmentRow): FacultyDepa
 /** GET /faculties/departments — one row per department, the faculty's distinguishing view. */
 export async function listDepartments(userId: string): Promise<FacultyDepartmentDto[]> {
   const faculty = await requireOwnFaculty(userId);
+  // Departments are SMARTTT's: bring any new ones in first (throttled, fails soft).
+  await directoryService.syncFromSmarttt();
   const rows = await facultyRepository.listDepartments(faculty.facultyId, ON_TIME_GRACE_MINUTES);
   return rows.map(toDepartmentDto);
 }
@@ -435,17 +438,9 @@ export async function createDepartment(userId: string, name: string): Promise<{ 
       details: [{ field: 'name', message: `Already exists as "${existing.name}".` }],
     });
   }
-  try {
-    const department = await facultyRepository.createDepartment(faculty.facultyId, name);
-    return { departmentId: department.id, departmentName: department.name };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw AppError.conflict(`A department named "${name}" already exists.`, ErrorCode.CONFLICT, {
-        details: [{ field: 'name', message: 'This department name is already in use.' }],
-      });
-    }
-    throw error;
-  }
+  // SMARTTT owns departments: created there first, then linked here.
+  const department = await directoryService.createDepartment(faculty.facultyId, name);
+  return { departmentId: department.id, departmentName: department.name };
 }
 
 export interface CourseOfferingDto {

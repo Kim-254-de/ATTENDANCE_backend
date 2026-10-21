@@ -1,57 +1,54 @@
 # admin module
 
-The administrator's console, the top of the invitation chain:
+The platform's one admin console. SMARTTT and attendance used to have an
+administrator each (SMARTTT's "SMART ClassCatch Admin" page and this portal);
+now there is one administrator, one account and one console:
+
+- **Who.** An administrator is a SMARTTT administrator: an active SMARTTT staff
+  account (`is_staff`) that is not a student's or lecturer's. They sign in
+  here with their SMARTTT login (`auth.smarttt.ts signInAdministrator`), like
+  students and lecturers. Their attendance account is created on first
+  sign-in, or linked by email to an administrator invited here before.
+  Administrators are no longer invited here: `POST /admin/invitations` with
+  `role: 'admin'`, re-sending an administrator's invitation, and
+  `BOOTSTRAP_ADMIN_EMAIL` / `npm run admin:invite` are refused or skipped
+  (409 `ACCOUNTS_MANAGED_BY_SMARTTT`) while SMARTTT accounts are on. Give the
+  person staff status in SMARTTT instead.
+- **What.** Attendance's own functions (below) plus SMARTTT's admin functions
+  (`admin.smarttt.ts`), which SMARTTT still runs: the console calls SMARTTT's
+  `integrations/admin/` endpoints with the shared key and the administrator's
+  SMARTTT id (`X-Acting-Account`); SMARTTT re-checks on every call that they
+  are still an administrator and keeps its own permission checks and records.
+- **Faculties and departments** belong to SMARTTT (`src/modules/directory`):
+  created there first, read back into attendance's linked copy.
+
+With SMARTTT accounts off (`SMARTTT_ACCOUNTS=false` or no `SMARTTT_BASE_URL`,
+development), administrators are invited here as before:
 
 ```
 administrator  ──invites──▶  administrators, faculty officers   (this module)
 faculty officer ──invites──▶ department officers                (faculty module)
 ```
 
-None of these accounts can be self-registered: there is nothing to verify an
-officer against (no ERP staff record, no SMARTTT account), so whoever manages
-them vouches for them by inviting them. An invitation creates the account at
-once, scoped and `PENDING_VERIFICATION` with no usable password, and emails a
-single-use link (`OFFICER_INVITE_TTL_HOURS`, default 72). Following it, the
-invitee chooses their own password; nobody else ever sees or sets it. The
-shared logic is `src/modules/auth/auth.invitation.ts`.
+Faculty and department officers are not in SMARTTT, so they are always
+invited here. An invitation creates the account at once, scoped and
+`PENDING_VERIFICATION` with no usable password, and emails a single-use link
+(`OFFICER_INVITE_TTL_HOURS`, default 72); the invitee chooses their own
+password. The shared logic is `src/modules/auth/auth.invitation.ts`. Officers
+sign in at the unlisted staff page, `/oversight`.
 
-Everyone it invites signs in at the unlisted staff page, `/oversight`, which
-the invitation email links to. The public role selector offers only students
-and lecturers.
+### The first administrator without SMARTTT
 
-## The first administrator
-
-Only an administrator can invite another, so the first comes from the command
-line on the server (it sends the same email; it sets no password, so it is
-safe in production):
-
-```
-npm run build && npm run admin:invite -- someone@university.ac.ke "Jane Wanjiru"
-npm run dev:invite-admin -- someone@university.ac.ke "Jane Wanjiru"   # development
-```
-
-Without `RESEND_API_KEY` (development only) the link is printed instead.
-
-On a host with no shell (Render's free plan), set `BOOTSTRAP_ADMIN_EMAIL` and
-`BOOTSTRAP_ADMIN_NAME` on the service instead. Every start then calls
-`bootstrapAdmin` (`auth.invitation.ts`, from `server.ts`), which:
-
-| State | What happens |
-|---|---|
-| An administrator is ACTIVE | Nothing (remove the variables whenever you like) |
-| No account for the email | Invites it, as `admin:invite` does |
-| Invited, link still valid | Nothing, so restarts send no extra mail |
-| Invited, link expired | Sends a new link |
-| The email failed to send | Withdraws the link; the next start tries again |
-
-The outcome is logged with the prefix `bootstrap admin:`.
+`npm run admin:invite -- someone@university.ac.ke "Jane Wanjiru"` (or
+`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_NAME` on a host with no shell; it
+logs `bootstrap admin:` and does nothing once an administrator is ACTIVE).
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/admin/faculties` | Every faculty with department and officer counts |
-| `POST` | `/api/v1/admin/faculties` | Creates a faculty; 409 when the name is taken |
+| `POST` | `/api/v1/admin/faculties` | Creates a faculty (in SMARTTT first); 409 when the name is taken |
 | `GET` | `/api/v1/admin/officers` | Every administrator, faculty officer and department officer, with invitation status |
 | `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }` or `{ role: 'faculty', facultyId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
 | `POST` | `/api/v1/admin/officers/:userId/resend` | Re-sends a pending invitation; the old link stops working |
@@ -66,6 +63,39 @@ The outcome is logged with the prefix `bootstrap admin:`.
 | `POST` | `/api/v1/admin/departments/:departmentId/merge` | `{ intoDepartmentId }` — folds the duplicate into the one kept; audited, cannot be undone |
 | `GET` | `/api/v1/admin/department-aliases` | Spellings learned from placements and merges |
 | `DELETE` | `/api/v1/admin/department-aliases/:aliasId` | Removes a wrongly learned spelling; audited |
+| `GET` | `/api/v1/admin/directory` | `{ smartttConnected, onlyHere: { faculties, departments } }`: faculties and departments not yet in SMARTTT |
+| `POST` | `/api/v1/admin/directory/sync` | Reads SMARTTT's faculties and departments now, then sends the ones only here to SMARTTT (`{ fromSmarttt, toSmarttt }`, with what was skipped and why). 503 when SMARTTT can't be reached |
+
+`GET /admin/faculties` reads SMARTTT's faculties into the copy first (at most
+every `SMARTTT_DIRECTORY_SYNC_SECONDS`) and marks each `inSmarttt`;
+`POST /admin/faculties` creates the faculty in SMARTTT, then here.
+
+### SMARTTT's admin functions (`/api/v1/admin/smarttt/...`)
+
+| Method | Path | SMARTTT |
+|---|---|---|
+| `GET` / `POST` | `/terms` | Academic terms; create one |
+| `PATCH` / `DELETE` | `/terms/:id` | Edit or delete a term |
+| `POST` | `/terms/:id/set-current` | Make it the current term |
+| `DELETE` | `/terms/:id/slots` | Clear a term's timetable slots |
+| `GET` / `POST` | `/timetable/uploads` | Upload history; upload the master timetable (multipart, `file` + SMARTTT's fields) |
+| `GET` | `/timetable/uploads/:id/status` | An upload's progress |
+| `DELETE` | `/timetable/uploads/:id` | Delete an upload |
+| `GET` / `POST` | `/lecturer-allocation` | The departments' allocation documents; upload one (multipart) or re-apply (JSON) |
+| `DELETE` | `/lecturer-allocation?source=<department>` | Remove a department's allocation document and the lecturers it set |
+| `GET` / `POST` | `/notifications` | Notification history; send one |
+| `GET` / `POST` | `/staff-ids` | The approved staff-ID list; upload a CSV |
+| `DELETE` | `/staff-ids/:id` | Remove a staff ID |
+| `GET` | `/staff-id-uploads`, `DELETE` `/staff-id-uploads/:id` | Staff-ID upload history |
+| `GET` / `POST` | `/rooms/capacities` | Venue capacity summary; upload capacities |
+| `GET` | `/programs` | Programmes (a notification's audience) |
+
+Answers come back in this API's envelope; what SMARTTT refused, with its
+message. `403 NOT_SMARTTT_ADMIN`: SMARTTT no longer counts the person as an
+administrator. `403 SMARTTT_LINK_REQUIRED`: the session predates SMARTTT
+sign-in; sign in again. `502 SMARTTT_MISCONFIGURED`: the shared keys differ.
+`503 SMARTTT_UNAVAILABLE`: SMARTTT is down or too old. Every change is
+audited here as `SMARTTT_ADMIN_ACTION`.
 
 All are `ADMIN` only. Invitations are limited to `OFFICER_EMAIL_DOMAINS` when
 it is set. Re-inviting a deactivated person (same role) re-opens their account.

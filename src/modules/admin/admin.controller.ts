@@ -101,3 +101,13 @@ export async function mergeDepartment(req: Request, res: Response): Promise<void
   const { intoDepartmentId } = req.body as MergeDepartmentInput;
   sendSuccess(res, await adminService.mergeDepartment(departmentId, intoDepartmentId, actor(req), context(req)));
 }
+
+/** GET /api/v1/admin/directory */
+export async function directoryStatus(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.directoryStatus());
+}
+
+/** POST /api/v1/admin/directory/sync */
+export async function syncDirectory(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.syncDirectory(actor(req), context(req)));
+}

@@ -157,10 +157,13 @@ const authenticateSchema = z.discriminatedUnion('authenticated', [
     authenticated: z.literal(true),
     account: z.object({
       id: z.string().min(1),
-      role: z.string().min(1),
+      // Empty for a superuser made with createsuperuser, who has no role.
+      role: z.string(),
       university_id: z.string().nullable().optional(),
       email: z.string().nullable().optional(),
       full_name: z.string().nullable().optional(),
+      // Absent from an older SMARTTT, which has no administrators for attendance.
+      is_admin: z.boolean().optional().default(false),
     }),
     student: z.unknown().optional(),
     staff: z.unknown().optional(),
@@ -186,6 +189,7 @@ export function toAuthenticatedAccount(body: unknown): SmartttAccount | false | 
   return {
     smartttUserId: account.id,
     role: account.role.trim().toLowerCase(),
+    isAdmin: account.is_admin,
     universityId: account.university_id?.trim().toUpperCase() || null,
     email: account.email?.trim().toLowerCase() || null,
     fullName: account.full_name?.trim() || null,

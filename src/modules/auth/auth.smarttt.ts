@@ -4,7 +4,7 @@ import { AppError, ErrorCode, type ErrorCodeValue } from '../../common/errors/in
 import { hashPassword } from '../../common/utils/password.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { isUniqueViolation } from '../../db/database.js';
+import { isUniqueViolation, transaction } from '../../db/database.js';
 import { smartttClient, type SmartttAccount } from '../../integrations/smarttt/index.js';
 import { auditService } from '../audit/index.js';
 import { linkAllocationsToStudent } from '../unit/index.js';
@@ -26,6 +26,10 @@ import type { RegistrationContext } from './auth.service.js';
  * registered here before sign-in moved to SMARTTT keeps their history), else
  * a new account. From then on SMARTTT's id finds it, and SMARTTT's name,
  * email and number are copied onto it at every sign-in.
+ *
+ * Administrators are SMARTTT's administrators too (signInAdministrator): the
+ * platform has one admin console, attendance's admin portal, and one admin
+ * account per person, their SMARTTT account.
  *
  * Department and faculty officers are not in SMARTTT and keep attendance's
  * own passwords (auth.login.service.ts).
@@ -72,9 +76,12 @@ export async function signInWithSmarttt(identifier: string, password: string, co
     throw new AppError(status, code, message);
   };
 
+  // SMARTTT's administrators run the platform's one admin console here.
+  if (account.isAdmin) return { status: 'SIGNED_IN', userId: await signInAdministrator(account, refuse, context) };
+
   const role = ROLES[account.role];
   if (!role) {
-    return refuse('not a student or lecturer', 'Only students and lecturers can use the attendance system. Sign in with a student or lecturer SMARTTT account.');
+    return refuse('not a student or lecturer', 'Only students, lecturers and SMARTTT administrators can use the attendance system. Sign in with a student or lecturer SMARTTT account.');
   }
   const number = account.universityId;
   if (!number) {
@@ -100,6 +107,76 @@ export async function signInWithSmarttt(identifier: string, password: string, co
 }
 
 type Refuse = (reason: string, message: string, code?: ErrorCodeValue, status?: number) => Promise<never>;
+
+/**
+ * A SMARTTT administrator: the account linked to their SMARTTT id, else the
+ * administrator here with the same email (invited before administrators moved
+ * to SMARTTT; their invitation link stops working), else a new one. No
+ * admission or staff number is needed. Whether they are still an
+ * administrator is SMARTTT's call at every sign-in, and at every SMARTTT
+ * function the console uses (the integrations/admin/ endpoints re-check it).
+ */
+async function signInAdministrator(account: SmartttAccount, refuse: Refuse, context: RegistrationContext): Promise<string> {
+  const conflict = (reason: string) =>
+    refuse(reason, 'Your SMARTTT account clashes with another attendance account. Contact ICT.', ErrorCode.SMARTTT_ACCOUNT_CONFLICT, 409);
+  const audit = {
+    subjectEmail: account.email,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    requestId: context.requestId,
+  };
+
+  const existing = await smartttRepository.findAdminLinkCandidate(account.smartttUserId, account.email);
+  if (existing) {
+    if (existing.role !== 'ADMIN') return conflict(`attendance account is ${existing.role}, SMARTTT says administrator`);
+    if (!existing.byId && existing.smartttUserId) return conflict('email already linked to another SMARTTT account');
+    const email = account.email && !(await smartttRepository.isEmailTakenByOther(account.email, existing.userId)) ? account.email : null;
+    await smartttRepository.refreshLinkedAdmin({ userId: existing.userId, smartttUserId: account.smartttUserId, fullName: account.fullName, email });
+    if (!existing.byId) {
+      await auditService.record({
+        ...audit,
+        action: 'SMARTTT_ACCOUNT_LINKED',
+        outcome: 'SUCCESS',
+        userId: existing.userId,
+        metadata: { smartttUserId: account.smartttUserId, role: 'ADMIN' },
+      });
+    }
+    return existing.userId;
+  }
+
+  if (!account.email) return refuse('no email', 'Your SMARTTT account has no email address. Add one in SMARTTT, then sign in here.');
+  if (await smartttRepository.isEmailTakenByOther(account.email, null)) {
+    return conflict('email used by another attendance account');
+  }
+  // Never used, as for students and lecturers: SMARTTT checks the password.
+  const passwordHash = await hashPassword(randomBytes(32).toString('base64url'));
+  try {
+    return await transaction(async (tx) => {
+      const userId = await smartttRepository.createAdminAccount(tx, {
+        email: account.email!,
+        fullName: account.fullName ?? account.email!,
+        passwordHash,
+        smartttUserId: account.smartttUserId,
+      });
+      await auditService.recordInTransaction(tx, {
+        ...audit,
+        userId,
+        action: 'SMARTTT_ACCOUNT_CREATED',
+        outcome: 'SUCCESS',
+        metadata: { smartttUserId: account.smartttUserId, role: 'ADMIN' },
+      });
+      return userId;
+    });
+  } catch (error) {
+    // Two first sign-ins raced; the loser uses the winner's account.
+    if (isUniqueViolation(error)) {
+      const winner = await smartttRepository.findAdminLinkCandidate(account.smartttUserId, account.email);
+      if (winner?.byId && winner.role === 'ADMIN') return winner.userId;
+      return conflict('unique violation creating administrator');
+    }
+    throw error;
+  }
+}
 
 async function linkExisting(
   existing: smartttRepository.LinkCandidate,

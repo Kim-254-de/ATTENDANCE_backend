@@ -91,8 +91,13 @@ export interface SmartttStaffRecord {
 export interface SmartttAccount {
   /** SMARTTT's own id for the user: what an attendance account is linked by. */
   smartttUserId: string;
-  /** SMARTTT's role: only 'student' and 'lecturer' may use attendance. */
+  /** SMARTTT's role ('student', 'lecturer', 'admin' ...). Empty for an account made with createsuperuser. */
   role: string;
+  /**
+   * A SMARTTT administrator (an active staff account that is not a student's or
+   * lecturer's): signs in to attendance's admin portal, the platform's one admin console.
+   */
+  isAdmin: boolean;
   /** Admission number (student) or staff ID (lecturer), upper-cased. Null when they haven't added one. */
   universityId: string | null;
   email: string | null;

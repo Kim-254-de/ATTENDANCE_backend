@@ -9,6 +9,7 @@ import { notificationService } from '../notification/index.js';
 import * as repo from './auth.invitation.repository.js';
 import type { InvitationScope, InvitedRole, OfficerRow } from './auth.invitation.repository.js';
 import type { RegistrationContext } from './auth.service.js';
+import { smartttAccountsEnabled } from './auth.smarttt.js';
 
 /**
  * Accounts nobody registers themselves: administrators, faculty officers and
@@ -61,6 +62,20 @@ export function assertAllowedEmail(email: string): void {
  * re-opened (the person is returning to the post) rather than refused;
  * any other existing account is a 409.
  */
+const ADMINS_IN_SMARTTT =
+  'Administrators sign in with their SMARTTT account. Give the person staff status in SMARTTT (a non-teaching account), and they can sign in here straight away.';
+
+/**
+ * With SMARTTT accounts on, administrators are SMARTTT's administrators
+ * (auth.smarttt.ts signInAdministrator): none is invited, re-invited or set
+ * up with a password here. Faculty and department officers still are.
+ */
+function assertInvitable(role: string): void {
+  if (role === 'ADMIN' && smartttAccountsEnabled()) {
+    throw new AppError(409, ErrorCode.ACCOUNTS_MANAGED_BY_SMARTTT, ADMINS_IN_SMARTTT);
+  }
+}
+
 export async function invite(
   args: { email: string; fullName: string; scope: InvitationScope; scopeName: string | null },
   inviter: Inviter,
@@ -72,6 +87,7 @@ export async function invite(
    */
   onLink?: (url: string) => void,
 ): Promise<InvitationResult> {
+  assertInvitable(args.scope.role);
   assertAllowedEmail(args.email);
 
   const existing = await repo.findAccountByEmail(args.email);
@@ -110,6 +126,7 @@ export async function invite(
 
 /** Sends a pending invitation again with a fresh link; the old link stops working. */
 export async function resend(officer: OfficerRow, inviter: Inviter, context: RegistrationContext): Promise<InvitationResult> {
+  assertInvitable(officer.role);
   if (officer.status !== 'PENDING_VERIFICATION') {
     throw AppError.conflict(
       officer.status === 'ACTIVE' ? 'This person has already accepted their invitation.' : 'This account has been deactivated. Invite them again instead.',
@@ -140,7 +157,7 @@ export async function resend(officer: OfficerRow, inviter: Inviter, context: Reg
   return { userId: officer.userId, emailSent };
 }
 
-export type BootstrapOutcome = 'ADMIN_EXISTS' | 'INVITED' | 'RESENT' | 'INVITATION_PENDING' | 'EMAIL_FAILED';
+export type BootstrapOutcome = 'ADMIN_EXISTS' | 'INVITED' | 'RESENT' | 'INVITATION_PENDING' | 'EMAIL_FAILED' | 'MANAGED_BY_SMARTTT';
 
 /**
  * Invites the first administrator from BOOTSTRAP_ADMIN_EMAIL / _NAME, for
@@ -153,6 +170,8 @@ export type BootstrapOutcome = 'ADMIN_EXISTS' | 'INVITED' | 'RESENT' | 'INVITATI
  * failed is withdrawn so the next boot tries again.
  */
 export async function bootstrapAdmin(email: string, fullName: string): Promise<BootstrapOutcome> {
+  // Administrators come from SMARTTT: the first one simply signs in.
+  if (smartttAccountsEnabled()) return 'MANAGED_BY_SMARTTT';
   if (await repo.hasActiveAdmin()) return 'ADMIN_EXISTS';
 
   const inviter: Inviter = { userId: null, fullName: null };
@@ -214,6 +233,7 @@ async function usableInvitation(token: string): Promise<repo.StoredInvitation> {
   if (!stored || stored.consumedAt || stored.invalidatedAt || stored.expiresAt <= new Date() || stored.status !== 'PENDING_VERIFICATION') {
     throw invalidLink();
   }
+  assertInvitable(stored.role);
   return stored;
 }
 

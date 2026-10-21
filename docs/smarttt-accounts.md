@@ -5,8 +5,11 @@ student or lecturer cannot use attendance unless they have a SMARTTT account,
 so attendance has no sign-up of its own for them: they sign in with the same
 login and password they use for SMARTTT.
 
-Department and faculty officers are not in SMARTTT. They keep attendance's own
-accounts and passwords, unchanged.
+Administrators sign in with their SMARTTT account too: a SMARTTT administrator
+(an active staff account that is not a student's or lecturer's; SMARTTT sends
+`account.is_admin`) is an administrator here, with the one admin console
+(`src/modules/admin/README.md`). Department and faculty officers are not in
+SMARTTT. They keep attendance's own accounts and passwords, unchanged.
 
 ## Switch
 

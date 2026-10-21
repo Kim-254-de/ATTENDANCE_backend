@@ -1,6 +1,6 @@
-import { AppError, ErrorCode } from '../../common/errors/index.js';
-import { isUniqueViolation } from '../../db/database.js';
+import { AppError } from '../../common/errors/index.js';
 import { auditService } from '../audit/index.js';
+import { directoryService } from '../directory/index.js';
 import * as invitationService from '../auth/auth.invitation.js';
 import type { RegistrationContext } from '../auth/auth.service.js';
 import { listOfficers, type InvitedRole } from '../auth/auth.invitation.repository.js';
@@ -20,33 +20,52 @@ export interface Actor {
   fullName: string;
 }
 
-/** GET /admin/faculties */
+/** GET /admin/faculties — SMARTTT's faculties (read into the copy here first), plus any only here. */
 export async function listFaculties(): Promise<adminRepository.FacultyRow[]> {
+  await directoryService.syncFromSmarttt();
   return adminRepository.listFaculties();
 }
 
-/** POST /admin/faculties */
+/** POST /admin/faculties — created in SMARTTT, which owns faculties, then linked here. */
 export async function createFaculty(name: string, actor: Actor, context: RegistrationContext): Promise<{ facultyId: string; name: string }> {
-  try {
-    const faculty = await adminRepository.createFaculty(name);
-    await auditService.record({
-      action: 'FACULTY_CREATED',
-      outcome: 'SUCCESS',
-      userId: actor.userId,
-      requestId: context.requestId,
-      ipAddress: context.ipAddress,
-      userAgent: context.userAgent,
-      metadata: { facultyId: faculty.id, name: faculty.name },
-    });
-    return { facultyId: faculty.id, name: faculty.name };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw AppError.conflict(`A faculty named "${name}" already exists.`, ErrorCode.CONFLICT, {
-        details: [{ field: 'name', message: 'This faculty name is already in use.' }],
-      });
-    }
-    throw error;
-  }
+  const faculty = await directoryService.createFaculty(name);
+  await auditService.record({
+    action: 'FACULTY_CREATED',
+    outcome: 'SUCCESS',
+    userId: actor.userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { facultyId: faculty.id, name: faculty.name },
+  });
+  return { facultyId: faculty.id, name: faculty.name };
+}
+
+/** GET /admin/directory — whether SMARTTT is connected, and what only exists here. */
+export async function directoryStatus(): Promise<{ smartttConnected: boolean; onlyHere: { faculties: number; departments: number } }> {
+  return { smartttConnected: directoryService.smartttDirectoryEnabled(), onlyHere: await directoryService.unlinkedCounts() };
+}
+
+/**
+ * POST /admin/directory/sync — reads SMARTTT's faculties and departments now,
+ * then sends the ones that only exist here to SMARTTT.
+ */
+export async function syncDirectory(actor: Actor, context: RegistrationContext): Promise<{
+  fromSmarttt: directoryService.SyncReport | null;
+  toSmarttt: directoryService.SendReport;
+}> {
+  const toSmarttt = await directoryService.sendLocalToSmarttt();
+  const fromSmarttt = await directoryService.syncFromSmarttt({ force: true });
+  await auditService.record({
+    action: 'DIRECTORY_SYNCED',
+    outcome: 'SUCCESS',
+    userId: actor.userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { fromSmarttt, toSmarttt },
+  });
+  return { fromSmarttt, toSmarttt };
 }
 
 /** Every role an administrator manages; QA officers sit outside faculties, so only the admin console lists them. */

@@ -3,6 +3,7 @@ import { asyncHandler } from '../../common/utils/async-handler.js';
 import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as adminController from './admin.controller.js';
+import { adminSmartttRouter } from './admin.smarttt.js';
 import { adminInvitationSchema, aliasIdParamSchema, createFacultySchema, departmentIdParamSchema, lecturerListQuerySchema, lecturerUserIdParamSchema, mergeDepartmentSchema, moveLecturerSchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
 
 /** Every route is gated to the ADMIN role. */
@@ -109,3 +110,15 @@ adminRouter.post(
   validate({ params: departmentIdParamSchema, body: mergeDepartmentSchema }),
   asyncHandler(adminController.mergeDepartment),
 );
+
+/**
+ * Faculties and departments belong to SMARTTT (src/modules/directory): whether
+ * it is connected, and how many exist only here.
+ */
+adminRouter.get('/directory', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.directoryStatus));
+
+/** Reads SMARTTT's faculties and departments now and sends the ones only here to SMARTTT. 503 when SMARTTT can't be reached. */
+adminRouter.post('/directory/sync', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.syncDirectory));
+
+/** SMARTTT's admin functions, for the signed-in administrator (admin.smarttt.ts). */
+adminRouter.use('/smarttt', adminSmartttRouter);
