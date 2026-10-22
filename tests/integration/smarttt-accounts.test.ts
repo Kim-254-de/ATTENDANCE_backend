@@ -376,8 +376,15 @@ describe('what stays with attendance', () => {
       `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, $2, 'Officer', 'DEPARTMENT', 'ACTIVE') RETURNING id`, [email, hash]);
     await pool.query(`INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)`, [u!.id, d!.id]);
 
-    expect((await login(email)).status).toBe(200);
+    const signedIn = await login(email);
+    expect(signedIn.status).toBe(200);
     expect(smartttCalls).toHaveLength(0);
+
+    // ...and change it here too: only students' and lecturers' passwords are SMARTTT's.
+    const change = await request(app).post('/api/v1/auth/change-password').set('Cookie', cookiesOf(signedIn))
+      .send({ currentPassword: PASSWORD, newPassword: 'An0therPassword', confirmNewPassword: 'An0therPassword' });
+    expect(change.status).toBe(200);
+    expect((await login(email, 'An0therPassword')).status).toBe(200);
   });
 
   it('registration is closed: the SMARTTT account is the account', async () => {
