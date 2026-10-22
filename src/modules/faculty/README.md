@@ -113,11 +113,12 @@ learned spelling (`src/modules/admin/README.md`). Sign-in never undoes it. Units
 department that owns them; only units with no owner follow the lecturer.
 Shared code: `src/modules/lecturer/lecturer.placement.ts`.
 
-## Not built
+## Accounts
 
-No self-registration, same reason as `department`: there is no ERP record to
-verify a faculty officer against, so accounts are provisioned directly. For
-local work: `npm run dev:seed-faculty`.
+No self-registration, same reason as `department`. Faculty officers are
+invited by an administrator (admin console), and in turn invite their
+departments' officers (`/faculties/departments/:departmentId/officers`). They
+sign in at `/oversight`. `npm run dev:seed-faculty` still seeds one for local work.
 
 ## Account deletion (writes)
 

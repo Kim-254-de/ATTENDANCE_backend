@@ -18,8 +18,9 @@ added student's name comes from the ERP rather than a text field.
 | Timetable lists someone else (or nobody) | Unit is created `PENDING_VERIFICATION`; every `ADMIN` user is emailed to confirm the lecturer-unit assignment (`notificationService.sendUnitVerificationRequest`, logged rather than sent — see `notification` module). |
 
 `session.service.ts` refuses to activate a class for a unit that is not
-`VERIFIED`. There is no admin UI yet for confirming an assignment by hand;
-do it locally with `npm run dev:verify-unit -- "COSC 100"`.
+`VERIFIED`. An administrator confirms an assignment by hand on the admin
+console's Units page (`POST /admin/units/:unitId/verify`, admin module);
+locally, `npm run dev:verify-unit -- "COSC 100"` does the same.
 
 ## How students get onto a unit
 

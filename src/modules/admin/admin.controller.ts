@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
-import type { AdminInvitationInput, AliasIdParam, CreateFacultyInput, DepartmentIdParam, LecturerListQuery, MergeDepartmentInput, LecturerUserIdParam, MoveLecturerInput, OfficerUserIdParam } from './admin.schema.js';
+import type { AdminInvitationInput, AliasIdParam, CreateFacultyInput, DepartmentIdParam, LecturerListQuery, MergeDepartmentInput, LecturerUserIdParam, MoveLecturerInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
 import * as adminService from './admin.service.js';
 
 /** HTTP in and out only. */
@@ -89,4 +89,15 @@ export async function mergeDepartment(req: Request, res: Response): Promise<void
   const { departmentId } = req.params as unknown as DepartmentIdParam;
   const { intoDepartmentId } = req.body as MergeDepartmentInput;
   sendSuccess(res, await adminService.mergeDepartment(departmentId, intoDepartmentId, actor(req), context(req)));
+}
+
+/** GET /api/v1/admin/units/pending */
+export async function pendingUnits(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.listPendingUnits());
+}
+
+/** POST /api/v1/admin/units/:unitId/verify */
+export async function verifyUnit(req: Request, res: Response): Promise<void> {
+  const { unitId } = req.params as unknown as UnitIdParam;
+  sendSuccess(res, await adminService.verifyUnit(unitId, actor(req), context(req)));
 }

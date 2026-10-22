@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { z } from 'zod';
 import { isValidTimeZone } from '../common/utils/campus-time.js';
+import { emailSchema, fullNameSchema } from '../modules/auth/auth.schema.js';
 
 /**
  * Environment is validated once, at boot. A malformed or missing variable
@@ -82,6 +83,13 @@ const envSchema = z
       .string()
       .default('')
       .transform((value) => value.split(',').map((d) => d.trim().toLowerCase().replace(/^@/, '')).filter(Boolean)),
+    /**
+     * The first administrator, invited at boot (server.ts) for hosts with no
+     * shell to run `npm run admin:invite` on, such as Render's free plan. Does
+     * nothing once any administrator is ACTIVE. Both or neither.
+     */
+    BOOTSTRAP_ADMIN_EMAIL: emptyAsUnset(emailSchema.optional()),
+    BOOTSTRAP_ADMIN_NAME: emptyAsUnset(fullNameSchema.optional()),
 
     // --- ERP ---
     ERP_BASE_URL: z.string().url(),
@@ -180,6 +188,9 @@ const envSchema = z
     // Backstop against a flood from one address before sign-in is even checked.
     // Sized for the biggest hall retrying at once, not for one person.
     CHECKIN_RATE_LIMIT_PER_IP: z.coerce.number().int().positive().default(3000),
+    // Per paired terminal, over CHECKIN_RATE_LIMIT_WINDOW_MS: every read, heartbeat
+    // and link it sends. Two scans a second for five minutes, well past any queue.
+    TERMINAL_RATE_LIMIT_PER_DEVICE: z.coerce.number().int().positive().default(600),
 
     // --- Sign-in lockout (README section 4.1: repeated failures are rate-limited) ---
     /** Consecutive wrong passwords before the account is temporarily locked. */
@@ -306,6 +317,13 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['SMARTTT_API_KEY'],
         message: 'is required when SMARTTT_BASE_URL is set',
+      });
+    }
+    if (Boolean(env.BOOTSTRAP_ADMIN_EMAIL) !== Boolean(env.BOOTSTRAP_ADMIN_NAME)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [env.BOOTSTRAP_ADMIN_EMAIL ? 'BOOTSTRAP_ADMIN_NAME' : 'BOOTSTRAP_ADMIN_EMAIL'],
+        message: 'BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_NAME must be set together',
       });
     }
     if (env.FACE_SERVICE_URL && !env.FACE_SERVICE_KEY) {

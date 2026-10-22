@@ -50,3 +50,8 @@ export type DepartmentIdParam = z.infer<typeof departmentIdParamSchema>;
 /** POST /admin/departments/:departmentId/merge — :departmentId is the duplicate, folded into `intoDepartmentId`. */
 export const mergeDepartmentSchema = z.object({ intoDepartmentId: z.string().uuid('Choose the department to keep.') }).strict();
 export type MergeDepartmentInput = z.infer<typeof mergeDepartmentSchema>;
+
+export const unitIdParamSchema = z
+  .object({ unitId: z.string().uuid('Not a valid identifier.') })
+  .strict();
+export type UnitIdParam = z.infer<typeof unitIdParamSchema>;

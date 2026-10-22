@@ -14,7 +14,7 @@ current time window:
 
 ```text
 payload   = v1.<sessionId>.<counter>.<signature>
-counter   = floor(unixSeconds / rotationSeconds)          ← changes every 60s
+counter   = floor(unixSeconds / rotationSeconds)          ← changes every QR_ROTATION_SECONDS (default 45s)
 signature = HMAC-SHA256(sessionSecret, "v1.<sessionId>.<counter>")
 ```
 
@@ -114,7 +114,7 @@ never stored. With the fence off, `location` is ignored and the record is
 ## The grace window
 
 `QR_ACCEPT_PREVIOUS_WINDOWS` (default `1`) accepts the previous counter as well
-as the current one, so a code is usable for 60–120 seconds.
+as the current one, so with the default 45-second rotation a code is usable for 45–90 seconds.
 
 This exists because scanning is not instant — a student who opens the camera at
 second 59 submits at second 61, and rejecting them would be wrong. It is a

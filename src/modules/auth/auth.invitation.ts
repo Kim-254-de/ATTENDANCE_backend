@@ -140,6 +140,47 @@ export async function resend(officer: OfficerRow, inviter: Inviter, context: Reg
   return { userId: officer.userId, emailSent };
 }
 
+export type BootstrapOutcome = 'ADMIN_EXISTS' | 'INVITED' | 'RESENT' | 'INVITATION_PENDING' | 'EMAIL_FAILED';
+
+/**
+ * Invites the first administrator from BOOTSTRAP_ADMIN_EMAIL / _NAME, for
+ * hosts with no shell to run `npm run admin:invite` on (Render's free plan).
+ *
+ * Runs at every boot (server.ts), so it must be safe to repeat: it does
+ * nothing once any administrator is ACTIVE, nor while the invitation it sent
+ * is still usable, so a free instance waking every few minutes sends no mail.
+ * An expired invitation is re-sent at the next boot, and one whose email
+ * failed is withdrawn so the next boot tries again.
+ */
+export async function bootstrapAdmin(email: string, fullName: string): Promise<BootstrapOutcome> {
+  if (await repo.hasActiveAdmin()) return 'ADMIN_EXISTS';
+
+  const inviter: Inviter = { userId: null, fullName: null };
+  const context: RegistrationContext = { ipAddress: null, userAgent: 'boot/bootstrap-admin', requestId: `boot-${Date.now()}` };
+  const existing = await repo.findAccountByEmail(email);
+
+  let result: InvitationResult;
+  let outcome: 'INVITED' | 'RESENT';
+  if (existing?.role === 'ADMIN' && existing.status === 'PENDING_VERIFICATION') {
+    const [pending] = await repo.listOfficers({ roles: ['ADMIN'], userId: existing.userId });
+    if (!pending) throw new Error(`pending administrator ${existing.userId} not found`);
+    if (pending.invitationExpiresAt && pending.invitationExpiresAt > new Date()) return 'INVITATION_PENDING';
+    result = await resend(pending, inviter, context);
+    outcome = 'RESENT';
+  } else {
+    // A new account, or a deactivated administrator re-opened. Any other
+    // account holding this email is refused by invite() with a 409.
+    result = await invite({ email, fullName, scope: { role: 'ADMIN' }, scopeName: null }, inviter, context);
+    outcome = 'INVITED';
+  }
+
+  if (!result.emailSent) {
+    await repo.withdrawInvitations(result.userId);
+    return 'EMAIL_FAILED';
+  }
+  return outcome;
+}
+
 /** Removes an officer's access at once: signed out everywhere, any pending invitation withdrawn. */
 export async function deactivate(officer: OfficerRow, actorUserId: string, context: RegistrationContext): Promise<void> {
   if (officer.userId === actorUserId) throw AppError.badRequest('You cannot remove your own access.');

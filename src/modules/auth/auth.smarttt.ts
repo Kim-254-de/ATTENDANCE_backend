@@ -52,7 +52,7 @@ export async function signInWithSmarttt(identifier: string, password: string, co
     throw new AppError(
       503,
       ErrorCode.SMARTTT_UNAVAILABLE,
-      'Sign-in is unavailable right now: SMARTTT could not be reached. Try again in a minute, or sign in with a passkey.',
+      'Sign-in is unavailable right now: SMARTTT could not be reached. Try again in a minute.',
     );
   }
 
@@ -240,5 +240,90 @@ async function linkRosters(userId: string, registrationNumber: string): Promise<
     await linkAllocationsToStudent(userId, registrationNumber);
   } catch (error) {
     logger.error({ err: error, userId }, 'could not link student to rosters at first sign-in');
+  }
+}
+
+export type StudentProvisioning =
+  | { status: 'CREATED' | 'EXISTS'; userId: string }
+  | { status: 'NOT_FOUND' | 'REFUSED' }
+  | { status: 'UNAVAILABLE' };
+
+/**
+ * Creates the attendance account for a student SMARTTT knows but who has
+ * never signed in here, so a terminal can record them on first contact (a
+ * barcode scan of their ID card).
+ *
+ * Same rules as a first sign-in, minus the password: current student, has an
+ * email, nothing here clashes with it. The SMARTTT user id is not in the
+ * student lookup, so the account is left unlinked; findLinkCandidate matches
+ * it by registration number at their first sign-in and links it then.
+ */
+export async function provisionStudentFromSmarttt(registrationNumber: string, context: RegistrationContext): Promise<StudentProvisioning> {
+  if (!smartttAccountsEnabled()) return { status: 'NOT_FOUND' };
+
+  const answer = await smartttClient.lookupStudent(registrationNumber);
+  if (answer.status === 'NOT_FOUND' || answer.status === 'DISABLED') return { status: 'NOT_FOUND' };
+  if (answer.status !== 'FOUND') return { status: 'UNAVAILABLE' };
+
+  const student = answer.record;
+  const number = student.registrationNumber;
+  const refuse = async (reason: string): Promise<StudentProvisioning> => {
+    await auditService.record({
+      action: 'SMARTTT_ACCOUNT_REFUSED',
+      outcome: 'FAILURE',
+      reason,
+      subjectEmail: student.email,
+      subjectRegistrationNumber: number,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+      metadata: { via: 'TERMINAL' },
+    });
+    return { status: 'REFUSED' };
+  };
+
+  if (!student.isActive) return refuse('student not current');
+  if (!student.email) return refuse('no email');
+  if (await smartttRepository.isEmailTakenByOther(student.email, null)) return refuse('email used by another attendance account');
+
+  // Never used, as in createFor: the student signs in through SMARTTT.
+  const passwordHash = await hashPassword(randomBytes(32).toString('base64url'));
+  try {
+    const created = await authRepository.createStudentAccount(
+      {
+        email: student.email,
+        fullName: student.fullName ?? student.email,
+        passwordHash,
+        status: 'ACTIVE',
+        registrationNumber: number,
+        programme: student.programme,
+        yearOfStudy: student.yearOfStudy,
+        directorySource: 'SMARTTT',
+        directorySnapshot: student.raw,
+      },
+      async (tx, userId) => {
+        await auditService.recordInTransaction(tx, {
+          userId,
+          action: 'SMARTTT_ACCOUNT_CREATED',
+          outcome: 'SUCCESS',
+          subjectEmail: student.email,
+          subjectRegistrationNumber: number,
+          ipAddress: context.ipAddress,
+          userAgent: context.userAgent,
+          requestId: context.requestId,
+          metadata: { role: 'STUDENT', via: 'TERMINAL' },
+        });
+      },
+    );
+    await linkRosters(created.userId, number);
+    return { status: 'CREATED', userId: created.userId };
+  } catch (error) {
+    // Two scans (or a scan and a sign-in) raced; the loser uses the winner's account.
+    if (isUniqueViolation(error)) {
+      const winner = await smartttRepository.findLinkCandidate('', 'STUDENT', number);
+      if (winner) return { status: 'EXISTS', userId: winner.userId };
+      return refuse('unique violation creating account');
+    }
+    throw error;
   }
 }

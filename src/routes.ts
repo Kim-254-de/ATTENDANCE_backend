@@ -13,6 +13,7 @@ import { verificationRouter } from './modules/verification/index.js';
 import { adminRouter } from './modules/admin/index.js';
 import { qaRouter } from './modules/quality-assurance/index.js';
 import { attendancePolicyRouter } from './modules/eligibility/index.js';
+import { departmentEnrolmentRouter, departmentTerminalRouter, sessionTerminalRouter, terminalRouter } from './modules/terminal/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -32,12 +33,16 @@ export const apiRouter: Router = Router();
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/auth/passkeys', passkeyRouter);
 apiRouter.use('/sessions', sessionRouter);
+apiRouter.use('/sessions', sessionTerminalRouter);
 apiRouter.use('/lecturers', lecturerRouter);
 apiRouter.use('/units', unitRouter);
 apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/reports', reportingRouter);
 apiRouter.use('/students', studentRouter);
+apiRouter.use('/departments/terminals', departmentTerminalRouter);
+apiRouter.use('/departments/enrolment', departmentEnrolmentRouter);
 apiRouter.use('/departments', departmentRouter);
+apiRouter.use('/terminals', terminalRouter);
 apiRouter.use('/faculties', facultyRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/quality-assurance', qaRouter);

@@ -1,6 +1,7 @@
 # attendance module
 
-Check-in: turns a verified QR scan into an `attendance_records` row.
+Check-in: turns a verified QR scan, ID card, barcode or fingerprint into an
+`attendance_records` row.
 
 Every rule about whether a scan counts — signature, rotation window, session
 state, allocation, one check-in per session — lives in
@@ -13,12 +14,19 @@ simultaneous scans both being recorded; the loser gets a 409.
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | `POST` | `/api/v1/attendance/check-in` | Student | `{ payload }` from the scanned code. 201 with the record |
+| `POST` | `/api/v1/attendance/card-check-in` | Card terminal (`X-API-Key`) | ID card swipe (`docs/card-check-in.md`) |
+| `POST` | `/api/v1/attendance/barcode-check-in` | Card terminal (`X-API-Key`) | ID card barcode, the registration number (`docs/card-check-in.md` §4) |
+| `POST` | `/api/v1/attendance/fingerprint-check-in` | Fingerprint terminal (`X-API-Key`) | A fingerprint match (`docs/fingerprint-check-in.md`) |
 | `GET` | `/api/v1/attendance/sessions/:sessionId` | Lecturer (owner) | Who has checked in, newest first |
 
+Paired department terminals check in through `src/modules/terminal`
+(`docs/terminals.md`) with their own per-device keys.
+
 Face check-in (`src/modules/verification`) records through
-`recordFaceCheckIn`, with `method = 'FACE'`, after the lecturer confirms a
-match. The same constraint applies, so QR and face are each other's fallback,
-never both. The attendee list shows each record's `method`.
+`recordFaceCheckIn`, with `verification_method = 'FACE'`, after the lecturer
+confirms a match. The same constraint applies to every method, so each is the
+others' fallback, never doubled. The attendee list shows each record's
+`verification_method`.
 
 `POST /api/v1/sessions/scan` still exists as a dry run: it verifies without
 recording. Clients should use `check-in`.

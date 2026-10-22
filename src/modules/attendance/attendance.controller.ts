@@ -4,6 +4,7 @@ import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as attendanceService from './attendance.service.js';
 import type {
+  BarcodeCheckInInput,
   CardCheckInInput,
   CheckInInput,
   FingerprintCheckInInput,
@@ -40,6 +41,21 @@ export async function checkIn(req: Request, res: Response): Promise<void> {
 export async function cardCheckIn(req: Request, res: Response): Promise<void> {
   const { sessionId, cardUid } = req.body as CardCheckInInput;
   const result = await attendanceService.checkInByCard(sessionId, cardUid, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/barcode-check-in
+ *
+ * Called by a card terminal reading the barcode on a student ID card, which
+ * carries the registration number. Authenticated by the card terminals' key.
+ */
+export async function barcodeCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, barcode } = req.body as BarcodeCheckInInput;
+  const result = await attendanceService.checkInByBarcode(sessionId, barcode, {
     ...clientFingerprint(req),
     requestId: req.requestId,
   });

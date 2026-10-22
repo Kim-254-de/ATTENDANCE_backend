@@ -32,6 +32,20 @@ npm run dev:invite-admin -- someone@university.ac.ke "Jane Wanjiru"   # developm
 
 Without `RESEND_API_KEY` (development only) the link is printed instead.
 
+On a host with no shell (Render's free plan), set `BOOTSTRAP_ADMIN_EMAIL` and
+`BOOTSTRAP_ADMIN_NAME` on the service instead. Every start then calls
+`bootstrapAdmin` (`auth.invitation.ts`, from `server.ts`), which:
+
+| State | What happens |
+|---|---|
+| An administrator is ACTIVE | Nothing (remove the variables whenever you like) |
+| No account for the email | Invites it, as `admin:invite` does |
+| Invited, link still valid | Nothing, so restarts send no extra mail |
+| Invited, link expired | Sends a new link |
+| The email failed to send | Withdraws the link; the next start tries again |
+
+The outcome is logged with the prefix `bootstrap admin:`.
+
 ## Endpoints
 
 | Method | Path | Purpose |
@@ -42,6 +56,8 @@ Without `RESEND_API_KEY` (development only) the link is printed instead.
 | `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }` or `{ role: 'faculty', facultyId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
 | `POST` | `/api/v1/admin/officers/:userId/resend` | Re-sends a pending invitation; the old link stops working |
 | `POST` | `/api/v1/admin/officers/:userId/deactivate` | Removes access: DEACTIVATED, signed out, invitation withdrawn. Not oneself |
+| `GET` | `/api/v1/admin/units/pending` | Units still `PENDING_VERIFICATION` (the timetable doesn't list their lecturer), oldest first, with lecturer and weekly slots |
+| `POST` | `/api/v1/admin/units/:unitId/verify` | Confirms the lecturer-unit assignment: `VERIFIED`, audited as `UNIT_VERIFIED`. 404 unknown, 409 already verified |
 
 | `GET` | `/api/v1/admin/departments` | Every department with its faculty and staff count, for placing a lecturer |
 | `GET` | `/api/v1/admin/lecturers` | `?q=&unassigned=true` — lecturers, unassigned ones first, with the department SMARTTT reported |

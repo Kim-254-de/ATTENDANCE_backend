@@ -36,7 +36,6 @@ mistake:
 |---|---|
 | `erp.types.ts` | The internal `ErpStaffRecord` shape and the `ErpProvider` interface |
 | `erp.mapper.ts` | **The only file that knows the real ERP payload shape** |
-| `erp.identity.ts` | Name and email matching against the ERP record |
 | `erp.client.ts` | HTTP transport: auth, timeout, retry, caching |
 
 ## Wiring up the real ERP

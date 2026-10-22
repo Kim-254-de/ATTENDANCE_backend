@@ -108,17 +108,20 @@ list uses, so the two pages agree. Only at-risk and not-eligible rows are
 returned, worst first, unless `?all=true`; the summary always counts
 everyone.
 
-## Not built
+## Accounts and writes
 
-There is no self-registration for this role. A department officer has no ERP
-staff record to verify against, so there is nothing an open sign-up form could
-check — only sign-in is wired up (`auth.session.repository.ts`'s `DEPARTMENT`
-branch), and accounts are provisioned directly. For local work:
-`npm run dev:seed-department`.
+There is no self-registration for this role: a department officer has no ERP
+staff record to verify against. Accounts are invite-only — the faculty officer
+invites them from the faculty portal (`auth.invitation.ts`), and they sign in
+at the unlisted `/oversight` page. `npm run dev:seed-department` still seeds
+one for local work.
 
-A department officer cannot write anything: no approving units, no editing
-rosters, no closing sessions. A faculty-level role is the next milestone and is
-why `faculties` exists as a table already.
+What a department officer can change: course offerings and their lecturer
+segments (`/departments/courses/...`), account deletion (below), and the
+department's portable terminals and fingerprint enrolment
+(`/departments/terminals`, `/departments/enrolment`, `src/modules/terminal`,
+`docs/terminals.md`). They cannot approve units (an administrator does, in the
+admin console) or close another lecturer's sessions.
 
 ## Account deletion (writes)
 
