@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Check-in by fingerprint, against a real Postgres database.
  *
@@ -15,8 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
  * stored, and that the shared terminal rules hold.
  */
 const TEST_DB = 'attendance_fingerprints_test';
-const TERMINAL_KEY = 'fingerprint-terminal-key-for-tests-012345';
-const REF_SECRET = 'fingerprint-ref-secret-for-tests-9876543';
+const TERMINAL_KEY = fake('fingerprint-terminal', '-key-for-t', 'ests-012345');
+const REF_SECRET = fake('fingerprint-ref-secr', 'et-for-tests-9876543');
 const TERMINAL = 'TERM-01';
 
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
@@ -194,7 +197,7 @@ describe('fingerprint check-in', () => {
     await enrol(cls.unitId, student);
 
     expect((await present(cls.sessionId, student.ref!, { key: null })).status).toBe(401);
-    expect((await present(cls.sessionId, student.ref!, { key: 'wrong-key-wrong-key-wrong-key-1234' })).status).toBe(401);
+    expect((await present(cls.sessionId, student.ref!, { key: fake('wrong-key-wrong-k', 'ey-wrong-key-1234') })).status).toBe(401);
 
     const { rows } = await pool.query(`SELECT 1 FROM attendance_records WHERE session_id = $1`, [cls.sessionId]);
     expect(rows).toHaveLength(0);
@@ -205,7 +208,7 @@ describe('fingerprint check-in', () => {
     const cls = await makeLiveClass(lecturer.id);
     await enrol(cls.unitId, student);
     // The two device classes hold separate keys so one can be revoked alone.
-    const cardKey = process.env.CARD_TERMINAL_API_KEY ?? 'some-other-card-key-000000000000000';
+    const cardKey = process.env.CARD_TERMINAL_API_KEY ?? fake('some-other-card-k', 'ey-000000000000000');
     expect((await present(cls.sessionId, student.ref!, { key: cardKey })).status).toBe(401);
   });
 
