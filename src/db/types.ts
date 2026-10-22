@@ -15,6 +15,8 @@ export const UserRole = {
   DEPARTMENT: 'DEPARTMENT',
   /** A faculty officer: read-only oversight of every department in one faculty (db/migrations/022_faculty_role.sql). */
   FACULTY: 'FACULTY',
+  /** A quality-assurance officer: institution-wide audits, findings and corrective actions (db/migrations/027_qa_role.sql). */
+  QA: 'QA',
 } as const;
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
@@ -144,6 +146,14 @@ export const AuditAction = {
   /** An officer's access was removed by whoever manages them. */
   OFFICER_DEACTIVATED: 'OFFICER_DEACTIVATED',
   FACULTY_CREATED: 'FACULTY_CREATED',
+  /** A faculty officer or administrator placed a lecturer in a department, or moved them (lecturer.placement.ts). */
+  LECTURER_DEPARTMENT_CHANGED: 'LECTURER_DEPARTMENT_CHANGED',
+  /** An administrator folded a duplicate department into another; its name became an alias. */
+  DEPARTMENTS_MERGED: 'DEPARTMENTS_MERGED',
+  /** An administrator removed a learned department spelling. */
+  DEPARTMENT_ALIAS_REMOVED: 'DEPARTMENT_ALIAS_REMOVED',
+  /** The QA officer changed the minimum attendance to sit exams (attendance_policy). */
+  ATTENDANCE_POLICY_UPDATED: 'ATTENDANCE_POLICY_UPDATED',
   LECTURER_PROFILE_UPDATED: 'LECTURER_PROFILE_UPDATED',
   LOGIN_SUCCEEDED: 'LOGIN_SUCCEEDED',
   LOGIN_FAILED: 'LOGIN_FAILED',
@@ -207,6 +217,38 @@ export const AuditOutcome = {
   FAILURE: 'FAILURE',
 } as const;
 export type AuditOutcome = (typeof AuditOutcome)[keyof typeof AuditOutcome];
+
+/** Internal-only for now (db/migrations/030_qa_audits.sql); room left for an 'EQA' value in a later phase. */
+export const QaAuditType = {
+  INTERNAL: 'INTERNAL',
+} as const;
+export type QaAuditType = (typeof QaAuditType)[keyof typeof QaAuditType];
+
+/** Forward-only: PLANNED -> IN_PROGRESS -> COMPLETED. */
+export const QaAuditStatus = {
+  PLANNED: 'PLANNED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+} as const;
+export type QaAuditStatus = (typeof QaAuditStatus)[keyof typeof QaAuditStatus];
+
+/** NOT_APPLICABLE findings are excluded from every KPI rollup, not counted as compliant or not. */
+export const QaFindingRating = {
+  COMPLIANT: 'COMPLIANT',
+  PARTIAL: 'PARTIAL',
+  NON_COMPLIANT: 'NON_COMPLIANT',
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
+} as const;
+export type QaFindingRating = (typeof QaFindingRating)[keyof typeof QaFindingRating];
+
+/** Forward-only: OPEN -> IN_PROGRESS -> VERIFIED -> CLOSED. */
+export const QaCorrectiveActionStatus = {
+  OPEN: 'OPEN',
+  IN_PROGRESS: 'IN_PROGRESS',
+  VERIFIED: 'VERIFIED',
+  CLOSED: 'CLOSED',
+} as const;
+export type QaCorrectiveActionStatus = (typeof QaCorrectiveActionStatus)[keyof typeof QaCorrectiveActionStatus];
 
 // ---------------------------------------------------------------------------
 // Row shapes
@@ -287,6 +329,20 @@ export interface FacultyProfileRow {
   id: string;
   user_id: string;
   faculty_id: string;
+  title: string | null;
+  phone: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * A row of `qa_profiles` — one quality-assurance officer. Unlike
+ * `DepartmentProfileRow`/`FacultyProfileRow` there is no org-unit FK: a QA
+ * officer's remit is the whole institution (db/migrations/027_qa_role.sql).
+ */
+export interface QaProfileRow {
+  id: string;
+  user_id: string;
   title: string | null;
   phone: string | null;
   created_at: Date;

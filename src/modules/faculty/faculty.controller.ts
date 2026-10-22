@@ -4,7 +4,9 @@ import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as facultyService from './faculty.service.js';
 import type { InviteeInput } from '../auth/auth.schema.js';
-import type { CreateDepartmentInput, DepartmentIdParam, LecturerUserIdParam, OfficerUserIdParam, ProvideCourseInput, StudentUserIdParam, TimekeepingQuery } from './faculty.schema.js';
+import type { FacultyEligibilityQuery } from '../eligibility/eligibility.schema.js';
+import type { FacultyResultsQuery, RoundIdParam } from '../quality-assurance/evaluation.schema.js';
+import type { CreateDepartmentInput, DepartmentIdParam, LecturerUserIdParam, MoveLecturerInput, OfficerUserIdParam, PlacementQuery, ProvideCourseInput, StudentUserIdParam, TimekeepingQuery } from './faculty.schema.js';
 
 /**
  * HTTP in and out only. The caller's faculty is never read from the
@@ -124,4 +126,35 @@ export async function deactivateOfficer(req: Request, res: Response): Promise<vo
   const { userId: officerUserId } = req.params as unknown as OfficerUserIdParam;
   await facultyService.deactivateDepartmentOfficer(userId(req), officerUserId, facultyContext(req));
   res.status(204).end();
+}
+
+/** GET /api/v1/faculties/lecturer-placement */
+export async function placementLecturers(req: Request, res: Response): Promise<void> {
+  const { q, unassigned } = req.query as unknown as PlacementQuery;
+  sendSuccess(res, await facultyService.listPlacementLecturers(userId(req), { search: q, unassignedOnly: unassigned }));
+}
+
+/** PATCH /api/v1/faculties/lecturers/:lecturerUserId/department */
+export async function moveLecturer(req: Request, res: Response): Promise<void> {
+  const { lecturerUserId } = req.params as unknown as LecturerUserIdParam;
+  const { departmentId } = req.body as MoveLecturerInput;
+  sendSuccess(res, await facultyService.moveLecturer(userId(req), lecturerUserId, departmentId, { ...clientFingerprint(req), requestId: req.requestId }));
+}
+
+/** GET /api/v1/faculties/eligibility */
+export async function eligibility(req: Request, res: Response): Promise<void> {
+  const { all, departmentId } = req.query as unknown as FacultyEligibilityQuery;
+  sendSuccess(res, await facultyService.getEligibility(userId(req), { departmentId, includeAll: all }));
+}
+
+/** GET /api/v1/faculties/evaluations */
+export async function evaluations(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await facultyService.listEvaluations(userId(req)));
+}
+
+/** GET /api/v1/faculties/evaluations/:id */
+export async function evaluationResults(req: Request, res: Response): Promise<void> {
+  const { id } = req.params as unknown as RoundIdParam;
+  const { departmentId } = req.query as unknown as FacultyResultsQuery;
+  sendSuccess(res, await facultyService.getEvaluationResults(userId(req), id, departmentId));
 }

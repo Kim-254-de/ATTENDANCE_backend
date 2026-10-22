@@ -69,6 +69,20 @@ export interface CreatedLecturer {
  * `onCreated` runs inside that same transaction, so the audit entry for a
  * successful registration commits with the account or not at all.
  */
+/**
+ * The department a lecturer's ERP/SMARTTT department name refers to, as an
+ * expression over the named parameter. `department_for_name`
+ * (`db/migrations/036_department_spelling.sql`) matches on a canonical form
+ * of the name ("Dept. of Comp. Sci" = "Computer Science"), then on spellings
+ * learned from earlier placements and merges. NULL when nothing matches: the
+ * lecturer stays unassigned (and is listed as such for a faculty officer or
+ * administrator to place), rather than a department being invented from
+ * whatever spelling SMARTTT used. Cast to varchar because the same parameter
+ * is also written to the varchar `department` column, and Postgres refuses
+ * two types for one parameter.
+ */
+export const DEPARTMENT_BY_NAME = (param: string): string => `department_for_name((${param})::varchar)`;
+
 export async function createLecturerAccount(
   args: CreateLecturerArgs,
   onCreated?: (client: PoolClient, userId: string) => Promise<void>,
@@ -96,8 +110,8 @@ export async function createLecturerAccount(
 
     await query(
       `INSERT INTO lecturer_profiles
-         (user_id, staff_number, title, department, faculty, erp_staff_id, erp_verified_at, erp_snapshot)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)`,
+         (user_id, staff_number, title, department, faculty, erp_staff_id, erp_verified_at, erp_snapshot, department_id)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, ${DEPARTMENT_BY_NAME('$4')})`,
       [
         user.id,
         args.staffNumber,

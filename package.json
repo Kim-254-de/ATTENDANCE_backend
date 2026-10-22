@@ -26,7 +26,8 @@
     "dev:seed-department": "node scripts/dev-seed-department.mjs",
     "dev:seed-faculty": "node scripts/dev-seed-faculty.mjs",
     "admin:invite": "node dist/cli/invite-admin.js",
-    "dev:invite-admin": "tsx src/cli/invite-admin.ts"
+    "dev:invite-admin": "tsx src/cli/invite-admin.ts",
+    "dev:seed-qa": "node scripts/dev-seed-qa.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
@@ -39,6 +40,7 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "jose": "^5.9.6",
+    "pdfkit": "^0.20.2",
     "pg": "^8.13.1",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
@@ -53,6 +55,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
+    "@types/pdfkit": "^0.17.6",
     "@types/pg": "^8.11.10",
     "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.3",

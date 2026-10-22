@@ -8,6 +8,7 @@ import {
   type DepartmentOfficerPublic,
   type FacultyOfficerPublic,
   type LecturerPublic,
+  type QaOfficerPublic,
   type StudentPublic,
 } from '../modules/auth/auth.session.repository.js';
 
@@ -23,6 +24,8 @@ export interface AuthContext {
   faculty: FacultyOfficerPublic | null;
   /** The signed-in administrator; null for every other role. */
   admin: AdminPublic | null;
+  /** The signed-in QA officer; null for every other role. */
+  qa: QaOfficerPublic | null;
 }
 
 declare global {
@@ -62,6 +65,7 @@ export function requireAuth(...roles: UserRole[]) {
         department: session.department,
         faculty: session.faculty,
         admin: session.admin,
+        qa: session.qa,
       };
       next();
     } catch (error) {

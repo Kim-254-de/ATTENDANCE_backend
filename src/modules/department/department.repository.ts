@@ -3,11 +3,12 @@ import { query, queryOne, transaction } from '../../db/database.js';
 /**
  * All SQL for the department module. Every query is parameterised.
  *
- * Every query here takes a `department_id` as `$1` and is scoped through
- * `lecturer_profiles.department_id`. A unit has no department column of its own
- * on purpose (`db/migrations/021_departments.sql`): its department is its
- * lecturer's, so `units.lecturer_user_id -> lecturer_profiles.user_id` is the
- * only route in, and nothing can drift out of agreement with it.
+ * Every query here takes a `department_id` as `$1`. Teaching is scoped by the
+ * unit's owning department, `units.department_id`
+ * (`db/migrations/033_unit_owning_department.sql`), not by who teaches it: a
+ * Basic Sciences unit taught by a borrowed Computer Science lecturer counts
+ * under Basic Sciences. Staff (head counts, account deletion) are still the
+ * lecturers whose own `lecturer_profiles.department_id` is this department.
  *
  * The attendance figures are the same ones the lecturer module reports, just
  * re-scoped: a per-session rate of checked-in ÷ ACTIVE allocations, averaged.
@@ -15,8 +16,17 @@ import { query, queryOne, transaction } from '../../db/database.js';
  * department's numbers must reconcile with what each lecturer sees.
  */
 
-/** Lecturers of one department, as a scalar subquery every aggregate below reuses. */
-const DEPT_LECTURERS = `SELECT user_id FROM lecturer_profiles WHERE department_id = $1`;
+/** The department's units, as a subquery every aggregate below reuses. */
+const DEPT_UNITS = `SELECT id FROM units WHERE department_id = $1`;
+
+/**
+ * Everyone the department deals with: its own staff, plus any lecturer from
+ * elsewhere teaching one of its units.
+ */
+const DEPT_LECTURERS = `
+  SELECT user_id FROM lecturer_profiles WHERE department_id = $1
+  UNION
+  SELECT lecturer_user_id FROM units WHERE department_id = $1`;
 
 /**
  * One session's attendance rate, 0–100, or NULL when the unit has no ACTIVE
@@ -70,6 +80,7 @@ export async function findOfficerDepartment(userId: string): Promise<OfficerDepa
 }
 
 export interface DepartmentOverviewRow {
+  /** The department's own staff, not lecturers borrowed from elsewhere. */
   lecturerCount: number;
   studentCount: number;
   unitCount: number;
@@ -107,28 +118,26 @@ export async function getOverview(
        (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users usr ON usr.id = lp.user_id
          WHERE lp.department_id = $1 AND usr.deleted_at IS NULL)::int AS lecturer_count,
 
-       (SELECT COUNT(*) FROM units u
-         WHERE u.lecturer_user_id IN (${DEPT_LECTURERS}))::int AS unit_count,
+       (SELECT COUNT(*) FROM units u WHERE u.department_id = $1)::int AS unit_count,
 
        (SELECT COUNT(DISTINCT COALESCE(a.student_user_id::text, 'reg:' || a.registration_number))
           FROM unit_allocations a
-          JOIN units u ON u.id = a.unit_id
          WHERE a.status = 'ACTIVE'
-           AND u.lecturer_user_id IN (${DEPT_LECTURERS}))::int AS student_count,
+           AND a.unit_id IN (${DEPT_UNITS}))::int AS student_count,
 
        (SELECT COUNT(*) FROM attendance_sessions s
-         WHERE s.lecturer_user_id IN (${DEPT_LECTURERS}))::int AS sessions_held,
+         WHERE s.unit_id IN (${DEPT_UNITS}))::int AS sessions_held,
 
        (SELECT COALESCE(AVG(rate), 0)::float8
           FROM (SELECT ${SESSION_RATE} AS rate
                   FROM attendance_sessions s
-                 WHERE s.lecturer_user_id IN (${DEPT_LECTURERS})) per_session
+                 WHERE s.unit_id IN (${DEPT_UNITS})) per_session
          WHERE rate IS NOT NULL) AS avg_attendance_rate,
 
        (SELECT (COUNT(*) FILTER (WHERE s.opens_at <= s.scheduled_start_at + make_interval(mins => $2))::numeric
                 / NULLIF(COUNT(*), 0) * 100)::float8
           FROM attendance_sessions s
-         WHERE s.lecturer_user_id IN (${DEPT_LECTURERS})
+         WHERE s.unit_id IN (${DEPT_UNITS})
            AND ${MEASURABLE}) AS on_time_rate`,
     [departmentId, graceMinutes],
   );
@@ -146,7 +155,13 @@ export interface DepartmentLecturerRow {
   userId: string;
   fullName: string;
   staffNumber: string;
+  /** The lecturer's own department; null while unassigned. */
+  homeDepartmentId: string | null;
+  homeDepartmentName: string | null;
+  /** Units of THIS department the lecturer teaches. Every figure below is over these alone. */
   unitsTaught: number;
+  /** Units owned by other departments — service teaching, for workload. */
+  unitsElsewhere: number;
   /** ACTIVE allocations across the lecturer's units — the same count `lecturer.repository.ts` reports. */
   studentsTaught: number;
   avgAttendanceRate: number;
@@ -157,9 +172,11 @@ export interface DepartmentLecturerRow {
 }
 
 /**
- * One row per lecturer in the department. The per-lecturer aggregates are the
- * lecturer module's `getSummary` run for each of them, so a lecturer opening
- * their own dashboard sees the same four numbers this row reports.
+ * One row per lecturer the department deals with: its own staff and any
+ * lecturer teaching one of its units. The figures are the lecturer module's
+ * `getSummary` restricted to this department's units, so the rows add up to
+ * the department's own totals; a lecturer who teaches only here sees the same
+ * numbers on their own dashboard.
  */
 export async function listLecturers(
   departmentId: string,
@@ -169,7 +186,10 @@ export async function listLecturers(
     user_id: string;
     full_name: string;
     staff_number: string;
+    home_department_id: string | null;
+    home_department_name: string | null;
     units_taught: number;
+    units_elsewhere: number;
     students_taught: number;
     avg_attendance_rate: number;
     sessions_held: number;
@@ -177,42 +197,51 @@ export async function listLecturers(
     on_time_rate: number | null;
   }>(
     `SELECT lp.user_id, usr.full_name, lp.staff_number,
+            hd.id AS home_department_id, hd.name AS home_department_name,
 
-            (SELECT COUNT(*) FROM units u WHERE u.lecturer_user_id = lp.user_id)::int AS units_taught,
+            (SELECT COUNT(*) FROM units u
+              WHERE u.lecturer_user_id = lp.user_id AND u.department_id = $1)::int AS units_taught,
+
+            (SELECT COUNT(*) FROM units u
+              WHERE u.lecturer_user_id = lp.user_id AND u.department_id IS DISTINCT FROM $1)::int AS units_elsewhere,
 
             (SELECT COUNT(*) FROM unit_allocations a
                JOIN units u ON u.id = a.unit_id
-              WHERE u.lecturer_user_id = lp.user_id AND a.status = 'ACTIVE')::int AS students_taught,
+              WHERE u.lecturer_user_id = lp.user_id AND u.department_id = $1 AND a.status = 'ACTIVE')::int AS students_taught,
 
             (SELECT COUNT(*) FROM attendance_sessions s
-              WHERE s.lecturer_user_id = lp.user_id)::int AS sessions_held,
+              WHERE s.lecturer_user_id = lp.user_id AND s.unit_id IN (${DEPT_UNITS}))::int AS sessions_held,
 
             (SELECT COALESCE(AVG(rate), 0)::float8
                FROM (SELECT ${SESSION_RATE} AS rate
                        FROM attendance_sessions s
-                      WHERE s.lecturer_user_id = lp.user_id) per_session
+                      WHERE s.lecturer_user_id = lp.user_id AND s.unit_id IN (${DEPT_UNITS})) per_session
               WHERE rate IS NOT NULL) AS avg_attendance_rate,
 
             (SELECT AVG(${LATE_MINUTES})::float8
                FROM attendance_sessions s
-              WHERE s.lecturer_user_id = lp.user_id AND ${MEASURABLE}) AS avg_late_minutes,
+              WHERE s.lecturer_user_id = lp.user_id AND s.unit_id IN (${DEPT_UNITS}) AND ${MEASURABLE}) AS avg_late_minutes,
 
             (SELECT (COUNT(*) FILTER (WHERE s.opens_at <= s.scheduled_start_at + make_interval(mins => $2))::numeric
                      / NULLIF(COUNT(*), 0) * 100)::float8
                FROM attendance_sessions s
-              WHERE s.lecturer_user_id = lp.user_id AND ${MEASURABLE}) AS on_time_rate
+              WHERE s.lecturer_user_id = lp.user_id AND s.unit_id IN (${DEPT_UNITS}) AND ${MEASURABLE}) AS on_time_rate
 
        FROM lecturer_profiles lp
        JOIN users usr ON usr.id = lp.user_id
-      WHERE lp.department_id = $1 AND usr.deleted_at IS NULL
-      ORDER BY usr.full_name`,
+  LEFT JOIN departments hd ON hd.id = lp.department_id
+      WHERE lp.user_id IN (${DEPT_LECTURERS}) AND usr.deleted_at IS NULL
+      ORDER BY (lp.department_id IS DISTINCT FROM $1), usr.full_name`,
     [departmentId, graceMinutes],
   );
   return rows.map((r) => ({
     userId: r.user_id,
     fullName: r.full_name,
     staffNumber: r.staff_number,
+    homeDepartmentId: r.home_department_id,
+    homeDepartmentName: r.home_department_name,
     unitsTaught: r.units_taught,
+    unitsElsewhere: r.units_elsewhere,
     studentsTaught: r.students_taught,
     avgAttendanceRate: r.avg_attendance_rate,
     sessionsHeld: r.sessions_held,
@@ -222,8 +251,9 @@ export async function listLecturers(
 }
 
 /**
- * The department a lecturer belongs to, for the drill-down's ownership check.
- * Null when there is no lecturer profile for that user id at all.
+ * The department a lecturer belongs to (their home department), for the
+ * account-deletion ownership check. Null when there is no lecturer profile for
+ * that user id at all, or it has no department yet.
  */
 export async function findLecturerDepartmentId(lecturerUserId: string): Promise<string | null> {
   const row = await queryOne<{ department_id: string | null }>(
@@ -235,12 +265,27 @@ export async function findLecturerDepartmentId(lecturerUserId: string): Promise<
   return row ? row.department_id : null;
 }
 
+/**
+ * Whether a lecturer is one the department deals with — its own staff, or
+ * teaching one of its units — for the drill-down's ownership check.
+ */
+export async function isLecturerInDepartmentScope(departmentId: string, lecturerUserId: string): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
+        WHERE lp.user_id = $2 AND u.deleted_at IS NULL AND lp.user_id IN (${DEPT_LECTURERS})
+     ) AS found`,
+    [departmentId, lecturerUserId],
+  );
+  return row?.found ?? false;
+}
+
 /** Whether a student is on any roster of the department's units — the scope an officer may delete a student account in. */
 export async function isStudentInDepartment(departmentId: string, studentUserId: string): Promise<boolean> {
   const row = await queryOne<{ found: boolean }>(
     `SELECT EXISTS (
        SELECT 1 FROM unit_allocations a JOIN units u ON u.id = a.unit_id
-        WHERE a.student_user_id = $2 AND u.lecturer_user_id IN (${DEPT_LECTURERS})
+        WHERE a.student_user_id = $2 AND u.department_id = $1
      ) AS found`,
     [departmentId, studentUserId],
   );
@@ -326,7 +371,7 @@ export async function listUnits(
 
        FROM units u
        JOIN users usr ON usr.id = u.lecturer_user_id
-      WHERE u.lecturer_user_id IN (${DEPT_LECTURERS})
+      WHERE u.department_id = $1
         AND ($2::uuid IS NULL OR u.lecturer_user_id = $2)
       ORDER BY u.code`,
     [departmentId, lecturerUserId ?? null],
@@ -382,7 +427,7 @@ export async function listStudents(departmentId: string): Promise<DepartmentStud
   LEFT JOIN users su ON su.id = a.student_user_id
   LEFT JOIN attendance_sessions se ON se.unit_id = u.id
   LEFT JOIN attendance_records r   ON r.session_id = se.id AND r.student_user_id = a.student_user_id
-      WHERE u.lecturer_user_id IN (${DEPT_LECTURERS}) AND a.status = 'ACTIVE'
+      WHERE u.department_id = $1 AND a.status = 'ACTIVE'
       GROUP BY a.id, a.registration_number, a.student_user_id, a.full_name, su.full_name,
                u.id, u.code, u.name, u.lecturer_user_id, lu.full_name
       ORDER BY full_name NULLS LAST, u.code`,
@@ -434,7 +479,7 @@ export async function listTimekeeping(
        FROM attendance_sessions s
        JOIN units u   ON u.id = s.unit_id
        JOIN users usr ON usr.id = s.lecturer_user_id
-      WHERE s.lecturer_user_id IN (${DEPT_LECTURERS})
+      WHERE u.department_id = $1
         AND ${MEASURABLE}
         AND ($2::uuid IS NULL OR s.lecturer_user_id = $2)
         AND ($3::uuid IS NULL OR s.unit_id = $3)
@@ -469,8 +514,9 @@ export interface LecturerSessionRow {
   total: number;
 }
 
-/** The drill-down's recent sessions for one lecturer, with their timekeeping. */
+/** The drill-down's recent sessions for one lecturer on this department's units, with their timekeeping. */
 export async function listLecturerSessions(
+  departmentId: string,
   lecturerUserId: string,
   limit: number,
 ): Promise<LecturerSessionRow[]> {
@@ -493,10 +539,10 @@ export async function listLecturerSessions(
               WHERE a.unit_id = s.unit_id AND a.status = 'ACTIVE')::int AS total
        FROM attendance_sessions s
        JOIN units u ON u.id = s.unit_id
-      WHERE s.lecturer_user_id = $1
+      WHERE u.department_id = $1 AND s.lecturer_user_id = $2
       ORDER BY s.opens_at DESC
-      LIMIT $2`,
-    [lecturerUserId, limit],
+      LIMIT $3`,
+    [departmentId, lecturerUserId, limit],
   );
   return rows.map((r) => ({
     sessionId: r.session_id,
@@ -585,6 +631,9 @@ export type AllocateSegmentResult =
  * transaction: the offering row is locked (`FOR UPDATE`) so two simultaneous
  * allocations can never both land on the same segment letter or overfill it.
  *
+ * The unit belongs to the offering's department whoever teaches it, so a
+ * lecturer borrowed from another department teaches it without moving it.
+ *
  * A single-segment offering (the common case: most courses aren't split)
  * becomes one unit with the offering's own code, `base_code`/`class_group`
  * both null — indistinguishable from any other ordinary unit. A multi-segment
@@ -596,8 +645,8 @@ export async function allocateLecturerToSegment(
   lecturerUserId: string,
 ): Promise<AllocateSegmentResult> {
   return transaction(async (client) => {
-    const offering = await queryOne<{ code: string; name: string | null; segments_planned: number }>(
-      `SELECT code, name, segments_planned FROM course_offerings WHERE id = $1 FOR UPDATE`,
+    const offering = await queryOne<{ code: string; name: string | null; segments_planned: number; department_id: string }>(
+      `SELECT code, name, segments_planned, department_id FROM course_offerings WHERE id = $1 FOR UPDATE`,
       [offeringId],
       client,
     );
@@ -618,13 +667,69 @@ export async function allocateLecturerToSegment(
     const classGroup = multiSegment ? `GR ${letter}` : null;
 
     const unit = await queryOne<{ id: string }>(
-      `INSERT INTO units (code, name, lecturer_user_id, status, base_code, class_group, offering_id)
-       VALUES ($1, $2, $3, 'VERIFIED', $4, $5, $6)
+      `INSERT INTO units (code, name, lecturer_user_id, status, base_code, class_group, offering_id, department_id)
+       VALUES ($1, $2, $3, 'VERIFIED', $4, $5, $6, $7)
        RETURNING id`,
-      [code, offering.name, lecturerUserId, baseCode, classGroup, offeringId],
+      [code, offering.name, lecturerUserId, baseCode, classGroup, offeringId, offering.department_id],
       client,
     );
     if (!unit) throw new Error('units insert returned no row');
     return { ok: true, unitId: unit.id, code };
   });
+}
+
+export interface LecturerDirectoryRow {
+  userId: string;
+  fullName: string;
+  staffNumber: string;
+  title: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+}
+
+/**
+ * Lecturers anywhere in the institution, for picking who to allocate to a
+ * section: a department may borrow another department's lecturer. Only what a
+ * staff list shows (name, staff number, department), and capped, so it is a
+ * picker rather than an export. Own staff first.
+ */
+export async function searchLecturers(departmentId: string, search: string | null, limit: number): Promise<LecturerDirectoryRow[]> {
+  const { rows } = await query<{
+    user_id: string;
+    full_name: string;
+    staff_number: string;
+    title: string | null;
+    department_id: string | null;
+    department_name: string | null;
+  }>(
+    `SELECT lp.user_id, usr.full_name, lp.staff_number, lp.title, d.id AS department_id, d.name AS department_name
+       FROM lecturer_profiles lp
+       JOIN users usr ON usr.id = lp.user_id
+  LEFT JOIN departments d ON d.id = lp.department_id
+      WHERE usr.deleted_at IS NULL AND usr.status = 'ACTIVE'
+        AND ($2::text IS NULL OR usr.full_name ILIKE '%' || $2 || '%' OR lp.staff_number ILIKE '%' || $2 || '%')
+      ORDER BY (lp.department_id IS DISTINCT FROM $1), usr.full_name
+      LIMIT $3`,
+    [departmentId, search, limit],
+  );
+  return rows.map((r) => ({
+    userId: r.user_id,
+    fullName: r.full_name,
+    staffNumber: r.staff_number,
+    title: r.title,
+    departmentId: r.department_id,
+    departmentName: r.department_name,
+  }));
+}
+
+/** Whether this user is an active, undeleted lecturer — any department, or none. */
+export async function isActiveLecturer(lecturerUserId: string): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
+        WHERE lp.user_id = $1 AND u.deleted_at IS NULL AND u.status = 'ACTIVE'
+     ) AS found`,
+    [lecturerUserId],
+  );
+  return row?.found ?? false;
 }

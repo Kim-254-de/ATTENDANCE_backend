@@ -59,7 +59,7 @@ is itself proof of verification.
 | `erp_staff_id` | `varchar(128)` null | The ERP's own key, for reconciliation |
 | `erp_verified_at` | `timestamptz` | Set to `NOW()` on insert |
 | `erp_snapshot` | `jsonb` null | Verbatim ERP payload — evidence for disputes |
-| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The normalised key everything department-scoped joins on; `department` above stays the ERP's free text and is still written by every sync. Null for a lecturer whose ERP department matched no row |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The lecturer's home department: who counts as a department's staff. `department` above stays the ERP/SMARTTT free text and is still written by every sync. Registration and SMARTTT sign-in fill this column by matching that text against `departments.name`, ignoring case and spaces, and only while it is null. Null means unassigned: nothing matched, and a faculty officer or administrator places the lecturer by hand (`lecturer.placement.ts`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `student_profiles`
@@ -179,6 +179,7 @@ codes never add rows anywhere.
 | `students_without_group` | `integer` null | For a group: students registered for the unit who haven't picked a group in SMARTTT, so are on no group's roster |
 | `timetable_synced_at` | `timestamptz` null | Last time SMARTTT confirmed this unit for its lecturer |
 | `offering_id` | `uuid` null | FK -> `course_offerings(id)` (`023_course_offerings.sql`). Set when a department allocated a lecturer to this unit rather than SMARTTT syncing or reproducing it; null for every other unit. `base_code`/`class_group` above are set the same way either path fills them |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`033_unit_owning_department.sql`). The department that owns the unit's curriculum, whoever teaches it. Every department, faculty and QA figure is scoped by it. Set from the offering on allocation. Otherwise trigger `units_default_department` copies the lecturer's department on insert, and trigger `lecturer_department_claims_units` fills it in when an unassigned lecturer gets a department. Moving a lecturer does not change it |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `attendance_sessions`
@@ -414,10 +415,10 @@ backfilled from the distinct values the ERP had already written, and the
 free-text `lecturer_profiles.department` / `.faculty` columns stay: the ERP sync
 still writes them on every registration and profile refresh.
 
-`units` deliberately has **no** `department_id`. A unit's department is its
-lecturer's (`units.lecturer_user_id` -> `lecturer_profiles.user_id` ->
-`department_id`); a second copy could disagree with the first the moment a unit
-changes hands.
+This migration gave `units` no `department_id`: a unit's department was its
+lecturer's. `033_unit_owning_department.sql` reverses that. A unit now belongs
+to the department that owns its curriculum (`units.department_id`), so service
+teaching and borrowed lecturers count under the owning department.
 
 ### `faculties`
 
@@ -458,9 +459,8 @@ request rather than trusting the session's cached account.
 | `phone` | `varchar(32)` null | |
 | `created_at` / `updated_at` | `timestamptz` | |
 
-Indexes: `lecturer_profiles(department_id)` — every department query starts by
-selecting the department's lecturers, the way `units_lecturer_idx` backs every
-"this lecturer's units" query — plus `departments(faculty_id)` and
+Indexes: `lecturer_profiles(department_id)` (a department's staff),
+`units(department_id)` (a department's teaching), `departments(faculty_id)` and
 `department_profiles(department_id)`.
 
 ---
@@ -545,6 +545,206 @@ Created by `db/migrations/026_account_invitations.sql`.
 | `created_at` | `timestamptz` | |
 
 Index: `account_invitations(user_id, created_at DESC)`.
+
+## Tables the quality-assurance module touches
+
+Created by `db/migrations/027_qa_role.sql` through `032_qa_corrective_actions.sql`.
+See [`src/modules/quality-assurance/README.md`](../src/modules/quality-assurance/README.md).
+Internal Quality Assurance (IQA): a standards catalog, checklist-driven
+internal audits against a department or faculty, findings against each
+checklist item, and corrective action plans (CAPA) tracked to verified
+closure. External Quality Assurance (EQA) bodies get no account in this
+phase — they only ever see what IQA exports as PDF/CSV.
+
+### `qa_profiles`
+
+One QA officer. Unlike `department_profiles`/`faculty_profiles` this has no
+department/faculty FK — a QA officer's remit is the whole institution, so
+every list endpoint in the module takes explicit filters instead of being
+auto-scoped. No ERP record to verify against, so provisioned directly
+(`scripts/dev-seed-qa.mjs` locally), no self-registration.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `QA`) ON DELETE CASCADE |
+| `title` | `varchar(32)` null | |
+| `phone` | `varchar(32)` null | |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### `qa_standards`
+
+The catalog of quality standards the institution is assessed against. No
+delete endpoint — deactivate via `is_active`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `code` | `varchar(32)` | **UNIQUE**, e.g. `STD-GOV-01` |
+| `category` | `varchar(40)` | CHECK: `GOVERNANCE`, `ACADEMIC_PROGRAMS`, `STAFF`, `STUDENTS`, `FACILITIES`, `FINANCE`, `RESEARCH`, `COMMUNITY_ENGAGEMENT` |
+| `title` | `varchar(200)` | |
+| `description` | `text` null | |
+| `display_order` | `integer` | Default 0 |
+| `is_active` | `boolean` | Default true |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Index: `qa_standards(category)`.
+
+### `qa_checklist_templates` / `qa_checklist_items`
+
+A template is a named, ordered list of items; each item maps to one
+standard so findings roll up by standard/category.
+
+| Column (`qa_checklist_templates`) | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `name` | `varchar(160)` | |
+| `description` | `text` null | |
+| `is_active` | `boolean` | Default true |
+| `created_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+| Column (`qa_checklist_items`) | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `template_id` | `uuid` | FK -> `qa_checklist_templates(id)` ON DELETE CASCADE |
+| `standard_id` | `uuid` | FK -> `qa_standards(id)` |
+| `prompt` | `text` | The checklist question/requirement |
+| `guidance` | `text` null | |
+| `sort_order` | `integer` | Default 0 |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Indexes: `qa_checklist_items(template_id)`, `qa_checklist_items(standard_id)`.
+
+### `qa_audits`
+
+One internal audit of a department or faculty, against one checklist
+template. `audit_type` is CHECK'd to `'INTERNAL'` only for now — the column
+exists so a later phase can add `'EQA'` without a schema change. Exactly one
+of `target_department_id`/`target_faculty_id` is set (`CHECK
+(num_nonnulls(...) = 1)`).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `title` | `varchar(200)` | |
+| `audit_type` | `varchar(16)` | CHECK: `INTERNAL` (only value so far) |
+| `target_department_id` | `uuid` null | FK -> `departments(id)`. Exactly one of this/`target_faculty_id` is set |
+| `target_faculty_id` | `uuid` null | FK -> `faculties(id)` |
+| `checklist_template_id` | `uuid` | FK -> `qa_checklist_templates(id)` |
+| `lead_auditor_user_id` | `uuid` | FK -> `users(id)` |
+| `scheduled_date` | `date` | |
+| `status` | `varchar(16)` | CHECK: `PLANNED`, `IN_PROGRESS`, `COMPLETED`. Forward-only transitions, enforced in `audit.service.ts` |
+| `started_at` / `completed_at` | `timestamptz` null | Set by the service on the matching transition |
+| `notes` | `text` null | |
+| `created_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Indexes: `qa_audits(target_department_id)`, `qa_audits(target_faculty_id)`,
+`qa_audits(lead_auditor_user_id)`, `qa_audits(status)`, `qa_audits(scheduled_date)`.
+
+### `qa_audit_findings`
+
+One rating per (audit, checklist item). `UNIQUE (audit_id,
+checklist_item_id)` makes recording a finding a true upsert — the same
+load-bearing unique index `attendance_records` uses for a check-in.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `audit_id` | `uuid` | FK -> `qa_audits(id)` ON DELETE CASCADE |
+| `checklist_item_id` | `uuid` | FK -> `qa_checklist_items(id)` |
+| `rating` | `varchar(16)` | CHECK: `COMPLIANT`, `PARTIAL`, `NON_COMPLIANT`, `NOT_APPLICABLE` |
+| `score` | `numeric(5,2)` null | 0–100 when set; `NOT_APPLICABLE` findings are excluded from every KPI rollup |
+| `evidence_notes` | `text` null | |
+| `recorded_by_user_id` | `uuid` | FK -> `users(id)` |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+**UNIQUE** `(audit_id, checklist_item_id)`. Indexes: `qa_audit_findings(audit_id)`, `qa_audit_findings(rating)`.
+
+### `qa_corrective_actions`
+
+A CAPA raised against a `NON_COMPLIANT`/`PARTIAL` finding (enforced in
+`capa.service.ts`, not by a CHECK — a CHECK can't see another table's row).
+The CHECK below ties `status` to the verification pair so a half-verified
+row can never be written: `VERIFIED`/`CLOSED` must carry both
+`verified_by_user_id` and `verified_at`; `OPEN`/`IN_PROGRESS` must carry
+neither, and both fields are stamped server-side from the authenticated QA
+officer, never from the request body.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `finding_id` | `uuid` | FK -> `qa_audit_findings(id)` ON DELETE CASCADE |
+| `description` | `text` | |
+| `owner_user_id` | `uuid` | FK -> `users(id)`. Typically the audited department/faculty officer |
+| `due_date` | `date` | |
+| `status` | `varchar(16)` | CHECK: `OPEN`, `IN_PROGRESS`, `VERIFIED`, `CLOSED`. Forward-only transitions |
+| `verified_by_user_id` | `uuid` null | FK -> `users(id)`. Set iff `status IN ('VERIFIED','CLOSED')` |
+| `verified_at` | `timestamptz` null | Set iff `status IN ('VERIFIED','CLOSED')` |
+| `created_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+Indexes: `qa_corrective_actions(finding_id)`, `qa_corrective_actions(owner_user_id)`,
+`qa_corrective_actions(status)`, `qa_corrective_actions(due_date)`.
+
+### `attendance_policy`
+
+`db/migrations/034_attendance_policy.sql`. The exam-eligibility rule, one row
+for the whole institution (`id` is always `TRUE`). See
+[`src/modules/quality-assurance/README.md`](../src/modules/quality-assurance/README.md) "Exam eligibility".
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `boolean` | Primary key, CHECK `id` — so there can only be one row |
+| `min_attendance_percent` | `numeric(5,2)` | 1–100, default 75. Below this share of held classes, a student may not sit the unit's exam |
+| `at_risk_margin_percent` | `numeric(5,2)` | 0–50, default 10. At or above the minimum but below minimum + margin is "at risk" |
+| `updated_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+### Course evaluations
+
+`db/migrations/035_qa_course_evaluations.sql`. The two halves are never joined:
+submissions say who has answered, and responses say what was said.
+
+**`qa_evaluation_rounds`**: `id`, `title` (`varchar(200)`), `instructions`
+(text null), `opens_at`, `closes_at` (`timestamptz`, CHECK `closes_at > opens_at`),
+`min_responses` (1–50, default 3: below it a unit's results are withheld),
+`created_by_user_id`, `created_at`, `updated_at`.
+
+**`qa_evaluation_questions`**: `id`, `round_id` (ON DELETE CASCADE),
+`position` (UNIQUE per round), `prompt` (`varchar(300)`), `kind` (`RATING` |
+`TEXT`), `required`.
+
+**`qa_evaluation_submissions`**: primary key (`round_id`, `unit_id`,
+`student_user_id`). Its only job is to make a second submission a unique
+violation.
+
+**`qa_evaluation_responses`**: `id`, `round_id`, `unit_id`, plus
+`lecturer_user_id` and `department_id` copied from the unit at submission
+time, so feedback stays with whoever taught the unit then. It has no student
+column and no timestamp.
+
+**`qa_evaluation_answers`**: primary key (`response_id`, `question_id`). It
+holds either `rating` (1–5) or `text_answer`, never both (CHECK).
+
+### `department_aliases`
+
+`db/migrations/036_department_spelling.sql`. Other spellings of a department.
+The same migration adds the SQL functions `department_key(name)` (the
+canonical form every match compares), `department_for_name(name)` (by
+canonical name, then by alias) and `merge_departments(dup, keep, actor)`, plus
+an index on `department_key(departments.name)`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `alias_key` | `text` | **UNIQUE** — `department_key(alias)`, so one spelling means one department |
+| `alias` | `varchar(160)` | The spelling as first seen |
+| `department_id` | `uuid` | FK -> `departments(id)` ON DELETE CASCADE |
+| `source` | `varchar(16)` | `PLACEMENT` (learned when an officer placed a lecturer) or `MERGE` (a merged department's old name) |
+| `created_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
+| `created_at` | `timestamptz` | |
 
 ---
 

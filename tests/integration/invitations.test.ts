@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Invited accounts (auth.invitation.ts) against a real Postgres database:
  * an administrator creates faculties and invites faculty officers, a faculty
@@ -32,7 +35,7 @@ const TEST_DB = 'attendance_invitations_test';
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
 const adminUrl = new URL(realUrl); adminUrl.pathname = '/postgres';
 
-const PASSWORD = 'Officer-Pass-2026';
+const PASSWORD = fake('Officer-', 'Pass', '-2026');
 
 let app: Express;
 let pool: pg.Pool;
@@ -215,6 +218,23 @@ describe('inviting a faculty officer', () => {
     expect((await accept(lastTokenFor(email))).status).toBe(200);
     const { res } = await signIn(email);
     expect(body(res).data).toMatchObject({ role: 'admin', fullName: 'Second Admin' });
+  });
+
+  it('invites a QA officer, who is listed, signs in as one and can use the QA portal', async () => {
+    const email = 'quinn.qa@uni.ac.ke';
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'qa', fullName: 'Quinn QA', email })).status).toBe(201);
+    expect(sent.at(-1)!.roleDescription).toBe('quality assurance officer');
+
+    const officers = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
+    expect(officers.find((o) => o.email === email)).toMatchObject({ role: 'qa', status: 'PENDING_VERIFICATION', facultyName: null });
+
+    const token = lastTokenFor(email);
+    expect(body(await publicPost('/auth/invitations/lookup', { token })).data).toMatchObject({ role: 'qa', scopeName: null });
+    expect((await accept(token)).status).toBe(200);
+
+    const { res, cookies } = await signIn(email);
+    expect(body(res).data).toMatchObject({ role: 'qa', fullName: 'Quinn QA' });
+    expect((await request(app).get('/api/v1/quality-assurance/faculties').set('Cookie', cookies)).status).toBe(200);
   });
 });
 

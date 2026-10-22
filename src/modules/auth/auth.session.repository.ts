@@ -63,8 +63,28 @@ export interface AdminPublic {
   status: AccountStatus;
 }
 
+/**
+ * What the portal shows about a signed-in QA officer. No department/faculty
+ * id — a QA officer's remit is the whole institution, so unlike the other
+ * officer roles there is nothing org-unit-scoped to resolve here.
+ */
+export interface QaOfficerPublic {
+  id: string;
+  role: 'qa';
+  fullName: string;
+  email: string;
+  title: string | null;
+  status: AccountStatus;
+}
+
 /** Whoever is signed in: what GET /auth/me and sign-in return. */
-export type AccountPublic = LecturerPublic | StudentPublic | DepartmentOfficerPublic | FacultyOfficerPublic | AdminPublic;
+export type AccountPublic =
+  | LecturerPublic
+  | StudentPublic
+  | DepartmentOfficerPublic
+  | FacultyOfficerPublic
+  | AdminPublic
+  | QaOfficerPublic;
 
 export const toStudentPublic = (c: {
   id: string; fullName: string; email: string; registrationNumber: string;
@@ -82,7 +102,7 @@ export const toStudentPublic = (c: {
 
 export interface LoginCandidate {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN' | 'QA';
   email: string;
   fullName: string;
   passwordHash: string;
@@ -95,7 +115,7 @@ export interface LoginCandidate {
 
 interface LoginRow {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN' | 'QA';
   email: string;
   full_name: string;
   password_hash: string;
@@ -112,6 +132,8 @@ interface LoginRow {
   department_name: string | null;
   faculty_id: string | null;
   faculty_name: string | null;
+  has_qa_profile: boolean;
+  qa_title: string | null;
 }
 
 /** The public shape for a session or login row; null when its profile row is missing. */
@@ -121,6 +143,7 @@ function accountFrom(row: {
   registration_number: string | null; programme: string | null; year_of_study: number | null;
   department_id: string | null; department_name: string | null;
   faculty_id: string | null; faculty_name: string | null;
+  has_qa_profile: boolean; qa_title: string | null;
 }): AccountPublic | null {
   if (row.role === 'LECTURER' && row.staff_number) {
     return toLecturerPublic({
@@ -148,6 +171,11 @@ function accountFrom(row: {
   }
   if (row.role === 'ADMIN') {
     return { id: row.id, role: 'admin', fullName: row.full_name, email: row.email, status: row.status };
+  }
+  if (row.role === 'QA' && row.has_qa_profile) {
+    return toQaOfficerPublic({
+      id: row.id, fullName: row.full_name, email: row.email, title: row.qa_title, status: row.status,
+    });
   }
   return null;
 }
@@ -192,6 +220,17 @@ export const toFacultyOfficerPublic = (c: {
   status: c.status,
 });
 
+export const toQaOfficerPublic = (c: {
+  id: string; fullName: string; email: string; title: string | null; status: AccountStatus;
+}): QaOfficerPublic => ({
+  id: c.id,
+  role: 'qa',
+  fullName: c.fullName,
+  email: c.email,
+  title: c.title,
+  status: c.status,
+});
+
 /**
  * A lecturer, student, officer or administrator account for sign-in. `identifier` is already
  * normalised: a lower-cased email, or an upper-cased staff number
@@ -214,7 +253,8 @@ async function findLoginCandidate(where: string, value: string): Promise<LoginCa
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
             dp.department_id, d.name AS department_name,
-            fp.faculty_id, fac.name AS faculty_name
+            fp.faculty_id, fac.name AS faculty_name,
+            (qp.user_id IS NOT NULL) AS has_qa_profile, qp.title AS qa_title
        FROM users u
   LEFT JOIN lecturer_profiles   p   ON p.user_id = u.id
   LEFT JOIN student_profiles    sp  ON sp.user_id = u.id
@@ -222,7 +262,8 @@ async function findLoginCandidate(where: string, value: string): Promise<LoginCa
   LEFT JOIN departments         d   ON d.id = dp.department_id
   LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
   LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
-      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN')
+  LEFT JOIN qa_profiles         qp  ON qp.user_id = u.id
+      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN', 'QA')
         AND u.deleted_at IS NULL
         AND ${where}
       ORDER BY u.role
@@ -313,6 +354,7 @@ export interface LiveSession {
   department: DepartmentOfficerPublic | null;
   faculty: FacultyOfficerPublic | null;
   admin: AdminPublic | null;
+  qa: QaOfficerPublic | null;
 }
 
 /** A session with its owner, or null. Callers decide what "usable" means. */
@@ -324,13 +366,15 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
     registration_number: string | null; programme: string | null; year_of_study: number | null;
     department_id: string | null; department_name: string | null;
     faculty_id: string | null; faculty_name: string | null;
+    has_qa_profile: boolean; qa_title: string | null;
   }>(
     `SELECT s.id, s.user_id, s.refresh_token_hash, s.expires_at, s.revoked_at,
             u.role, u.status, u.deleted_at, u.email, u.full_name,
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
             dp.department_id, d.name AS department_name,
-            fp.faculty_id, fac.name AS faculty_name
+            fp.faculty_id, fac.name AS faculty_name,
+            (qp.user_id IS NOT NULL) AS has_qa_profile, qp.title AS qa_title
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
   LEFT JOIN lecturer_profiles   p   ON p.user_id = u.id
@@ -339,6 +383,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
   LEFT JOIN departments         d   ON d.id = dp.department_id
   LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
   LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
+  LEFT JOIN qa_profiles         qp  ON qp.user_id = u.id
       WHERE s.id = $1`,
     [sessionId],
   );
@@ -359,6 +404,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
         department: account?.role === 'department' ? account : null,
         faculty: account?.role === 'faculty' ? account : null,
         admin: account?.role === 'admin' ? account : null,
+        qa: account?.role === 'qa' ? account : null,
       };
     })(),
   };

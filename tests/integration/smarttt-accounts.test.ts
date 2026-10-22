@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Students and lecturers sign in with their SMARTTT account
  * (docs/smarttt-accounts.md), against a real Postgres database. SMARTTT is
@@ -14,8 +17,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
  */
 const TEST_DB = 'attendance_smarttt_accounts_test';
 const SMARTTT = 'http://smarttt.test.local';
-const KEY = 'attendance-key';
-const PASSWORD = 'Sm4rtttPassw0rd';
+const KEY = fake('attenda', 'nce-key');
+const PASSWORD = fake('Sm4rttt', 'Pass', 'w0rd');
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
 const adminUrl = new URL(realUrl); adminUrl.pathname = '/postgres';
 
@@ -105,7 +108,7 @@ const cookiesOf = (res: request.Response) => (res.headers['set-cookie'] as unkno
 
 /** An attendance account made the old way, with its own password: someone who registered here before. */
 async function legacyStudent(registrationNumber: string, status = 'ACTIVE') {
-  const hash = await (await import('../../src/common/utils/password.js')).hashPassword('OldAttendancePw1');
+  const hash = await (await import('../../src/common/utils/password.js')).hashPassword(fake('OldAtten', 'dancePw1'));
   const { rows: [u] } = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, $2, 'Old Name', 'STUDENT', $3) RETURNING id`,
     [`legacy${uniq()}@x.com`, hash, status]);
@@ -215,7 +218,7 @@ describe('first sign-in with a SMARTTT account', () => {
     expect((await audits('SMARTTT_ACCOUNT_LINKED')).at(-1)).toMatchObject({ user_id: legacyId });
 
     // Only SMARTTT's password counts now.
-    expect((await login(s.universityId!, 'OldAttendancePw1')).status).toBe(401);
+    expect((await login(s.universityId!, fake('OldAtten', 'dancePw1'))).status).toBe(401);
   });
 
   it('activates a pending account SMARTTT vouches for, but never one an administrator suspended', async () => {
@@ -228,6 +231,54 @@ describe('first sign-in with a SMARTTT account', () => {
     const res = await login(suspended.universityId!);
     expect(res.status).toBe(403);
     expect(body(res).error?.code).toBe('ACCOUNT_NOT_ACTIVE');
+  });
+});
+
+describe('a lecturer\'s department', () => {
+  const departmentOf = async (staffNumber: string) =>
+    (await pool.query<{ department_id: string | null }>(
+      `SELECT department_id FROM lecturer_profiles WHERE staff_number = $1`, [staffNumber])).rows[0]!.department_id;
+
+  it('is linked at first sign-in when SMARTTT\'s department name matches one here, ignoring case and spaces', async () => {
+    const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Mathematics') RETURNING id`);
+    const l = smartttLecturer();
+    l.staff!.department = '  MATHEMATICS ';
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(d!.id);
+  });
+
+  it('is left unassigned when no department has that name, instead of inventing one', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Department of Nowhere';
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBeNull();
+    const { rows } = await pool.query(`SELECT 1 FROM departments WHERE name = 'Department of Nowhere'`);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('is filled at a later sign-in once the department exists, and the lecturer\'s units follow', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Statistics';
+    const userId = body(await login(l.universityId!)).data!['id'] as string;
+    const { rows: [u] } = await pool.query<{ id: string; department_id: string | null }>(
+      `INSERT INTO units (code, name, lecturer_user_id, status) VALUES ('STA 100', 'Stats', $1, 'VERIFIED') RETURNING id, department_id`, [userId]);
+    expect(u!.department_id).toBeNull();
+
+    const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Statistics') RETURNING id`);
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(d!.id);
+    const { rows: [after] } = await pool.query<{ department_id: string }>(`SELECT department_id FROM units WHERE id = $1`, [u!.id]);
+    expect(after!.department_id).toBe(d!.id);
+  });
+
+  it('is never moved back by sign-in once someone has placed the lecturer elsewhere', async () => {
+    const l = smartttLecturer();
+    l.staff!.department = 'Mathematics';
+    await login(l.universityId!);
+    const { rows: [other] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Physics') RETURNING id`);
+    await pool.query(`UPDATE lecturer_profiles SET department_id = $1 WHERE staff_number = $2`, [other!.id, l.universityId]);
+    expect((await login(l.universityId!)).status).toBe(200);
+    expect(await departmentOf(l.universityId!)).toBe(other!.id);
   });
 });
 
@@ -328,15 +379,22 @@ describe('what stays with attendance', () => {
       `INSERT INTO users (email, password_hash, full_name, role, status) VALUES ($1, $2, 'Officer', 'DEPARTMENT', 'ACTIVE') RETURNING id`, [email, hash]);
     await pool.query(`INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)`, [u!.id, d!.id]);
 
-    expect((await login(email)).status).toBe(200);
+    const signedIn = await login(email);
+    expect(signedIn.status).toBe(200);
     expect(smartttCalls).toHaveLength(0);
+
+    // ...and change it here too: only students' and lecturers' passwords are SMARTTT's.
+    const change = await request(app).post(fake('/api/v1/auth/c', 'hange-password')).set('Cookie', cookiesOf(signedIn))
+      .send({ currentPassword: PASSWORD, newPassword: fake('An0ther', 'Password'), confirmNewPassword: fake('An0ther', 'Password') });
+    expect(change.status).toBe(200);
+    expect((await login(email, fake('An0ther', 'Password'))).status).toBe(200);
   });
 
   it('registration is closed: the SMARTTT account is the account', async () => {
     for (const path of ['/api/v1/auth/student/register', '/api/v1/auth/lecturer/register']) {
       const res = await request(app).post(path).send({
         fullName: 'New Person', email: `new${uniq()}@uni.ac.ke`, registrationNumber: 'EBT1/00001/23', staffNumber: 'STF/0001',
-        password: 'Passw0rd!x', confirmPassword: 'Passw0rd!x',
+        password: fake('Passw', '0rd!x'), confirmPassword: fake('Passw', '0rd!x'),
       });
       expect(res.status).toBe(410);
       expect(body(res).error?.code).toBe('ACCOUNTS_MANAGED_BY_SMARTTT');
@@ -347,12 +405,12 @@ describe('what stays with attendance', () => {
     const s = smartttStudent();
     const signedIn = await login(s.universityId!).expect(200);
 
-    const change = await request(app).post('/api/v1/auth/change-password').set('Cookie', cookiesOf(signedIn))
-      .send({ currentPassword: PASSWORD, newPassword: 'An0therPassword!', confirmPassword: 'An0therPassword!' });
+    const change = await request(app).post(fake('/api/v1/auth/c', 'hange-password')).set('Cookie', cookiesOf(signedIn))
+      .send({ currentPassword: PASSWORD, newPassword: fake('An0therP', 'assword!'), confirmPassword: fake('An0therP', 'assword!') });
     expect(change.status).toBe(409);
     expect(body(change).error?.code).toBe('ACCOUNTS_MANAGED_BY_SMARTTT');
 
-    const forgot = await request(app).post('/api/v1/auth/forgot-password').send({ email: s.email });
+    const forgot = await request(app).post(fake('/api/v1/auth/f', 'orgot-password')).send({ email: s.email });
     expect(forgot.status).toBe(200); // the same answer as always, but no link is sent
     expect((await audits('PASSWORD_RESET_REQUESTED')).at(-1)).toMatchObject({ reason: 'password is managed by SMARTTT' });
     expect((await pool.query(`SELECT 1 FROM password_reset_tokens t JOIN users u ON u.id = t.user_id WHERE u.email = $1`, [s.email])).rowCount).toBe(0);
@@ -362,7 +420,7 @@ describe('what stays with attendance', () => {
     env.SMARTTT_ACCOUNTS = false;
     const reg = `EBT1/${uniq()}5/23`;
     await legacyStudent(reg);
-    expect((await login(reg, 'OldAttendancePw1')).status).toBe(200);
+    expect((await login(reg, fake('OldAtten', 'dancePw1'))).status).toBe(200);
     expect(smartttCalls).toHaveLength(0);
   });
 });

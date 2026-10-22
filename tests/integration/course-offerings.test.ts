@@ -78,6 +78,7 @@ const api = (auth: string) => ({
   get: (path: string) => request(app).get(`/api/v1${path}`).set('Authorization', auth),
   post: (path: string, data?: object) => request(app).post(`/api/v1${path}`).set('Authorization', auth).send(data),
   patch: (path: string, data?: object) => request(app).patch(`/api/v1${path}`).set('Authorization', auth).send(data),
+  delete: (path: string) => request(app).delete(`/api/v1${path}`).set('Authorization', auth),
 });
 
 interface Fixture {
@@ -191,8 +192,8 @@ describe('the whole provisioning flow', () => {
     expect(res.status).toBe(200);
   });
 
-  it('refuses a lecturer outside the department', async () => {
-    const res = await api(fx.deptOfficer.auth).post(`/departments/courses/${offeringId}/segments`, { lecturerUserId: fx.outsiderLecturer.id });
+  it('refuses someone who is not a lecturer', async () => {
+    const res = await api(fx.deptOfficer.auth).post(`/departments/courses/${offeringId}/segments`, { lecturerUserId: fx.deptOfficer.id });
     expect(res.status).toBe(400);
   });
 
@@ -244,5 +245,64 @@ describe('the whole provisioning flow', () => {
     const rows = body<Array<{ code: string }>>(
       await api(fx.otherFacultyOfficer.auth).get('/faculties/courses')).data;
     expect(rows.map((r) => r.code)).not.toContain('WGT 101');
+  });
+});
+
+describe('borrowing a lecturer from another department', () => {
+  let offeringId: string;
+
+  beforeAll(async () => {
+    const res = await api(fx.facultyOfficer.auth).post(`/faculties/departments/${fx.deptId}/courses`, { code: 'WGT 202', name: 'Service Widgets' });
+    offeringId = body<{ id: string }>(res).data.id;
+  });
+
+  it('finds lecturers from any department in the picker, own staff first', async () => {
+    const rows = body<Array<{ fullName: string; departmentName: string | null }>>(
+      await api(fx.deptOfficer.auth).get('/departments/lecturer-directory')).data;
+    expect(rows.map((r) => r.fullName)).toEqual(['Dr. Widget A', 'Dr. Widget B', 'Dr. Elsewhere']);
+    expect(rows[2]!.departmentName).toBe('Department of Elsewhere');
+
+    const searched = body<Array<{ fullName: string }>>(
+      await api(fx.deptOfficer.auth).get('/departments/lecturer-directory?q=elsew')).data;
+    expect(searched.map((r) => r.fullName)).toEqual(['Dr. Elsewhere']);
+  });
+
+  it('allocates a lecturer from another department; the unit stays with the offering\'s department', async () => {
+    const res = await api(fx.deptOfficer.auth).post(`/departments/courses/${offeringId}/segments`, { lecturerUserId: fx.outsiderLecturer.id });
+    expect(res.status).toBe(201);
+    const { rows: [unit] } = await pool.query<{ department_id: string }>(`SELECT department_id FROM units WHERE code = 'WGT 202'`);
+    expect(unit!.department_id).toBe(fx.deptId);
+    const { rows: [lecturer] } = await pool.query<{ department_id: string }>(
+      `SELECT department_id FROM lecturer_profiles WHERE user_id = $1`, [fx.outsiderLecturer.id]);
+    expect(lecturer!.department_id).toBe(fx.otherDeptId);
+  });
+
+  it('the borrowing department sees the unit and the lecturer, marked as not its own staff', async () => {
+    const units = body<Array<{ unitCode: string }>>(await api(fx.deptOfficer.auth).get('/departments/units')).data;
+    expect(units.map((u) => u.unitCode)).toContain('WGT 202');
+
+    const lecturers = body<Array<{ fullName: string; isOwnStaff: boolean; unitsTaught: number; homeDepartmentName: string | null }>>(
+      await api(fx.deptOfficer.auth).get('/departments/lecturers')).data;
+    expect(lecturers.find((l) => l.fullName === 'Dr. Elsewhere')).toMatchObject({
+      isOwnStaff: false, unitsTaught: 1, homeDepartmentName: 'Department of Elsewhere' });
+
+    const overview = body<{ lecturerCount: number }>(await api(fx.deptOfficer.auth).get('/departments/overview')).data;
+    expect(overview.lecturerCount).toBe(2);
+
+    const detail = await api(fx.deptOfficer.auth).get(`/departments/lecturers/${fx.outsiderLecturer.id}`);
+    expect(detail.status).toBe(200);
+    expect(body<{ units: Array<{ unitCode: string }> }>(detail).data.units.map((u) => u.unitCode)).toEqual(['WGT 202']);
+  });
+
+  it('but cannot delete the borrowed lecturer\'s account', async () => {
+    const res = await api(fx.deptOfficer.auth).delete(`/departments/lecturers/${fx.outsiderLecturer.id}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('the lecturer\'s home faculty does not count the unit, the owning faculty does', async () => {
+    const home = body<Array<{ unitCode: string }>>(await api(fx.otherFacultyOfficer.auth).get('/faculties/units')).data;
+    expect(home.map((u) => u.unitCode)).not.toContain('WGT 202');
+    const owner = body<Array<{ unitCode: string; departmentName: string }>>(await api(fx.facultyOfficer.auth).get('/faculties/units')).data;
+    expect(owner.find((u) => u.unitCode === 'WGT 202')?.departmentName).toBe('Department of Widgets');
   });
 });

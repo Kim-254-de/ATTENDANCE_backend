@@ -96,8 +96,12 @@ authRouter.post(
  */
 authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
 
-/** The signed-in lecturer, student, department officer, faculty officer or administrator, or 401. The portal calls this on load to restore the session. */
-authRouter.get('/me', asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN')), asyncHandler(authController.me));
+/** The signed-in lecturer, student, department officer, faculty officer, administrator or QA officer, or 401. The portal calls this on load to restore the session. */
+authRouter.get(
+  '/me',
+  asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN', 'QA')),
+  asyncHandler(authController.me),
+);
 
 /** Updates title/department only — see updateProfileSchema for why name and email are excluded. */
 authRouter.patch(
@@ -124,15 +128,18 @@ authRouter.delete('/me/avatar', asyncHandler(requireAuth('LECTURER', 'STUDENT'))
  *
  * 200 - password changed
  * 400 - current password wrong, or new password same as current
- * 409 - SMARTTT accounts are on: the password is changed in SMARTTT
+ * 409 - SMARTTT accounts are on and the caller is a student or lecturer: that password is changed in SMARTTT
  * 429 - too many attempts
  */
 authRouter.post(
   '/change-password',
   passwordResetLimiter,
-  asyncHandler(requireAuth('LECTURER', 'STUDENT')),
-  // Only lecturers and students reach this route, and with SMARTTT accounts their password is SMARTTT's.
-  unlessSmartttAccounts(managedBySmarttt),
+  // Every role: officers' passwords stay attendance's own even with SMARTTT accounts on.
+  asyncHandler(requireAuth()),
+  (req, _res, next) => {
+    const role = req.auth?.role;
+    next(smartttAccountsEnabled() && (role === 'STUDENT' || role === 'LECTURER') ? managedBySmarttt() : undefined);
+  },
   validate({ body: changePasswordSchema }),
   asyncHandler(authController.changePassword),
 );

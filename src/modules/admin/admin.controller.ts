@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
-import type { AdminInvitationInput, CreateFacultyInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
+import type { AdminInvitationInput, AliasIdParam, CreateFacultyInput, DepartmentIdParam, LecturerListQuery, MergeDepartmentInput, LecturerUserIdParam, MoveLecturerInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
 import * as adminService from './admin.service.js';
 
 /** HTTP in and out only. */
@@ -47,6 +47,48 @@ export async function deactivate(req: Request, res: Response): Promise<void> {
   const { userId } = req.params as unknown as OfficerUserIdParam;
   await adminService.deactivate(userId, actor(req), context(req));
   res.status(204).end();
+}
+
+/** GET /api/v1/admin/departments */
+export async function departments(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.listDepartments());
+}
+
+/** GET /api/v1/admin/lecturers */
+export async function lecturers(req: Request, res: Response): Promise<void> {
+  const { q, unassigned } = req.query as unknown as LecturerListQuery;
+  sendSuccess(res, await adminService.listLecturers({ search: q, unassignedOnly: unassigned }));
+}
+
+/** PATCH /api/v1/admin/lecturers/:lecturerUserId/department */
+export async function moveLecturer(req: Request, res: Response): Promise<void> {
+  const { lecturerUserId } = req.params as unknown as LecturerUserIdParam;
+  const { departmentId } = req.body as MoveLecturerInput;
+  sendSuccess(res, await adminService.moveLecturer(lecturerUserId, departmentId, actor(req), context(req)));
+}
+
+/** GET /api/v1/admin/department-aliases */
+export async function departmentAliases(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.listDepartmentAliases());
+}
+
+/** DELETE /api/v1/admin/department-aliases/:aliasId */
+export async function deleteDepartmentAlias(req: Request, res: Response): Promise<void> {
+  const { aliasId } = req.params as unknown as AliasIdParam;
+  await adminService.deleteDepartmentAlias(aliasId, actor(req), context(req));
+  res.status(204).end();
+}
+
+/** GET /api/v1/admin/department-duplicates */
+export async function duplicateDepartments(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await adminService.listDuplicateDepartments());
+}
+
+/** POST /api/v1/admin/departments/:departmentId/merge */
+export async function mergeDepartment(req: Request, res: Response): Promise<void> {
+  const { departmentId } = req.params as unknown as DepartmentIdParam;
+  const { intoDepartmentId } = req.body as MergeDepartmentInput;
+  sendSuccess(res, await adminService.mergeDepartment(departmentId, intoDepartmentId, actor(req), context(req)));
 }
 
 /** GET /api/v1/admin/units/pending */
