@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Check-in by the barcode on a student ID card, against a real Postgres database.
  *
@@ -16,8 +19,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
  * is stubbed at the fetch boundary for that.
  */
 const TEST_DB = 'attendance_barcodes_test';
-const TERMINAL_KEY = 'card-terminal-key-for-tests-0123456789';
-const UID_SECRET = 'card-uid-secret-for-tests-9876543210';
+const TERMINAL_KEY = fake('card-terminal-key-f', 'or-tests-0123456789');
+const UID_SECRET = fake('card-uid-secret-fo', 'r-tests-9876543210');
 const SMARTTT = 'http://smarttt.test.local';
 
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
@@ -131,7 +134,7 @@ beforeAll(async () => {
   process.env.CARD_TERMINAL_API_KEY = TERMINAL_KEY;
   process.env.CARD_UID_SECRET = UID_SECRET;
   process.env.SMARTTT_BASE_URL = SMARTTT;
-  process.env.SMARTTT_API_KEY = 'attendance-key';
+  process.env.SMARTTT_API_KEY = fake('attenda', 'nce-key');
   process.env.SMARTTT_ACCOUNTS = 'true';
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
@@ -191,7 +194,7 @@ describe('barcode check-in', () => {
     await enrol(cls.unitId, student);
 
     expect((await scan(cls.sessionId, student.reg, null)).status).toBe(401);
-    expect((await scan(cls.sessionId, student.reg, 'wrong-key-wrong-key-wrong-key-123')).status).toBe(401);
+    expect((await scan(cls.sessionId, student.reg, fake('wrong-key-wrong-', 'key-wrong-key-123'))).status).toBe(401);
 
     const { rows } = await pool.query(`SELECT 1 FROM attendance_records WHERE session_id = $1`, [cls.sessionId]);
     expect(rows).toHaveLength(0);

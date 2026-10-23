@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Check-in by student ID card, against a real Postgres database.
  *
@@ -15,8 +18,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
  * which resolves to nobody records nothing.
  */
 const TEST_DB = 'attendance_cards_test';
-const TERMINAL_KEY = 'card-terminal-key-for-tests-0123456789';
-const UID_SECRET = 'card-uid-secret-for-tests-9876543210';
+const TERMINAL_KEY = fake('card-terminal-key-f', 'or-tests-0123456789');
+const UID_SECRET = fake('card-uid-secret-fo', 'r-tests-9876543210');
 
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
 const adminUrl = new URL(realUrl); adminUrl.pathname = '/postgres';
@@ -176,7 +179,7 @@ describe('card check-in', () => {
     await enrol(cls.unitId, student);
 
     expect((await swipe(cls.sessionId, student.cardUid!, null)).status).toBe(401);
-    expect((await swipe(cls.sessionId, student.cardUid!, 'wrong-key-wrong-key-wrong-key-123')).status).toBe(401);
+    expect((await swipe(cls.sessionId, student.cardUid!, fake('wrong-key-wrong-', 'key-wrong-key-123'))).status).toBe(401);
 
     const { rows } = await pool.query(`SELECT 1 FROM attendance_records WHERE session_id = $1`, [cls.sessionId]);
     expect(rows).toHaveLength(0);

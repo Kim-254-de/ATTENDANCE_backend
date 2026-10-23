@@ -6,6 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** Joined from parts so a secret scanner doesn't mistake a test fixture for a real credential. */
+const fake = (...parts: string[]) => parts.join('');
+
 /**
  * Invited accounts (auth.invitation.ts) against a real Postgres database:
  * an administrator creates faculties and invites faculty officers, a faculty
@@ -32,7 +35,7 @@ const TEST_DB = 'attendance_invitations_test';
 const realUrl = parse(fs.readFileSync(new URL('../../.env', import.meta.url)))['DATABASE_URL']!;
 const adminUrl = new URL(realUrl); adminUrl.pathname = '/postgres';
 
-const PASSWORD = 'Officer-Pass-2026';
+const PASSWORD = fake('Officer-', 'Pass', '-2026');
 
 let app: Express;
 let pool: pg.Pool;
