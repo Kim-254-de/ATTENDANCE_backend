@@ -28,6 +28,17 @@ const csv = z
 const emptyAsUnset = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), schema);
 
+/**
+ * A key shared with another system, compared byte for byte: surrounding spaces,
+ * line breaks or quotes pasted into a hosting dashboard would make an equal
+ * key look different, so they are dropped. Empty = unset.
+ */
+const sharedKey = () =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim().replace(/^(["'])(.*)\1$/, '$2').trim() || undefined : value),
+    z.string().optional(),
+  );
+
 const envSchema = z
   .object({
     // --- Runtime ---
@@ -138,7 +149,7 @@ const envSchema = z
     // and units come only from lecturers adding them by code.
     SMARTTT_BASE_URL: emptyAsUnset(z.string().url().optional()),
     /** Sent as X-API-Key; must equal ATTENDANCE_API_KEY on the SMARTTT side. */
-    SMARTTT_API_KEY: emptyAsUnset(z.string().optional()),
+    SMARTTT_API_KEY: sharedKey(),
     /** Student registration checks the registration number here (SMARTTT apps/integrations). */
     SMARTTT_STUDENT_LOOKUP_PATH: z.string().min(1).default('/api/v1/integrations/attendance/students/'),
     /** Lecturer registration checks the staff number here: SMARTTT's approved staff list. */
@@ -181,7 +192,7 @@ const envSchema = z
     // The Generator reads the departments administrators create here and what
     // departments publish in their Teaching page (GET /integrations/generator/...,
     // X-API-Key). Unset = the Generator can't connect.
-    GENERATOR_API_KEY: emptyAsUnset(z.string().optional()),
+    GENERATOR_API_KEY: sharedKey(),
     // Departments enter their teaching against the Generator's terms and see
     // each class's day, time and room once the Director publishes, read from
     // here with GENERATOR_API_KEY. Unset = the Teaching page can't open a term.
