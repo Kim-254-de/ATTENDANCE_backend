@@ -123,3 +123,60 @@ export async function termTimes(termId: string): Promise<GeneratorTimes> {
   }
   return { publishedVersion: data.published_version ?? null, classes };
 }
+
+export interface SharedPaper {
+  /** The paper's id here (teaching_exam_papers.id), as the Generator imported it. */
+  paperRef: string;
+  codes: string[];
+  date: string | null;
+  session: number | null;
+  startTime: string | null;
+  endTime: string | null;
+  rooms: string[];
+}
+
+export interface SharedExamDraft {
+  /** null until the Director shares a draft. */
+  draft: { id: string; name: string; sharedAt: string | null; status: string } | null;
+  papers: SharedPaper[];
+}
+
+const sharedDraftSchema = z.object({
+  draft: z
+    .object({ id: z.coerce.string(), name: z.string().nullish(), shared_at: z.string().nullish(), status: z.string().nullish() })
+    .nullish(),
+  papers: z
+    .array(
+      z.object({
+        paper_ref: z.string().nullish(),
+        codes: z.array(z.string()).default([]),
+        date: z.string().nullish(),
+        session: z.number().int().nullish(),
+        start_time: z.string().nullish(),
+        end_time: z.string().nullish(),
+        rooms: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+});
+
+/** The exam draft the Director shared, for departments to name invigilators on: each paper's day, session and rooms. */
+export async function sharedExamDraft(termId: string): Promise<SharedExamDraft> {
+  const data = parsed(sharedDraftSchema, await get(`${env.GENERATOR_TERMS_PATH}/${encodeURIComponent(termId)}/exam-draft`), 'exam draft');
+  return {
+    draft: data.draft
+      ? { id: data.draft.id, name: data.draft.name ?? '', sharedAt: data.draft.shared_at ?? null, status: data.draft.status ?? '' }
+      : null,
+    papers: data.papers
+      .filter((p): p is typeof p & { paper_ref: string } => !!p.paper_ref)
+      .map((p) => ({
+        paperRef: p.paper_ref,
+        codes: p.codes,
+        date: p.date ?? null,
+        session: p.session ?? null,
+        startTime: p.start_time ?? null,
+        endTime: p.end_time ?? null,
+        rooms: p.rooms,
+      })),
+  };
+}

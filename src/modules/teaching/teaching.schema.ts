@@ -19,8 +19,9 @@ const course = {
   semester: z.number().int().min(1).max(3),
   subClass: z.string().trim().max(10),
   students: z.number().int().min(1).max(5000),
+  mode: z.enum(['regular', 'odel', 'weekend', 'evening', 'school_based', 'part_time']),
 };
-export const courseSchema = z.object({ ...course, subClass: course.subClass.default('') }).strict();
+export const courseSchema = z.object({ ...course, subClass: course.subClass.default(''), mode: course.mode.default('regular') }).strict();
 export const coursePatchSchema = z.object(course).partial().strict();
 
 const roomType = z.enum(['lecture_hall', 'lab', 'seminar']);
@@ -71,11 +72,12 @@ const lecturer = {
   phone: z.string().trim().max(40),
   email: z.string().trim().max(255),
   maxWeeklyHours: z.number().int().min(0).max(60).nullable(),
+  maxExamDuties: z.number().int().min(0).max(100).nullable(),
   active: z.boolean(),
 };
 export const lecturerSchema = z
   .object(lecturer)
-  .partial({ title: true, staffNumber: true, employmentType: true, phone: true, email: true, maxWeeklyHours: true, active: true })
+  .partial({ title: true, staffNumber: true, employmentType: true, phone: true, email: true, maxWeeklyHours: true, maxExamDuties: true, active: true })
   .strict();
 export const lecturerPatchSchema = z.object(lecturer).partial().strict();
 
@@ -88,3 +90,32 @@ export type BulkInput = z.infer<typeof bulkSchema>;
 /** A .xlsx file for the paste dialog, base64 (the JSON body limit on this path allows ~5 MB). */
 export const spreadsheetSchema = z.object({ file: z.string().min(1).max(7_000_000) }).strict();
 export type SpreadsheetInput = z.infer<typeof spreadsheetSchema>;
+
+// -- exams -----------------------------------------------------------------------------------------
+
+/** A written paper: one unit, or several sitting one shared paper ("BITE 131/COSC 130"). */
+const paper = {
+  unitIds: z.array(id).min(1).max(10),
+  title: z.string().trim().max(255),
+  examinerId: id.nullable(),
+  notes: z.string().trim().max(500),
+};
+export const paperSchema = z.object(paper).partial({ title: true, examinerId: true, notes: true }).strict();
+export const paperPatchSchema = z.object(paper).partial().strict();
+
+export const noWrittenExamSchema = z.object({ noWrittenExam: z.boolean() }).strict();
+
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'A time like 08:30.');
+export const practicalSchema = z
+  .object({ unitId: id, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'A date like 2026-11-20.'), startTime: hhmm, endTime: hhmm })
+  .strict();
+
+/** Who invigilates the paper (any department's lecturer, by id); null clears it. */
+export const invigilatorSchema = z.object({ lecturerId: id.nullable() }).strict();
+
+export const letterParamSchema = z.object({ format: z.enum(['pdf', 'docx']) }).strict();
+/** `moderator`: name and address, a line each. */
+export const letterQuerySchema = z
+  .object({ term: z.string().trim().min(1).max(64).optional(), moderator: z.string().max(1000).default(''), date: z.string().trim().max(40).default('') })
+  .strict();
+export type LetterQuery = z.infer<typeof letterQuerySchema>;

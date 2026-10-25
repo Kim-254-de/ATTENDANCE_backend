@@ -13,6 +13,8 @@ import { query, queryOne, type Queryable, pool } from '../../db/database.js';
 
 export type EmploymentType = 'full_time' | 'part_time';
 export type RoomType = 'lecture_hall' | 'lab' | 'seminar';
+export type CourseMode = 'regular' | 'odel' | 'weekend' | 'evening' | 'school_based' | 'part_time';
+export type PublicationKind = 'teaching' | 'exams' | 'invigilators';
 
 export interface CourseRow {
   id: string;
@@ -24,6 +26,7 @@ export interface CourseRow {
   semester: number;
   subClass: string;
   students: number;
+  mode: CourseMode;
 }
 
 export interface MemberRow {
@@ -68,6 +71,7 @@ export interface LecturerRow {
   phone: string;
   email: string;
   maxWeeklyHours: number | null;
+  maxExamDuties: number | null;
   active: boolean;
 }
 
@@ -95,7 +99,7 @@ export const compact = (value: string | null | undefined): string => (value ?? '
 const num = (value: string | null): number | null => (value === null ? null : Number(value));
 
 const LECTURER_COLUMNS = `l.id, l.department_id, l.title, l.full_name, l.staff_number, l.employment_type,
-  l.phone, l.email, l.max_weekly_hours, l.active`;
+  l.phone, l.email, l.max_weekly_hours, l.max_exam_duties, l.active`;
 
 interface LecturerDbRow {
   id: string;
@@ -107,6 +111,7 @@ interface LecturerDbRow {
   phone: string;
   email: string;
   max_weekly_hours: number | null;
+  max_exam_duties: number | null;
   active: boolean;
 }
 
@@ -120,6 +125,7 @@ const toLecturer = (r: LecturerDbRow): LecturerRow => ({
   phone: r.phone,
   email: r.email,
   maxWeeklyHours: r.max_weekly_hours,
+  maxExamDuties: r.max_exam_duties,
   active: r.active,
 });
 
@@ -127,9 +133,9 @@ const toLecturer = (r: LecturerDbRow): LecturerRow => ({
 export async function loadTerm(termId: string, departmentIds: string[] = [], client: Queryable = pool): Promise<TermData> {
   const courses = await query<{
     id: string; department_id: string; department_code: string | null; programme: string;
-    year: number; semester: number; sub_class: string; students: number;
+    year: number; semester: number; sub_class: string; students: number; mode: CourseMode;
   }>(
-    `SELECT c.id, c.department_id, d.code AS department_code, c.programme, c.year, c.semester, c.sub_class, c.students
+    `SELECT c.id, c.department_id, d.code AS department_code, c.programme, c.year, c.semester, c.sub_class, c.students, c.mode
        FROM teaching_courses c JOIN departments d ON d.id = c.department_id
       WHERE c.generator_term_id = $1
       ORDER BY c.programme, c.year, c.semester, c.sub_class`,
@@ -219,6 +225,7 @@ export async function loadTerm(termId: string, departmentIds: string[] = [], cli
       semester: c.semester,
       subClass: c.sub_class,
       students: c.students,
+      mode: c.mode,
     })),
     units: units.rows.map((u) => ({
       id: u.id,
@@ -297,22 +304,27 @@ const toPublication = (r: PublicationDbRow): PublicationRow => ({
 });
 
 /** Each department's latest publication for the term, standing or reopened. */
-export async function latestPublications(termId: string, client: Queryable = pool): Promise<Map<string, PublicationRow>> {
+export async function latestPublications(termId: string, kind: PublicationKind = 'teaching', client: Queryable = pool): Promise<Map<string, PublicationRow>> {
   const { rows } = await query<PublicationDbRow>(
     `SELECT DISTINCT ON (department_id) ${PUBLICATION_COLUMNS}
-       FROM teaching_publications WHERE generator_term_id = $1
+       FROM teaching_publications WHERE generator_term_id = $1 AND kind = $2
       ORDER BY department_id, published_at DESC`,
-    [termId],
+    [termId, kind],
     client,
   );
   return new Map(rows.map((r) => [r.department_id, toPublication(r)]));
 }
 
-export async function latestPublication(termId: string, departmentId: string, client: Queryable = pool): Promise<PublicationRow | null> {
+export async function latestPublication(
+  termId: string,
+  departmentId: string,
+  client: Queryable = pool,
+  kind: PublicationKind = 'teaching',
+): Promise<PublicationRow | null> {
   const row = await queryOne<PublicationDbRow>(
     `SELECT ${PUBLICATION_COLUMNS} FROM teaching_publications
-      WHERE generator_term_id = $1 AND department_id = $2 ORDER BY published_at DESC LIMIT 1`,
-    [termId, departmentId],
+      WHERE generator_term_id = $1 AND department_id = $2 AND kind = $3 ORDER BY published_at DESC LIMIT 1`,
+    [termId, departmentId, kind],
     client,
   );
   return row ? toPublication(row) : null;
@@ -320,12 +332,12 @@ export async function latestPublication(termId: string, departmentId: string, cl
 
 export async function insertPublication(
   client: PoolClient,
-  p: { termId: string; departmentId: string; userId: string; name: string; unitCount: number; groupCount: number },
+  p: { termId: string; departmentId: string; userId: string; name: string; unitCount: number; groupCount: number; kind?: PublicationKind },
 ): Promise<void> {
   await client.query(
-    `INSERT INTO teaching_publications (generator_term_id, department_id, published_by_user_id, published_by_name, unit_count, group_count)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [p.termId, p.departmentId, p.userId, p.name, p.unitCount, p.groupCount],
+    `INSERT INTO teaching_publications (generator_term_id, department_id, published_by_user_id, published_by_name, unit_count, group_count, kind)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [p.termId, p.departmentId, p.userId, p.name, p.unitCount, p.groupCount, p.kind ?? 'teaching'],
   );
 }
 
@@ -350,21 +362,22 @@ export interface CourseValues {
   semester: number;
   subClass: string;
   students: number;
+  mode: CourseMode;
 }
 
 export async function insertCourse(client: PoolClient, termId: string, departmentId: string, v: CourseValues): Promise<string> {
   const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO teaching_courses (generator_term_id, department_id, programme, year, semester, sub_class, students)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [termId, departmentId, v.programme, v.year, v.semester, v.subClass, v.students],
+    `INSERT INTO teaching_courses (generator_term_id, department_id, programme, year, semester, sub_class, students, mode)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [termId, departmentId, v.programme, v.year, v.semester, v.subClass, v.students, v.mode],
   );
   return rows[0]!.id;
 }
 
 export async function updateCourse(client: PoolClient, courseId: string, v: CourseValues): Promise<void> {
   await client.query(
-    `UPDATE teaching_courses SET programme = $2, year = $3, semester = $4, sub_class = $5, students = $6 WHERE id = $1`,
-    [courseId, v.programme, v.year, v.semester, v.subClass, v.students],
+    `UPDATE teaching_courses SET programme = $2, year = $3, semester = $4, sub_class = $5, students = $6, mode = $7 WHERE id = $1`,
+    [courseId, v.programme, v.year, v.semester, v.subClass, v.students, v.mode],
   );
 }
 
@@ -477,6 +490,7 @@ export interface LecturerValues {
   phone: string;
   email: string;
   maxWeeklyHours: number | null;
+  maxExamDuties: number | null;
   active: boolean;
 }
 
@@ -489,6 +503,20 @@ export async function listLecturers(departmentId: string, client: Queryable = po
   return rows.map(toLecturer);
 }
 
+/**
+ * Every department's list, each lecturer with their department's code: an
+ * invigilator can be anyone, and one person (staff number) can be on several lists.
+ */
+export async function listAllLecturers(client: Queryable = pool): Promise<Array<LecturerRow & { departmentCode: string }>> {
+  const { rows } = await query<LecturerDbRow & { department_code: string | null }>(
+    `SELECT ${LECTURER_COLUMNS}, d.code AS department_code FROM teaching_lecturers l JOIN departments d ON d.id = l.department_id
+      ORDER BY l.full_name`,
+    [],
+    client,
+  );
+  return rows.map((r) => ({ ...toLecturer(r), departmentCode: compact(r.department_code) }));
+}
+
 export async function findLecturer(lecturerId: string, client: Queryable = pool): Promise<LecturerRow | null> {
   const row = await queryOne<LecturerDbRow>(`SELECT ${LECTURER_COLUMNS} FROM teaching_lecturers l WHERE l.id = $1`, [lecturerId], client);
   return row ? toLecturer(row) : null;
@@ -496,9 +524,9 @@ export async function findLecturer(lecturerId: string, client: Queryable = pool)
 
 export async function insertLecturer(client: PoolClient, departmentId: string, v: LecturerValues): Promise<LecturerRow> {
   const { rows } = await client.query<LecturerDbRow>(
-    `INSERT INTO teaching_lecturers AS l (department_id, title, full_name, staff_number, employment_type, phone, email, max_weekly_hours, active)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${LECTURER_COLUMNS}`,
-    [departmentId, v.title, v.fullName, v.staffNumber, v.employmentType, v.phone, v.email, v.maxWeeklyHours, v.active],
+    `INSERT INTO teaching_lecturers AS l (department_id, title, full_name, staff_number, employment_type, phone, email, max_weekly_hours, max_exam_duties, active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING ${LECTURER_COLUMNS}`,
+    [departmentId, v.title, v.fullName, v.staffNumber, v.employmentType, v.phone, v.email, v.maxWeeklyHours, v.maxExamDuties, v.active],
   );
   return toLecturer(rows[0]!);
 }
@@ -506,9 +534,9 @@ export async function insertLecturer(client: PoolClient, departmentId: string, v
 export async function updateLecturer(client: PoolClient, lecturerId: string, v: LecturerValues): Promise<LecturerRow> {
   const { rows } = await client.query<LecturerDbRow>(
     `UPDATE teaching_lecturers l SET title = $2, full_name = $3, staff_number = $4, employment_type = $5, phone = $6, email = $7,
-            max_weekly_hours = $8, active = $9
+            max_weekly_hours = $8, max_exam_duties = $9, active = $10
       WHERE l.id = $1 RETURNING ${LECTURER_COLUMNS}`,
-    [lecturerId, v.title, v.fullName, v.staffNumber, v.employmentType, v.phone, v.email, v.maxWeeklyHours, v.active],
+    [lecturerId, v.title, v.fullName, v.staffNumber, v.employmentType, v.phone, v.email, v.maxWeeklyHours, v.maxExamDuties, v.active],
   );
   return toLecturer(rows[0]!);
 }

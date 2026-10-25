@@ -9,7 +9,7 @@ import { env } from '../../config/env.js';
 import { normaliseUnitCode } from '../../integrations/smarttt/index.js';
 import { validate } from '../../middleware/validate.js';
 import { directoryService } from '../directory/index.js';
-import { teachingService } from '../teaching/index.js';
+import { examsService, invigilationService, teachingService } from '../teaching/index.js';
 import { unitService } from '../unit/index.js';
 
 /**
@@ -102,5 +102,29 @@ integrationRouter.get(
   validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
   asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await teachingService.submissions((req.params as { termId: string }).termId));
+  }),
+);
+
+/**
+ * Departments' published exam papers (with the class rows sitting each) and
+ * practicals, and who hasn't published, for the Director's exam import; and
+ * each paper's invigilator once departments publish them. The shapes the
+ * Timetable Allocator used to serve.
+ */
+integrationRouter.get(
+  '/generator/terms/:termId/exams',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
+  asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await examsService.submissions((req.params as { termId: string }).termId));
+  }),
+);
+
+integrationRouter.get(
+  '/generator/terms/:termId/invigilators',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
+  asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await invigilationService.forGenerator((req.params as { termId: string }).termId));
   }),
 );

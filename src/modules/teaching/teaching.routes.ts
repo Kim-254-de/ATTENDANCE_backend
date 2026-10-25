@@ -11,8 +11,15 @@ import {
   groupPatchSchema,
   groupsSchema,
   idParamSchema,
+  invigilatorSchema,
+  letterParamSchema,
+  letterQuerySchema,
   lecturerPatchSchema,
   lecturerSchema,
+  noWrittenExamSchema,
+  paperPatchSchema,
+  paperSchema,
+  practicalSchema,
   spreadsheetSchema,
   termQuerySchema,
   unitPatchSchema,
@@ -62,3 +69,35 @@ teachingRouter.patch('/lecturers/:id', officer, term, byId, validate({ body: lec
 teachingRouter.delete('/lecturers/:id', officer, term, byId, asyncHandler(c.deleteLecturer));
 
 teachingRouter.post('/spreadsheet', officer, validate({ body: spreadsheetSchema }), asyncHandler(c.spreadsheet));
+
+// -- exams: papers, practicals, the moderation letter, invigilators --------------------------------
+// Exam papers and invigilators are each published to the Director on their own, locking only their list.
+
+teachingRouter.get('/exams', officer, term, asyncHandler(c.examBoard));
+teachingRouter.post('/exam-papers', officer, term, validate({ body: paperSchema }), asyncHandler(c.createPaper));
+/** A paper per unit not on one yet, titled as the unit. */
+teachingRouter.post('/exam-papers/from-units', officer, term, asyncHandler(c.papersFromUnits));
+teachingRouter.post('/exam-papers/bulk', officer, term, validate({ body: bulkSchema }), asyncHandler(c.bulkPapers));
+teachingRouter.patch('/exam-papers/:id', officer, term, byId, validate({ body: paperPatchSchema }), asyncHandler(c.updatePaper));
+teachingRouter.delete('/exam-papers/:id', officer, term, byId, asyncHandler(c.deletePaper));
+teachingRouter.put('/units/:id/no-written-exam', officer, term, byId, validate({ body: noWrittenExamSchema }), asyncHandler(c.noWrittenExam));
+
+teachingRouter.post('/practicals', officer, term, validate({ body: practicalSchema }), asyncHandler(c.createPractical));
+teachingRouter.post('/practicals/bulk', officer, term, validate({ body: bulkSchema }), asyncHandler(c.bulkPracticals));
+teachingRouter.put('/practicals/:id', officer, term, byId, validate({ body: practicalSchema }), asyncHandler(c.updatePractical));
+teachingRouter.delete('/practicals/:id', officer, term, byId, asyncHandler(c.deletePractical));
+
+teachingRouter.post('/exams/publish', officer, term, asyncHandler(c.publishExams));
+teachingRouter.post('/exams/reopen', officer, term, asyncHandler(c.reopenExams));
+teachingRouter.get(
+  '/moderation-letter/:format',
+  officer,
+  validate({ params: letterParamSchema, query: letterQuerySchema }),
+  asyncHandler(c.moderationLetter),
+);
+
+/** Once the Director shares an exam draft: who invigilates each of the department's papers. */
+teachingRouter.get('/invigilators', officer, term, asyncHandler(c.invigilatorBoard));
+teachingRouter.put('/invigilators/:id', officer, term, byId, validate({ body: invigilatorSchema }), asyncHandler(c.setInvigilator));
+teachingRouter.post('/invigilators/publish', officer, term, asyncHandler(c.publishInvigilators));
+teachingRouter.post('/invigilators/reopen', officer, term, asyncHandler(c.reopenInvigilators));

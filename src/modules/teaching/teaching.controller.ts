@@ -1,10 +1,14 @@
 import type { Request, Response } from 'express';
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import * as exams from './exams.service.js';
+import type { PaperInput, PracticalInput } from './exams.service.js';
+import * as invigilation from './invigilation.service.js';
+import { LETTER_BUILDERS, LETTER_MEDIA, type LetterFormat } from './moderation-letter.js';
 import * as bulk from './teaching.import.js';
 import { BUILDERS, layout, MEDIA, readWorkbook, WorkbookError } from './teaching.export.js';
 import * as teaching from './teaching.service.js';
-import type { BulkInput, FormatParam, IdParam, SpreadsheetInput, TermQuery } from './teaching.schema.js';
+import type { BulkInput, FormatParam, IdParam, LetterQuery, SpreadsheetInput, TermQuery } from './teaching.schema.js';
 import type { CourseInput, GroupInput, GroupPatch, LecturerInput, UnitInput } from './teaching.service.js';
 
 /**
@@ -122,4 +126,85 @@ export async function spreadsheet(req: Request, res: Response): Promise<void> {
     if (error instanceof WorkbookError) throw new AppError(422, ErrorCode.VALIDATION_FAILED, error.message);
     throw error;
   }
+}
+
+// -- exams -----------------------------------------------------------------------------------------
+
+export async function examBoard(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await exams.board(await ctx(req)));
+}
+export async function createPaper(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await exams.createPaper(await ctx(req), req.body as PaperInput));
+}
+export async function papersFromUnits(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await exams.startFromUnits(await ctx(req)));
+}
+export async function bulkPapers(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkPapers(await ctx(req), rows(req)));
+}
+export async function updatePaper(req: Request, res: Response): Promise<void> {
+  await exams.updatePaper(await ctx(req), param(req), req.body as PaperInput);
+  sendSuccess(res, null);
+}
+export async function deletePaper(req: Request, res: Response): Promise<void> {
+  await exams.deletePaper(await ctx(req), param(req));
+  sendSuccess(res, null);
+}
+export async function noWrittenExam(req: Request, res: Response): Promise<void> {
+  await exams.setNoWrittenExam(await ctx(req), param(req), (req.body as { noWrittenExam: boolean }).noWrittenExam);
+  sendSuccess(res, null);
+}
+export async function createPractical(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await exams.savePractical(await ctx(req), null, req.body as PracticalInput));
+}
+export async function bulkPracticals(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkPracticals(await ctx(req), rows(req)));
+}
+export async function updatePractical(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await exams.savePractical(await ctx(req), param(req), req.body as PracticalInput));
+}
+export async function deletePractical(req: Request, res: Response): Promise<void> {
+  await exams.deletePractical(await ctx(req), param(req));
+  sendSuccess(res, null);
+}
+export async function publishExams(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await exams.publish(await ctx(req)));
+}
+export async function reopenExams(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await exams.reopen(await ctx(req)));
+}
+
+/** GET /departments/teaching/moderation-letter/:format — the letter sent with the exam drafts. */
+export async function moderationLetter(req: Request, res: Response): Promise<void> {
+  const q = req.query as unknown as LetterQuery;
+  const context = await teaching.context(userId(req), q.term);
+  const { format } = req.params as unknown as { format: LetterFormat };
+  const data = await exams.board(context);
+  const content = await LETTER_BUILDERS[format]({
+    department: context.department.name,
+    term: context.term.name,
+    date: q.date || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }),
+    moderator: q.moderator.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+    papers: data.papers.map((p) => [p.codes, p.title]),
+    signedBy: data.publication?.publishedBy ?? context.actor,
+  });
+  res
+    .status(200)
+    .type(LETTER_MEDIA[format])
+    .setHeader('Content-Disposition', `attachment; filename="moderation-letter-${context.department.code}.${format}"`)
+    .send(content);
+}
+
+export async function invigilatorBoard(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await invigilation.board(await ctx(req)));
+}
+export async function setInvigilator(req: Request, res: Response): Promise<void> {
+  await invigilation.setInvigilator(await ctx(req), param(req), (req.body as { lecturerId: string | null }).lecturerId);
+  sendSuccess(res, null);
+}
+export async function publishInvigilators(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await invigilation.publish(await ctx(req)));
+}
+export async function reopenInvigilators(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await invigilation.reopen(await ctx(req)));
 }

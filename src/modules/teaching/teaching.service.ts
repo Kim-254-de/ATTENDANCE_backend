@@ -7,7 +7,7 @@ import { listTerms, termTimes, type GeneratorTerm, type Meeting } from '../../in
 import { auditService } from '../audit/index.js';
 import { findOfficerDepartment } from '../department/department.repository.js';
 import * as repo from './teaching.repository.js';
-import { compact, type CourseRow, type GroupRow, type LecturerRow, type MemberRow, type RoomType, type TermData, type UnitRow } from './teaching.repository.js';
+import { compact, type CourseMode, type CourseRow, type GroupRow, type LecturerRow, type MemberRow, type PublicationKind, type RoomType, type TermData, type UnitRow } from './teaching.repository.js';
 
 /**
  * What a department teaches in a term of the Timetable Generator, entered by
@@ -94,7 +94,7 @@ const EMPLOYMENT_SHORT = { full_time: 'FT', part_time: 'PT' } as const;
 export const displayName = (l: LecturerRow): string => `${l.title ? `${l.title} ` : ''}${l.fullName} (${EMPLOYMENT_SHORT[l.employmentType]})`;
 
 /** One person across departments' lists: the staff number when known. */
-const person = (l: LecturerRow): string => (l.staffNumber ? `staff:${l.staffNumber.toUpperCase()}` : `id:${l.id}`);
+export const person = (l: LecturerRow): string => (l.staffNumber ? `staff:${l.staffNumber.toUpperCase()}` : `id:${l.id}`);
 
 /** Collapses runs of whitespace and trims. */
 const squash = (value: string): string => value.split(/\s+/).filter(Boolean).join(' ');
@@ -209,6 +209,7 @@ export interface CourseDto {
   subClass: string;
   label: string;
   students: number;
+  mode: CourseMode;
 }
 
 const courseDto = (c: CourseRow): CourseDto => ({
@@ -220,6 +221,7 @@ const courseDto = (c: CourseRow): CourseDto => ({
   subClass: c.subClass,
   label: courseLabel(c),
   students: c.students,
+  mode: c.mode,
 });
 
 export interface LecturerDto {
@@ -231,6 +233,7 @@ export interface LecturerDto {
   phone: string;
   email: string;
   maxWeeklyHours: number | null;
+  maxExamDuties: number | null;
   active: boolean;
   display: string;
 }
@@ -244,6 +247,7 @@ export const lecturerDto = (l: LecturerRow): LecturerDto => ({
   phone: l.phone,
   email: l.email,
   maxWeeklyHours: l.maxWeeklyHours,
+  maxExamDuties: l.maxExamDuties,
   active: l.active,
   display: displayName(l),
 });
@@ -257,7 +261,7 @@ export interface PublicationDto {
   reopenedBy: string | null;
 }
 
-const publicationDto = (p: repo.PublicationRow | null): PublicationDto | null =>
+export const publicationDto = (p: repo.PublicationRow | null): PublicationDto | null =>
   p && {
     publishedBy: p.publishedByName,
     publishedAt: p.publishedAt.toISOString(),
@@ -411,18 +415,24 @@ export async function board(ctx: Ctx): Promise<BoardDto> {
 // -- writing ---------------------------------------------------------------------------------------
 
 /** One write: under the department's lock, refused while the list is published, then audited. */
-async function write<T>(ctx: Ctx, work: (client: PoolClient) => Promise<T>, options: { whilePublished?: boolean } = {}): Promise<T> {
+async function write<T>(
+  ctx: Ctx,
+  work: (client: PoolClient) => Promise<T>,
+  options: { whilePublished?: boolean; kind?: PublicationKind } = {},
+): Promise<T> {
   return transaction(async (client) => {
     await repo.lockTerm(client, ctx.term.id, ctx.department.id);
-    if (!options.whilePublished) await requireOpen(client, ctx);
+    if (!options.whilePublished) await requireOpen(client, ctx, options.kind ?? 'teaching');
     return work(client);
   });
 }
 
-async function requireOpen(client: PoolClient, ctx: Ctx): Promise<void> {
-  const latest = await repo.latestPublication(ctx.term.id, ctx.department.id, client);
+const LIST_NAME: Record<PublicationKind, string> = { teaching: 'teaching list', exams: 'exam paper list', invigilators: 'invigilator list' };
+
+async function requireOpen(client: PoolClient, ctx: Ctx, kind: PublicationKind): Promise<void> {
+  const latest = await repo.latestPublication(ctx.term.id, ctx.department.id, client, kind);
   if (latest && !latest.reopenedAt) {
-    throw new AppError(409, ErrorCode.TEACHING_PUBLISHED, "Your department's list has been published. Reopen it before changing it.");
+    throw new AppError(409, ErrorCode.TEACHING_PUBLISHED, `Your department's ${LIST_NAME[kind]} has been published. Reopen it before changing it.`);
   }
 }
 
@@ -451,7 +461,7 @@ export async function savepoint<T>(client: PoolClient, work: () => Promise<T>): 
   }
 }
 
-const invalid = (message: string) => new AppError(422, ErrorCode.VALIDATION_FAILED, message);
+export const invalid = (message: string) => new AppError(422, ErrorCode.VALIDATION_FAILED, message);
 
 // -- courses ---------------------------------------------------------------------------------------
 
@@ -461,6 +471,7 @@ export interface CourseInput {
   semester?: number;
   subClass?: string;
   students?: number;
+  mode?: CourseMode;
 }
 
 /** Checks everything first, so a refused change leaves the course as it was. */
@@ -471,6 +482,7 @@ function courseValues(data: TermData, ctx: Ctx, current: repo.CourseValues | nul
     semester: input.semester ?? current?.semester ?? 0,
     subClass: squash(input.subClass ?? current?.subClass ?? '').toUpperCase(),
     students: input.students ?? current?.students ?? 0,
+    mode: input.mode ?? current?.mode ?? 'regular',
   };
   if (!v.programme) throw invalid('Give the programme.');
   if (!v.year || !v.semester || !v.students) throw invalid("Give the course's year, semester and number of students.");
@@ -799,6 +811,7 @@ export interface LecturerInput {
   phone?: string;
   email?: string;
   maxWeeklyHours?: number | null;
+  maxExamDuties?: number | null;
   active?: boolean;
 }
 
@@ -812,6 +825,7 @@ async function lecturerValues(client: PoolClient, ctx: Ctx, current: LecturerRow
     phone: (input.phone ?? current?.phone ?? '').trim(),
     email: (input.email ?? current?.email ?? '').trim(),
     maxWeeklyHours: input.maxWeeklyHours !== undefined ? input.maxWeeklyHours || null : (current?.maxWeeklyHours ?? null),
+    maxExamDuties: input.maxExamDuties !== undefined ? input.maxExamDuties || null : (current?.maxExamDuties ?? null),
     active: input.active ?? current?.active ?? true,
   };
   if (!v.fullName) throw invalid("Give the lecturer's name.");
@@ -942,6 +956,7 @@ export async function submissions(termId: string): Promise<Record<string, unknow
         sub_class: c.subClass,
         label: courseLabel(c),
         students: c.students,
+        mode: c.mode,
       })),
     published,
     not_published: waiting,

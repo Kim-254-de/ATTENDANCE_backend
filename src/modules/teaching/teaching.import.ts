@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { AppError } from '../../common/errors/index.js';
 import { AuditAction } from '../../db/types.js';
 import * as repo from './teaching.repository.js';
-import { compact, type CourseRow, type EmploymentType, type LecturerRow, type RoomType } from './teaching.repository.js';
+import { compact, type CourseMode, type CourseRow, type EmploymentType, type LecturerRow, type RoomType } from './teaching.repository.js';
 import {
   audit,
   courseLabel,
@@ -21,6 +21,8 @@ import {
   type LecturerInput,
   type UnitInput,
 } from './teaching.service.js';
+import * as examsRepo from './exams.repository.js';
+import { createPaperIn, savePracticalIn, setNoWrittenExamIn, updatePaperIn, type PaperInput } from './exams.service.js';
 
 /**
  * "Paste from Excel" for the department workbook's tabs:
@@ -102,6 +104,24 @@ async function finish(ctx: Ctx, what: string, r: BulkResult): Promise<BulkResult
 
 // -- courses ---------------------------------------------------------------------------------------
 
+const MODE_WORDS: Record<string, CourseMode> = {
+  regular: 'regular',
+  fulltime: 'regular',
+  odel: 'odel',
+  odl: 'odel',
+  distance: 'odel',
+  weekend: 'weekend',
+  evening: 'evening',
+  schoolbased: 'school_based',
+  parttime: 'part_time',
+};
+
+/** 'ODEL', 'School-based', blank (regular)... */
+function mode(value: string | undefined): CourseMode {
+  const word = (value ?? 'regular').toLowerCase().replace(/[^a-z]/g, '');
+  return MODE_WORDS[word] ?? fail(`mode '${value}' must be Regular, ODEL, Weekend, Evening, School-based or Part-time`);
+}
+
 const LABEL = /^(?<programme>.+?)\s+Y(?<year>\d)\s*S(?<semester>\d)(?:\s*\((?<sub>[^)]*)\))?\s*$/i;
 
 export async function bulkCourses(ctx: Ctx, rows: Array<Record<string, unknown>>): Promise<BulkResult> {
@@ -124,6 +144,7 @@ export async function bulkCourses(ctx: Ctx, rows: Array<Record<string, unknown>>
           semester: int(g ? g['semester'] : row['semester'], 'Semester', 1, 3),
           subClass: (g ? (g['sub'] ?? '') : (row['sub_class'] ?? row['subclass'] ?? '')).trim().toUpperCase().slice(0, 10),
           students: int(row['students'], 'Students', 1, 5000),
+          mode: mode(row['mode']),
         };
         if (!fields.programme) fail('Programme is required');
         const cohort = `${fields.programme}|${fields.year}|${fields.semester}|${fields.subClass}`;
@@ -135,7 +156,7 @@ export async function bulkCourses(ctx: Ctx, rows: Array<Record<string, unknown>>
             (c) => c.programme === fields.programme && c.year === fields.year && c.semester === fields.semester && c.subClass === fields.subClass,
           );
           if (existing && existing.departmentId === ctx.department.id) {
-            await updateCourseIn(client, ctx, existing.id, { students: fields.students });
+            await updateCourseIn(client, ctx, existing.id, { students: fields.students, mode: fields.mode });
             updated++;
           } else {
             await createCourseIn(client, ctx, fields);
@@ -397,4 +418,128 @@ export async function bulkLecturers(ctx: Ctx, rows: Array<Record<string, unknown
     { whilePublished: true },
   );
   return finish(ctx, 'lecturers.bulk', r);
+}
+
+// -- exam papers and practicals --------------------------------------------------------------------
+//
+//     Exam papers   Codes | Title | Written exam | Examiner | Staff no. | Notes
+//     Practicals    Unit code | Date | Start | End
+//
+// "Codes" holds one code, or several for a shared paper ("BITE 131/COSC 130").
+// "Written exam" No marks the units as having no written exam. A paper is
+// matched to an existing one by its first code, and updated.
+
+export async function bulkPapers(ctx: Ctx, rows: Array<Record<string, unknown>>): Promise<BulkResult> {
+  const r = await writeTeaching(
+    ctx,
+    async (client) => {
+      let created = 0;
+      let updated = 0;
+      let marked = 0;
+      const errors: BulkResult['errors'] = [];
+      const seen = new Map<string, number>();
+      for (const [i, raw] of rows.entries()) {
+        const line = i + 1;
+        const row = cleanRow(raw);
+        try {
+          const cell = row['codes'] ?? row['unit_codes'] ?? row['unit_code'] ?? row['code'] ?? fail('Codes is required');
+          const data = await repo.loadTerm(ctx.term.id, [], client);
+          const units = new Map(data.units.map((u) => [u.codeKey, u]));
+          const codes = cell.split(/[/;,]+/).map((c) => c.trim()).filter(Boolean);
+          const found = codes.map((code) => {
+            const key = compact(code);
+            if (seen.has(key)) fail(`${code} is also on row ${seen.get(key)}`);
+            return units.get(key) ?? fail(`no unit ${code} this term`);
+          });
+          for (const code of codes) seen.set(compact(code), line);
+          await savepoint(client, async () => {
+            if (['no', 'n', 'false', '0'].includes((row['written_exam'] ?? 'yes').trim().toLowerCase())) {
+              for (const u of found) await setNoWrittenExamIn(client, ctx, u.id, true);
+              marked += found.length;
+              return;
+            }
+            const fields: PaperInput = { unitIds: found.map((u) => u.id) };
+            if (row['title']) fields.title = row['title'];
+            if (row['notes']) fields.notes = row['notes'];
+            const staff = row['staff_no'] ?? row['staff_number'];
+            if (staff || row['examiner']) {
+              const [, name] = splitName(row['examiner'] ?? '');
+              const lecturer = await findLecturer(client, ctx, staff ?? null, name);
+              if (!lecturer) fail(`no lecturer ${row['examiner'] ?? staff} on your list; add them on Lecturers`);
+              fields.examinerId = lecturer!.id;
+            }
+            const existing = (await examsRepo.loadExams(ctx.term.id, client)).papers.find((p) => p.unitIds.includes(found[0]!.id));
+            if (existing) {
+              await updatePaperIn(client, ctx, existing.id, fields);
+              updated++;
+            } else {
+              await createPaperIn(client, ctx, fields);
+              created++;
+            }
+          });
+        } catch (error) {
+          errors.push({ line, message: message(error) });
+        }
+      }
+      const extra = marked ? `; ${marked} units marked 'no written exam'` : '';
+      return result(created, updated, errors, { message: `${created} papers added, ${updated} updated${extra}.` });
+    },
+    { kind: 'exams' },
+  );
+  return finish(ctx, 'exam_papers.bulk', r);
+}
+
+/** '2026-11-20', '20/11/2026', '20-11-2026', '20.11.2026' -> '2026-11-20'. */
+function day(value: string | undefined): string {
+  const text = (value ?? '').trim().slice(0, 10);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text);
+  const [y, m, d] = iso ? [iso[1], iso[2], iso[3]] : dmy ? [dmy[3], dmy[2], dmy[1]] : [];
+  const date = y ? new Date(Date.UTC(Number(y), Number(m) - 1, Number(d))) : null;
+  if (!date || Number.isNaN(date.getTime()) || date.getUTCDate() !== Number(d)) return fail(`date '${value}' should look like 2026-11-20 or 20/11/2026`);
+  return date.toISOString().slice(0, 10);
+}
+
+/** '08:30', '8.30', '2:30pm', '2pm' -> 'HH:MM'. */
+function clock(value: string | undefined, what: string): string {
+  const text = (value ?? '').trim().toLowerCase().replace('.', ':').replace(/\s+/g, '');
+  const m = /^(\d{1,2})(?::(\d{2}))?(?::\d{2})?(am|pm)?$/.exec(text);
+  let h = m ? Number(m[1]) : NaN;
+  const min = m?.[2] ? Number(m[2]) : 0;
+  if (m?.[3] === 'pm' && h < 12) h += 12;
+  if (m?.[3] === 'am' && h === 12) h = 0;
+  if (!m || h > 23 || min > 59 || (!m[2] && !m[3])) return fail(`${what} '${value}' should look like 08:30 or 2:30pm`);
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+export async function bulkPracticals(ctx: Ctx, rows: Array<Record<string, unknown>>): Promise<BulkResult> {
+  const r = await writeTeaching(
+    ctx,
+    async (client) => {
+      let created = 0;
+      const errors: BulkResult['errors'] = [];
+      const units = new Map((await repo.loadTerm(ctx.term.id, [], client)).units.map((u) => [u.codeKey, u]));
+      for (const [i, raw] of rows.entries()) {
+        const row = cleanRow(raw);
+        try {
+          const code = row['unit_code'] ?? row['code'] ?? row['unit'];
+          const unit = code ? units.get(compact(code)) : undefined;
+          if (!unit) fail(`no unit ${code ?? ''} this term`.trim());
+          const input = {
+            unitId: unit!.id,
+            date: day(row['date']),
+            startTime: clock(row['start'] ?? row['start_time'], 'Start'),
+            endTime: clock(row['end'] ?? row['end_time'], 'End'),
+          };
+          await savepoint(client, () => savePracticalIn(client, ctx, null, input));
+          created++;
+        } catch (error) {
+          errors.push({ line: i + 1, message: message(error) });
+        }
+      }
+      return result(created, 0, errors);
+    },
+    { kind: 'exams' },
+  );
+  return finish(ctx, 'practicals.bulk', r);
 }
