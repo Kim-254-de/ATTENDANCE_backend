@@ -70,7 +70,7 @@ export async function syncDirectory(actor: Actor, context: RegistrationContext):
 }
 
 /** Every role an administrator manages. */
-const OFFICER_ROLES: InvitedRole[] = ['ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA'];
+const OFFICER_ROLES: InvitedRole[] = ['ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA', 'TIMETABLING'];
 
 /** GET /admin/officers — every administrator, management, department and QA officer. */
 export async function listAllOfficers(): Promise<invitationService.OfficerDto[]> {
@@ -85,7 +85,7 @@ export async function invite(
 ): Promise<invitationService.InvitationResult> {
   const inviter = { userId: actor.userId, fullName: actor.fullName };
   if (input.role !== 'department') {
-    const scope = { role: input.role.toUpperCase() as 'ADMIN' | 'QA' | 'MANAGEMENT' };
+    const scope = { role: input.role.toUpperCase() as 'ADMIN' | 'QA' | 'MANAGEMENT' | 'TIMETABLING' };
     return invitationService.invite({ email: input.email, fullName: input.fullName, scope, scopeName: null }, inviter, context);
   }
   const departmentName = await adminRepository.findDepartmentName(input.departmentId);

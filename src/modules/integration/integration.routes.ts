@@ -8,6 +8,8 @@ import { tokenHashesMatch } from '../../common/utils/tokens.js';
 import { env } from '../../config/env.js';
 import { normaliseUnitCode } from '../../integrations/smarttt/index.js';
 import { validate } from '../../middleware/validate.js';
+import { clientFingerprint } from '../../middleware/request-context.js';
+import * as generatorAuth from '../auth/auth.generator.js';
 import { directoryService } from '../directory/index.js';
 import { examsService, invigilationService, teachingService } from '../teaching/index.js';
 import { unitService } from '../unit/index.js';
@@ -126,5 +128,33 @@ integrationRouter.get(
   validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
   asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await invigilationService.forGenerator((req.params as { termId: string }).termId));
+  }),
+);
+
+/**
+ * Sign-in for the Timetable Generator: the timetabling office, invited by an
+ * administrator here, signs in there with the email and password they chose
+ * (src/modules/auth/auth.generator.ts). `{ authenticated: false }` for any
+ * wrong login, with no reason given.
+ */
+integrationRouter.post(
+  '/generator/authenticate',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ body: z.object({ identifier: z.string().trim().min(1).max(255), password: z.string().min(1).max(1024) }) }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { identifier, password } = req.body as { identifier: string; password: string };
+    sendSuccess(res, await generatorAuth.authenticate(identifier, password, { ...clientFingerprint(req), requestId: req.requestId }));
+  }),
+);
+
+/** Whether a Generator session's account is still active and the timetabling office's; 404 once it is not. */
+integrationRouter.get(
+  '/generator/identity',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ query: z.object({ account_id: z.string().uuid() }) }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const found = await generatorAuth.identity((req.query as { account_id: string }).account_id);
+    if (!found) throw AppError.notFound('No such active account.');
+    sendSuccess(res, found);
   }),
 );

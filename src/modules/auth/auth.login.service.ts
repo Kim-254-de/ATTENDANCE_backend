@@ -3,6 +3,7 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { fakeVerifyPassword, verifyPassword } from '../../common/utils/password.js';
 import type { AccountStatus } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
+import { generatorSignInUrl } from './auth.invitation.js';
 import { findAvatarUrl } from './auth.repository.js';
 import { signInWithSmarttt, smartttAccountsEnabled } from './auth.smarttt.js';
 import * as sessions from './auth.session.js';
@@ -88,6 +89,14 @@ export async function loginAccount(input: LoginInput, context: RegistrationConte
     // The wording follows the kind of account the identifier found, so it reveals nothing
     // the person typing didn't already know (they typed a staff or a registration number).
     throw new AppError(401, ErrorCode.INVALID_CREDENTIALS, user.role === 'STUDENT' ? BAD_STUDENT_CREDENTIALS : BAD_CREDENTIALS);
+  }
+
+  // The timetabling office has no portal here; told only once the password is right.
+  if (user.role === 'TIMETABLING') {
+    const url = generatorSignInUrl();
+    throw new AppError(403, ErrorCode.SIGN_IN_AT_GENERATOR, `This account is for the Timetable Generator. Sign in there${url ? `: ${url}` : '.'}`, {
+      details: { url },
+    });
   }
 
   return startSession(user, context, fail);

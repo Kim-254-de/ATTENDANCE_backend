@@ -17,6 +17,8 @@ export const UserRole = {
   MANAGEMENT: 'MANAGEMENT',
   /** A quality-assurance officer: institution-wide audits, findings and corrective actions (db/migrations/027_qa_role.sql). */
   QA: 'QA',
+  /** The timetabling office: invited here, signs in at the Timetable Generator only. */
+  TIMETABLING: 'TIMETABLING',
 } as const;
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 

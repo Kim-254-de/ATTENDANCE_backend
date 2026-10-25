@@ -115,6 +115,8 @@ export interface OfficerInvitationMessage {
   /** Who sent it, when known. */
   invitedByName: string | null;
   expiresInHours: number;
+  /** Where to sign in afterwards, when not attendance's staff page (the timetabling office: the Generator). */
+  signIn?: { where: string; url: string | null };
 }
 
 /**
@@ -137,9 +139,9 @@ export async function sendOfficerInvitation(message: OfficerInvitationMessage): 
       '',
       `This link expires in ${message.expiresInHours} hours and can only be used once.`,
       '',
-      'Afterwards, sign in at the staff sign-in page (bookmark it - it is not linked',
-      'from the public site):',
-      `${base}/oversight`,
+      ...(message.signIn
+        ? [`Afterwards, sign in at ${message.signIn.where} with this email address and your password:`, message.signIn.url ?? '(ask the administrator for its address)']
+        : ['Afterwards, sign in at the staff sign-in page (bookmark it - it is not linked', 'from the public site):', `${base}/oversight`]),
       '',
       'If you were not expecting this, you can ignore this message.',
     ].join('\n'),

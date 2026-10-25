@@ -187,6 +187,9 @@ const envSchema = z
     // here with GENERATOR_API_KEY. Unset = the Teaching page can't open a term.
     GENERATOR_BASE_URL: emptyAsUnset(z.string().url().optional()),
     GENERATOR_TERMS_PATH: z.string().min(1).default('/api/integrations/attendance/terms'),
+    // The Generator's web app, where the timetabling office signs in; named in
+    // their invitation email. Defaults to GENERATOR_BASE_URL (one host for both).
+    GENERATOR_WEB_URL: emptyAsUnset(z.string().url().optional()),
     // Generous: the Generator on Render's free tier can take a while to wake.
     GENERATOR_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(15_000),
 

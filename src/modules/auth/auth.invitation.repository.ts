@@ -4,16 +4,17 @@ import type { AccountStatus } from '../../db/types.js';
 
 /**
  * SQL for invited accounts (auth.invitation.ts): administrators, management,
- * department officers and QA officers. Every value goes through a bind parameter.
+ * department officers, QA officers and the timetabling office. Every value goes through a bind parameter.
  */
 
-export type InvitedRole = 'ADMIN' | 'MANAGEMENT' | 'DEPARTMENT' | 'QA';
+export type InvitedRole = 'ADMIN' | 'MANAGEMENT' | 'DEPARTMENT' | 'QA' | 'TIMETABLING';
 
 /** What an invitation is for: the role, and for a department officer the department (the others are university-wide). */
 export type InvitationScope =
   | { role: 'ADMIN' }
   | { role: 'QA' }
   | { role: 'MANAGEMENT' }
+  | { role: 'TIMETABLING' }
   | { role: 'DEPARTMENT'; departmentId: string };
 
 export interface ExistingAccount {
@@ -147,7 +148,7 @@ export async function findInvitation(tokenHash: string): Promise<StoredInvitatio
        JOIN users u ON u.id = i.user_id
   LEFT JOIN department_profiles dp ON dp.user_id = u.id
   LEFT JOIN departments         d  ON d.id = dp.department_id
-      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA')`,
+      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA', 'TIMETABLING')`,
     [tokenHash],
   );
   if (!row || row.deleted_at) return null;

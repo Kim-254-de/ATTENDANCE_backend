@@ -52,6 +52,19 @@ export interface ManagementPublic {
   status: AccountStatus;
 }
 
+/**
+ * A member of the timetabling office. Never signed in here (they use the
+ * Timetable Generator, which checks their password with attendance); the
+ * shape exists so the sign-in lookup can find the account.
+ */
+export interface TimetablingPublic {
+  id: string;
+  role: 'timetabling';
+  fullName: string;
+  email: string;
+  status: AccountStatus;
+}
+
 /** A signed-in administrator: invites officers and creates departments (src/modules/admin). No scope of its own. */
 export interface AdminPublic {
   id: string;
@@ -81,6 +94,7 @@ export type AccountPublic =
   | StudentPublic
   | DepartmentOfficerPublic
   | ManagementPublic
+  | TimetablingPublic
   | AdminPublic
   | QaOfficerPublic;
 
@@ -100,7 +114,7 @@ export const toStudentPublic = (c: {
 
 export interface LoginCandidate {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA' | 'TIMETABLING';
   email: string;
   fullName: string;
   passwordHash: string;
@@ -113,7 +127,7 @@ export interface LoginCandidate {
 
 interface LoginRow {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA' | 'TIMETABLING';
   email: string;
   full_name: string;
   password_hash: string;
@@ -163,6 +177,9 @@ function accountFrom(row: {
   }
   if (row.role === 'ADMIN') {
     return { id: row.id, role: 'admin', fullName: row.full_name, email: row.email, status: row.status };
+  }
+  if (row.role === 'TIMETABLING') {
+    return { id: row.id, role: 'timetabling', fullName: row.full_name, email: row.email, status: row.status };
   }
   if (row.role === 'QA' && row.has_qa_profile) {
     return toQaOfficerPublic({
@@ -239,7 +256,7 @@ async function findLoginCandidate(where: string, value: string): Promise<LoginCa
   LEFT JOIN department_profiles dp  ON dp.user_id = u.id
   LEFT JOIN departments         d   ON d.id = dp.department_id
   LEFT JOIN qa_profiles         qp  ON qp.user_id = u.id
-      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'MANAGEMENT', 'ADMIN', 'QA')
+      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'MANAGEMENT', 'ADMIN', 'QA', 'TIMETABLING')
         AND u.deleted_at IS NULL
         AND ${where}
       ORDER BY u.role
@@ -301,6 +318,15 @@ export interface NewSession {
 }
 
 /** Successful sign-in: clear the failure counter and open the session in one transaction. */
+/**
+ * A sign-in that opens no session here: the timetabling office at the
+ * Timetable Generator. Clears the failure count and stamps the last sign-in,
+ * as completeLogin does for a session.
+ */
+export async function recordSignInElsewhere(userId: string): Promise<void> {
+  await query(`UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1`, [userId]);
+}
+
 export async function completeLogin(session: NewSession): Promise<void> {
   await transaction(async (client) => {
     await query(

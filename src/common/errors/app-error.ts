@@ -79,6 +79,9 @@ export const ErrorCode = {
   TEACHING_TAKEN: 'TEACHING_TAKEN',
   /** A course, unit or lecturer still in use can't be deleted. */
   TEACHING_IN_USE: 'TEACHING_IN_USE',
+
+  /** A timetabling office account: it signs in at the Timetable Generator, not here. */
+  SIGN_IN_AT_GENERATOR: 'SIGN_IN_AT_GENERATOR',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

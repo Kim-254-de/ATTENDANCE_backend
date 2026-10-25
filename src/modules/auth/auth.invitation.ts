@@ -41,6 +41,7 @@ const ROLE_LABEL: Record<InvitedRole, string> = {
   MANAGEMENT: 'a member of management',
   DEPARTMENT: 'department officer',
   QA: 'quality assurance officer',
+  TIMETABLING: 'a member of the timetabling office (the Timetable Generator)',
 };
 
 /** Only these domains may be invited, when OFFICER_EMAIL_DOMAINS lists any. */
@@ -218,6 +219,8 @@ export interface InvitationDetails {
   role: Lowercase<InvitedRole>;
   scopeName: string | null;
   expiresAt: string;
+  /** Where to sign in afterwards when it isn't attendance's staff page: the Generator, for the timetabling office. */
+  signInUrl: string | null;
 }
 
 const invalidLink = () =>
@@ -242,6 +245,8 @@ export async function lookup(token: string): Promise<InvitationDetails> {
     role: stored.role.toLowerCase() as InvitationDetails['role'],
     scopeName: stored.scopeName,
     expiresAt: stored.expiresAt.toISOString(),
+    // The timetabling office signs in at the Generator; the page links there once the password is set.
+    signInUrl: stored.role === 'TIMETABLING' ? generatorSignInUrl() : null,
   };
 }
 
@@ -279,6 +284,9 @@ export type OfficerDto = ReturnType<typeof officerDto>;
 export const invitationUrl = (token: string) =>
   `${env.APP_PUBLIC_URL.replace(/\/+$/, '')}/accept-invite?token=${encodeURIComponent(token)}`;
 
+/** Where the timetabling office signs in: the Generator's web app. */
+export const generatorSignInUrl = (): string | null => (env.GENERATOR_WEB_URL ?? env.GENERATOR_BASE_URL ?? null)?.replace(/\/+$/, '') ?? null;
+
 const expiry = () => new Date(Date.now() + env.OFFICER_INVITE_TTL_HOURS * 60 * 60 * 1000);
 
 /**
@@ -297,6 +305,8 @@ async function sendInvitation(args: {
       roleDescription,
       invitedByName: args.inviter.fullName,
       expiresInHours: env.OFFICER_INVITE_TTL_HOURS,
+      // The timetabling office signs in at the Generator, not here.
+      ...(args.role === 'TIMETABLING' ? { signIn: { where: 'the Timetable Generator', url: generatorSignInUrl() } } : {}),
     });
     return true;
   } catch (error) {

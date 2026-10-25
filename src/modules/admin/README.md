@@ -29,8 +29,16 @@ With SMARTTT accounts off (`SMARTTT_ACCOUNTS=false` or no `SMARTTT_BASE_URL`,
 development), administrators are invited here as before:
 
 ```
-administrator  ──invites──▶  administrators, management, department and QA officers   (this module)
+administrator  ──invites──▶  administrators, management, department and QA officers,
+                             and the timetabling office (the Timetable Generator)   (this module)
 ```
+
+The timetabling office (role `TIMETABLING`) is invited the same way but has no
+portal here: they sign in at the Timetable Generator with the email and the
+password they chose, and the Generator checks it with attendance
+(`src/modules/auth/auth.generator.ts`). Removing their access here signs them
+out of the Generator within minutes. Their invitation email links to
+`GENERATOR_WEB_URL`.
 
 Management, department and QA officers are not in SMARTTT, so they are always
 invited here. An invitation creates the account at once, scoped and
@@ -50,7 +58,7 @@ logs `bootstrap admin:` and does nothing once an administrator is ACTIVE).
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/admin/officers` | Every administrator, management, department and QA officer, with invitation status |
-| `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }`, `{ role: 'qa' }`, `{ role: 'management' }` or `{ role: 'department', departmentId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
+| `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }`, `{ role: 'qa' }`, `{ role: 'management' }`, `{ role: 'timetabling' }` or `{ role: 'department', departmentId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
 | `POST` | `/api/v1/admin/officers/:userId/resend` | Re-sends a pending invitation; the old link stops working |
 | `POST` | `/api/v1/admin/officers/:userId/deactivate` | Removes access: DEACTIVATED, signed out, invitation withdrawn. Not oneself |
 | `GET` | `/api/v1/admin/units/pending` | Units still `PENDING_VERIFICATION` (the timetable doesn't list their lecturer), oldest first, with lecturer and weekly slots |

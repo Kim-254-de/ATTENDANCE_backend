@@ -22,12 +22,15 @@ export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
 
 /**
  * An administrator invites another administrator, a QA officer, a member of
- * management (university-wide) or the officer for one department.
+ * management (university-wide), a member of the timetabling office (who signs
+ * in at the Timetable Generator) or the officer for one department.
  */
 export const adminInvitationSchema = z.discriminatedUnion('role', [
   inviteeSchema.extend({ role: z.literal('admin') }).strict(),
   inviteeSchema.extend({ role: z.literal('qa') }).strict(),
   inviteeSchema.extend({ role: z.literal('management') }).strict(),
+  // The Directorate of Examinations and Timetabling: they sign in at the Timetable Generator.
+  inviteeSchema.extend({ role: z.literal('timetabling') }).strict(),
   inviteeSchema.extend({ role: z.literal('department'), departmentId: z.string().uuid('Choose a department.') }).strict(),
 ]);
 export type AdminInvitationInput = z.infer<typeof adminInvitationSchema>;
