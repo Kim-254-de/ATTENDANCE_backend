@@ -70,6 +70,20 @@ function smartttAnswer(input: string | URL | Request, init: RequestInit | undefi
       smartttDepartments.push(created);
       return Response.json(created, { status: 201 });
     }
+    const one = /^\/api\/v1\/integrations\/attendance\/departments\/(\d+)\/$/.exec(url.pathname);
+    if (one && method === 'PATCH') {
+      const department = smartttDepartments.find((d) => d.id === Number(one[1]));
+      if (!department) return Response.json({ detail: 'Not found.' }, { status: 404 });
+      const others = smartttDepartments.filter((d) => d !== department);
+      const taken = others.find((d) => d.name.toLowerCase() === String(sent['name']).toLowerCase());
+      if (taken) return Response.json({ detail: 'That name is already in use.', code: 'name_taken', id: taken.id }, { status: 409 });
+      const code = String(sent['code']).toUpperCase();
+      if (others.some((d) => d.code === code)) {
+        return Response.json({ detail: `The department code ${code} is already in use.`, code: 'code_taken' }, { status: 409 });
+      }
+      Object.assign(department, { name: String(sent['name']), code });
+      return Response.json(department);
+    }
     return new Response('no', { status: 404 });
   }
 }
@@ -352,6 +366,99 @@ describe('departments, owned by SMARTTT, created by the administrator', () => {
     const after = body(await as(admin.auth).get('/admin/directory')).data as { onlyHere: { departments: number } };
     expect(after.onlyHere).toEqual({ departments: 0 });
     expect(await audits('DIRECTORY_SYNCED')).toHaveLength(1);
+  });
+});
+
+describe('the administrator corrects a department', () => {
+  /** A department in SMARTTT, read in here. */
+  async function linked(name: string, code: string) {
+    const id = nextId++;
+    smartttDepartments.push({ id, name, code, status: 'active' });
+    const { rows: [row] } = await pool.query<{ id: string }>(
+      `INSERT INTO departments (name, code, smarttt_department_id) VALUES ($1, $2, $3) RETURNING id`, [name, code, id]);
+    return { id: row!.id, smartttId: id };
+  }
+
+  it('in SMARTTT first, then here; lecturers stay with it', async () => {
+    const admin = await makeUser('ADMIN');
+    const lecturer = await makeUser('LECTURER');
+    const n = uniq();
+    const department = await linked(`Departmnt of Geografy ${n}`, `DGEO${n}`);
+    await pool.query(`UPDATE lecturer_profiles SET department_id = $1 WHERE user_id = $2`, [department.id, lecturer.id]);
+
+    const res = await as(admin.auth).patch(`/admin/departments/${department.id}`).send({ name: `Department of Geography ${n}`, code: `dgeog${n}` });
+    expect(res.status).toBe(200);
+    expect(body(res).data).toEqual({ departmentId: department.id, name: `Department of Geography ${n}`, code: `DGEOG${n}` });
+
+    const call = calls.find((c) => c.method === 'PATCH')!;
+    expect(call.path).toBe(`/api/v1/integrations/attendance/departments/${department.smartttId}/`);
+    expect(JSON.parse(call.body.toString())).toEqual({ name: `Department of Geography ${n}`, code: `DGEOG${n}` });
+    expect(smartttDepartments.find((d) => d.id === department.smartttId)).toMatchObject({ name: `Department of Geography ${n}`, code: `DGEOG${n}` });
+
+    const { rows: [row] } = await pool.query<{ name: string; code: string }>(`SELECT name, code FROM departments WHERE id = $1`, [department.id]);
+    expect(row).toEqual({ name: `Department of Geography ${n}`, code: `DGEOG${n}` });
+    const { rows: [placed] } = await pool.query<{ department_id: string }>(`SELECT department_id FROM lecturer_profiles WHERE user_id = $1`, [lecturer.id]);
+    expect(placed!.department_id).toBe(department.id);
+
+    const [audit] = await audits('DEPARTMENT_UPDATED');
+    expect(audit).toBeDefined();
+  });
+
+  it("refuses another department's name or code, here or in SMARTTT, and changes nothing", async () => {
+    const admin = await makeUser('ADMIN');
+    const n = uniq();
+    await linked(`Physics ${n}`, `PHY${n}`);
+    const chemistry = await linked(`Chemistry ${n}`, `CHEM${n}`);
+
+    const name = await as(admin.auth).patch(`/admin/departments/${chemistry.id}`).send({ name: `physics ${n}`, code: `CHEM${n}` });
+    expect(name.status).toBe(409);
+    const code = await as(admin.auth).patch(`/admin/departments/${chemistry.id}`).send({ name: `Chemistry ${n}`, code: `phy${n}` });
+    expect(code.status).toBe(409);
+    expect(body(code).error?.message).toMatch(`PHY${n} is already used by Physics ${n}`);
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0);
+
+    // Known only to SMARTTT (not read in yet): SMARTTT's refusal is passed on.
+    smartttDepartments.push({ id: nextId++, name: `Botany ${n}`, code: `DBOT${n}`, status: 'active' });
+    expect((await as(admin.auth).patch(`/admin/departments/${chemistry.id}`).send({ name: `Chemistry ${n}`, code: `DBOT${n}` })).status).toBe(409);
+    const { rows: [row] } = await pool.query<{ name: string; code: string }>(`SELECT name, code FROM departments WHERE id = $1`, [chemistry.id]);
+    expect(row).toEqual({ name: `Chemistry ${n}`, code: `CHEM${n}` });
+  });
+
+  it('may keep its own name and change only its code', async () => {
+    const admin = await makeUser('ADMIN');
+    const n = uniq();
+    const department = await linked(`Zoology ${n}`, `ZOO${n}`);
+    const res = await as(admin.auth).patch(`/admin/departments/${department.id}`).send({ name: `Zoology ${n}`, code: `DZOO${n}` });
+    expect(res.status).toBe(200);
+    expect(body(res).data).toMatchObject({ name: `Zoology ${n}`, code: `DZOO${n}` });
+  });
+
+  it('nothing changes when SMARTTT is down', async () => {
+    const admin = await makeUser('ADMIN');
+    const n = uniq();
+    const department = await linked(`Statistcs ${n}`, `STA${n}`);
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const res = await as(admin.auth).patch(`/admin/departments/${department.id}`).send({ name: `Statistics ${n}`, code: `STA${n}` });
+    expect(res.status).toBe(503);
+    const { rows: [row] } = await pool.query<{ name: string }>(`SELECT name FROM departments WHERE id = $1`, [department.id]);
+    expect(row!.name).toBe(`Statistcs ${n}`);
+  });
+
+  it('a department only here is corrected here', async () => {
+    const admin = await makeUser('ADMIN');
+    const n = uniq();
+    const { rows: [local] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [`Musik ${n}`, `MUS${n}`]);
+    const res = await as(admin.auth).patch(`/admin/departments/${local!.id}`).send({ name: `Music ${n}`, code: `MUS${n}` });
+    expect(res.status).toBe(200);
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('is 404 for an unknown department and for administrators only', async () => {
+    const admin = await makeUser('ADMIN');
+    const lecturer = await makeUser('LECTURER');
+    expect((await as(admin.auth).patch(`/admin/departments/${randomUUID()}`).send({ name: 'Anything', code: 'ANY' })).status).toBe(404);
+    expect((await as(lecturer.auth).patch(`/admin/departments/${randomUUID()}`).send({ name: 'Anything', code: 'ANY' })).status).toBe(403);
   });
 });
 

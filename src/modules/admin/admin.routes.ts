@@ -4,7 +4,7 @@ import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as adminController from './admin.controller.js';
 import { adminSmartttRouter } from './admin.smarttt.js';
-import { adminInvitationSchema, aliasIdParamSchema, createDepartmentSchema, departmentIdParamSchema, lecturerListQuerySchema, lecturerUserIdParamSchema, mergeDepartmentSchema, moveLecturerSchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
+import { adminInvitationSchema, aliasIdParamSchema, createDepartmentSchema, departmentIdParamSchema, editDepartmentSchema, lecturerListQuerySchema, lecturerUserIdParamSchema, mergeDepartmentSchema, moveLecturerSchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
 
 /** Every route is gated to the ADMIN role. */
 export const adminRouter: Router = Router();
@@ -76,6 +76,23 @@ adminRouter.post(
   asyncHandler(requireAuth('ADMIN')),
   validate({ body: createDepartmentSchema }),
   asyncHandler(adminController.createDepartment),
+);
+
+/**
+ * Corrects a department's name and code: in SMARTTT first, then here.
+ * Lecturers, officers and teaching stay with it; the Timetable Generator
+ * takes the new name and code at its next read.
+ *
+ * 200 - { departmentId, name, code }
+ * 404 - no such department
+ * 409 - the name or code belongs to another department (here or in SMARTTT)
+ * 503 - SMARTTT could not be reached; nothing was changed
+ */
+adminRouter.patch(
+  '/departments/:departmentId',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ params: departmentIdParamSchema, body: editDepartmentSchema }),
+  asyncHandler(adminController.editDepartment),
 );
 
 /** Lecturers, unassigned ones first. `?q=&unassigned=true` */

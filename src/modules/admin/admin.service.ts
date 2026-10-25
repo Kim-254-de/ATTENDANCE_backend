@@ -42,6 +42,31 @@ export async function createDepartment(
   return { departmentId: department.id, name: department.name, code: department.code };
 }
 
+/**
+ * PATCH /admin/departments/:departmentId — corrects the name or code, in
+ * SMARTTT first (which owns departments), then here. Officers, lecturers and
+ * teaching stay with the department; the Generator takes the new name and
+ * code at its next read.
+ */
+export async function editDepartment(
+  departmentId: string,
+  input: { name: string; code: string },
+  actor: Actor,
+  context: RegistrationContext,
+): Promise<{ departmentId: string; name: string; code: string }> {
+  const { before, after } = await directoryService.editDepartment(departmentId, input.name, input.code);
+  await auditService.record({
+    action: 'DEPARTMENT_UPDATED',
+    outcome: 'SUCCESS',
+    userId: actor.userId,
+    requestId: context.requestId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    metadata: { departmentId, from: before, to: { name: after.name, code: after.code } },
+  });
+  return { departmentId, name: after.name, code: after.code };
+}
+
 /** GET /admin/directory — whether SMARTTT is connected, and what only exists here. */
 export async function directoryStatus(): Promise<{ smartttConnected: boolean; onlyHere: { departments: number } }> {
   return { smartttConnected: directoryService.smartttDirectoryEnabled(), onlyHere: await directoryService.unlinkedCounts() };

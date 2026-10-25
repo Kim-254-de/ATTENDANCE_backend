@@ -75,6 +75,21 @@ export async function insertDepartment(
   return row!.id;
 }
 
+/** One department, by id. */
+export async function findDepartment(id: string, client?: PoolClient): Promise<LocalDepartment | null> {
+  const row = await queryOne<{ id: string; name: string; code: string | null; smarttt_department_id: number | null }>(
+    `SELECT id, name, code, smarttt_department_id FROM departments WHERE id = $1`,
+    [id],
+    client,
+  );
+  return row ? { id: row.id, name: row.name, code: row.code, smartttId: row.smarttt_department_id } : null;
+}
+
+/** An administrator's correction of the name and code. */
+export async function renameDepartment(id: string, name: string, code: string, client?: PoolClient): Promise<void> {
+  await query(`UPDATE departments SET name = $2, code = $3, updated_at = NOW() WHERE id = $1`, [id, name, code], client);
+}
+
 export async function setDepartmentSmartttId(id: string, smartttId: number, code: string | null): Promise<void> {
   await query(
     `UPDATE departments SET smarttt_department_id = $2, code = COALESCE($3, code), updated_at = NOW() WHERE id = $1`,

@@ -20,6 +20,10 @@ export const createDepartmentSchema = z
   .strict();
 export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
 
+/** PATCH /admin/departments/:departmentId — the corrected name and code, both sent. */
+export const editDepartmentSchema = createDepartmentSchema;
+export type EditDepartmentInput = CreateDepartmentInput;
+
 /**
  * An administrator invites another administrator, a QA officer, a member of
  * management (university-wide), a member of the timetabling office (who signs

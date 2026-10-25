@@ -21,6 +21,9 @@ import * as repo from './directory.repository.js';
  *    and code win.
  *  - creating: an administrator's new department is created in SMARTTT
  *    first, then here, linked (createDepartment).
+ *  - correcting: an administrator's change to a department's name or code
+ *    is made in SMARTTT first, then here (editDepartment). The Timetable
+ *    Generator takes the new name and code at its next read.
  *  - rows that only exist here (made before this change) are sent to SMARTTT
  *    when an administrator asks (sendLocalToSmarttt); nothing is sent
  *    unasked.
@@ -217,6 +220,53 @@ export async function createDepartment(name: string, code: string): Promise<{ id
     }
     return { id: await repo.insertDepartment(tx, created.name, created.code, created.id), name: created.name, code: created.code };
   });
+}
+
+/**
+ * An administrator's correction of a department's name and code: in SMARTTT
+ * first when it is linked there, then here. 404 for an unknown department;
+ * 409 when the name (or another spelling of it) or the code belongs to
+ * another department, here or in SMARTTT; 503 when SMARTTT can't be reached,
+ * and then nothing changes.
+ */
+export async function editDepartment(id: string, name: string, code: string): Promise<{
+  before: { name: string; code: string | null };
+  after: { id: string; name: string; code: string };
+}> {
+  const department = await repo.findDepartment(id);
+  if (!department) throw AppError.notFound('No such department.');
+  const before = { name: department.name, code: department.code };
+
+  const same = await repo.findForName(name);
+  if (same && same.id !== id) {
+    throw AppError.conflict(`"${name}" is the same department as "${same.name}", which already exists.`, ErrorCode.CONFLICT, {
+      details: [{ field: 'name', message: `Already exists as "${same.name}".` }],
+    });
+  }
+  const holder = await repo.findByCode(code);
+  if (holder && holder.id !== id) throw codeTaken(code, holder.name);
+
+  if (smartttDirectoryEnabled() && department.smartttId !== null) {
+    const answer = await smartttDirectory.updateDepartment(department.smartttId, name, code);
+    if (answer.status === 'NAME_TAKEN') throw nameTaken(name);
+    if (answer.status === 'NOT_FOUND') {
+      throw AppError.conflict(`SMARTTT no longer has "${department.name}". Nothing was changed.`);
+    }
+    if (answer.status === 'REFUSED') throw AppError.conflict(`SMARTTT refused it: ${answer.message}`);
+    if (answer.status !== 'UPDATED') {
+      throw new AppError(503, ErrorCode.SMARTTT_UNAVAILABLE, `${refusal(answer)} The department was not changed; try again in a minute.`);
+    }
+    name = answer.record.name;
+    code = answer.record.code;
+  }
+
+  try {
+    await repo.renameDepartment(id, name, code);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw nameTaken(name);
+    throw error;
+  }
+  return { before, after: { id, name, code } };
 }
 
 /** Test seam: forget the throttle between cases. */

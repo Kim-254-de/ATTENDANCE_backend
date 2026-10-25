@@ -66,6 +66,7 @@ logs `bootstrap admin:` and does nothing once an administrator is ACTIVE).
 
 | `GET` | `/api/v1/admin/departments` | Every department with its code, staff count and whether it is in SMARTTT |
 | `POST` | `/api/v1/admin/departments` | `{ name, code }` — creates a department (in SMARTTT first); 409 when the name or code is taken |
+| `PATCH` | `/api/v1/admin/departments/:departmentId` | `{ name, code }` — corrects a department (in SMARTTT first, then here); 409 when another department has the name or code, 503 (nothing changed) when SMARTTT is down |
 | `GET` | `/api/v1/admin/lecturers` | `?q=&unassigned=true` — lecturers, unassigned ones first, with the department SMARTTT reported |
 | `PATCH` | `/api/v1/admin/lecturers/:lecturerUserId/department` | `{ departmentId }` — places or moves a lecturer in any department |
 | `GET` | `/api/v1/admin/department-duplicates` | Groups of departments whose names mean the same thing, busiest first |

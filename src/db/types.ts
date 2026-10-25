@@ -149,6 +149,8 @@ export const AuditAction = {
   OFFICER_DEACTIVATED: 'OFFICER_DEACTIVATED',
   /** An administrator created a department (in SMARTTT, then here). */
   DEPARTMENT_CREATED: 'DEPARTMENT_CREATED',
+  /** An administrator corrected a department's name or code (in SMARTTT, then here). */
+  DEPARTMENT_UPDATED: 'DEPARTMENT_UPDATED',
   /** An administrator placed a lecturer in a department, or moved them (lecturer.placement.ts). */
   LECTURER_DEPARTMENT_CHANGED: 'LECTURER_DEPARTMENT_CHANGED',
   /** An administrator folded a duplicate department into another; its name became an alias. */
