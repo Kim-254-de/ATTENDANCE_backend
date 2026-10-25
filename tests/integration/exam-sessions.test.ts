@@ -175,9 +175,10 @@ describe('exam rooms', () => {
     const stranger = await as(outsider).post('/check-in', { payload: code });
     expect(body(stranger).error?.code).toBe('EXAM_NOT_CANDIDATE');
 
-    const ok = await as(inLh1).post('/check-in', { payload: code });
-    expect(ok.status).toBe(200);
-    expect(body(ok).data).toMatchObject({ room: 'LH1', checkedIn: true });
+    // Through the class scanner's endpoint: exam codes are handed to the exam module.
+    const ok = await request(app).post('/api/v1/attendance/check-in').set('Authorization', inLh1.auth).send({ payload: code });
+    expect(ok.status).toBe(201);
+    expect(body(ok).data).toMatchObject({ room: 'LH1', checkedIn: true, unitCode: 'COSC 130', sessionId: lh1 });
     expect((await as(inLh1).post('/check-in', { payload: code })).status).toBe(409);
   });
 

@@ -189,14 +189,24 @@ export async function close(id: string): Promise<void> {
   await query(`UPDATE exam_sessions SET status = 'CLOSED', updated_at = NOW() WHERE id = $1`, [id]);
 }
 
-/** Records the check-in; false when the student had already checked in. */
-export async function recordCheckIn(sessionId: string, studentUserId: string, registrationNumber: string): Promise<boolean> {
-  const result = await query(
+/** Records the check-in; null when the student had already checked in. */
+export async function recordCheckIn(
+  sessionId: string,
+  studentUserId: string,
+  registrationNumber: string,
+): Promise<{ id: string; checkedInAt: Date } | null> {
+  return queryOne<{ id: string; checkedInAt: Date }>(
     `INSERT INTO exam_attendance_records (exam_session_id, student_user_id, registration_number)
-     VALUES ($1, $2, $3) ON CONFLICT (exam_session_id, student_user_id) DO NOTHING`,
+     VALUES ($1, $2, $3) ON CONFLICT (exam_session_id, student_user_id) DO NOTHING
+     RETURNING id, checked_in_at AS "checkedInAt"`,
     [sessionId, studentUserId, registrationNumber],
   );
-  return (result.rowCount ?? 0) > 0;
+}
+
+/** True when the id is an exam session's (not a class's). */
+export async function exists(id: string): Promise<boolean> {
+  const row = await queryOne<{ found: boolean }>(`SELECT EXISTS (SELECT 1 FROM exam_sessions WHERE id = $1) AS found`, [id]);
+  return row?.found ?? false;
 }
 
 export async function checkedIn(sessionIds: string[]): Promise<Map<string, Set<string>>> {

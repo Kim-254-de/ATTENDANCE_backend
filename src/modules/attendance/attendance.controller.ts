@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
+import { examService } from '../exam/index.js';
 import * as attendanceService from './attendance.service.js';
 import type {
   BarcodeCheckInInput,
@@ -22,6 +23,11 @@ function userId(req: Request): string {
 /** POST /api/v1/attendance/check-in */
 export async function checkIn(req: Request, res: Response): Promise<void> {
   const { payload, location } = req.body as CheckInInput;
+  // One scanner for both: an exam room's code is checked in by the exam module.
+  if (await examService.isExamCode(payload)) {
+    sendCreated(res, await examService.checkIn(payload, userId(req), location));
+    return;
+  }
   const result = await attendanceService.checkIn(
     payload,
     userId(req),

@@ -244,10 +244,30 @@ export async function checkIn(payload: string, studentUserId: string, location: 
     }
     throw new AppError(403, ErrorCode.EXAM_NOT_CANDIDATE, `You aren’t listed for ${session.unitCodes.join('/')}.`);
   }
-  if (!(await repo.recordCheckIn(session.id, studentUserId, reg))) {
-    throw AppError.conflict('You have already checked in to this exam.');
+  const record = await repo.recordCheckIn(session.id, studentUserId, reg);
+  if (!record) {
+    // Worded like a class's, so the scan page shows "Already checked in".
+    throw AppError.conflict('Your attendance for this exam has already been recorded.');
   }
-  return { examSessionId: session.id, codes: session.unitCodes.join('/'), room: session.roomCode, checkedIn: true };
+  const codes = session.unitCodes.join('/');
+  return {
+    // The class check-in's fields (POST /attendance/check-in hands exam codes here) ...
+    recordId: record.id,
+    sessionId: session.id,
+    unitCode: codes,
+    recordedAt: record.checkedInAt.toISOString(),
+    // ... and the exam's.
+    examSessionId: session.id,
+    codes,
+    room: session.roomCode,
+    checkedIn: true,
+  };
+}
+
+/** True when a scanned code is an exam room's rather than a class's (POST /attendance/check-in takes both). */
+export async function isExamCode(payload: string): Promise<boolean> {
+  const claimed = payload.trim().split('.')[1];
+  return !!claimed && UUID_PATTERN.test(claimed) && (await repo.exists(claimed));
 }
 
 /**
