@@ -11,6 +11,13 @@ import { validate } from '../../middleware/validate.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as generatorAuth from '../auth/auth.generator.js';
 import { directoryService } from '../directory/index.js';
+import {
+  examService,
+  examSessionsPushSchema,
+  termModePushSchema,
+  type ExamSessionsPush,
+  type TermModePush,
+} from '../exam/index.js';
 import { examsService, invigilationService, teachingService } from '../teaching/index.js';
 import { unitService } from '../unit/index.js';
 
@@ -62,6 +69,39 @@ integrationRouter.post(
       unitCodes: [...new Set(body.unit_codes.map(normaliseUnitCode))],
     });
     sendSuccess(res, result);
+  }),
+);
+
+/**
+ * SMARTTT's latest exam timetable for a term: one session per paper per room,
+ * with who sits there and its invigilator. Replaces the term's exam sessions.
+ */
+integrationRouter.post(
+  '/smarttt/exam-sessions',
+  requireSmartttKey,
+  validate({ body: examSessionsPushSchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const body = req.body as ExamSessionsPush;
+    sendSuccess(res, await examService.receiveExamSessions(body.term_id, body.version, body.sessions));
+  }),
+);
+
+/** The Director switched a term to exams (teaching classes refused) or closed its exam period. */
+integrationRouter.post(
+  '/smarttt/term-mode',
+  requireSmartttKey,
+  validate({ body: termModePushSchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const body = req.body as TermModePush;
+    sendSuccess(
+      res,
+      await examService.receiveTermMode(
+        body.term_id,
+        body.mode,
+        body.switched_at ? new Date(body.switched_at) : null,
+        body.closed_at ? new Date(body.closed_at) : null,
+      ),
+    );
   }),
 );
 

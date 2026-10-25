@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import type { VerificationMethod } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
+import { examService } from '../exam/index.js';
 import { findUnitSlots, type UnitSlot } from '../unit/index.js';
 import * as sessionRepository from './session.repository.js';
 import type { SessionForQr, SessionGeofence, UnitRoom } from './session.repository.js';
@@ -110,6 +111,8 @@ export async function createSession(
   lecturerUserId: string,
   context: RequestContext,
 ): Promise<SessionSummary> {
+  // While SMARTTT has the term in exam mode, only exam rooms open (src/modules/exam).
+  await examService.assertTeachingAllowed();
   const unit = await sessionRepository.findLecturerUnit(input.unitId, lecturerUserId);
   if (!unit) {
     throw AppError.forbidden('You are not assigned to teach this unit.');

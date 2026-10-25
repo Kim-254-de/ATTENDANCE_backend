@@ -82,6 +82,14 @@ export const ErrorCode = {
 
   /** A timetabling office account: it signs in at the Timetable Generator, not here. */
   SIGN_IN_AT_GENERATOR: 'SIGN_IN_AT_GENERATOR',
+
+  // Exams (src/modules/exam)
+  /** The term is in exam mode: teaching classes can't be opened. */
+  EXAM_MODE: 'EXAM_MODE',
+  /** The student sits this paper in another room (named in the message and details.room). */
+  EXAM_WRONG_ROOM: 'EXAM_WRONG_ROOM',
+  /** The student isn't listed for this paper. */
+  EXAM_NOT_CANDIDATE: 'EXAM_NOT_CANDIDATE',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
