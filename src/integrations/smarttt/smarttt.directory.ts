@@ -30,6 +30,16 @@ export type SmartttCreateResult<T> =
   | { status: 'UNAVAILABLE'; reason: string }
   | { status: 'DISABLED' };
 
+export type SmartttUpdateResult<T> =
+  | { status: 'UPDATED'; record: T }
+  /** Another SMARTTT department already has the name. */
+  | { status: 'NAME_TAKEN'; id: number }
+  /** SMARTTT has no department with this id (deleted there). */
+  | { status: 'NOT_FOUND' }
+  | { status: 'REFUSED'; message: string }
+  | { status: 'UNAVAILABLE'; reason: string }
+  | { status: 'DISABLED' };
+
 const departmentSchema = z.object({
   id: z.number().int(),
   name: z.string().min(1),
@@ -62,6 +72,27 @@ export async function createDepartment(name: string, code: string | null): Promi
   return create(env.SMARTTT_DEPARTMENTS_PATH, code ? { name, code } : { name }, departmentSchema, toDepartment);
 }
 
+/** An administrator's correction of a department's name and code (PATCH .../departments/<id>/). */
+export async function updateDepartment(id: number, name: string, code: string): Promise<SmartttUpdateResult<SmartttDepartment>> {
+  if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };
+  const path = `${env.SMARTTT_DEPARTMENTS_PATH.replace(/\/+$/, '')}/${id}/`;
+  const answer = await request('PATCH', path, { name, code });
+  if (answer.kind === 'failed') return { status: 'UNAVAILABLE', reason: answer.reason };
+  if (answer.status === 200) {
+    const parsed = departmentSchema.safeParse(answer.body);
+    if (parsed.success) return { status: 'UPDATED', record: toDepartment(parsed.data) };
+    logger.error({ path }, 'smarttt directory: updated department could not be mapped');
+    return { status: 'UNAVAILABLE', reason: 'SMARTTT returned an unexpected response.' };
+  }
+  if (answer.status === 404) return { status: 'NOT_FOUND' };
+  const taken = z.object({ code: z.literal('name_taken'), id: z.number().int() }).safeParse(answer.body);
+  if (answer.status === 409 && taken.success) return { status: 'NAME_TAKEN', id: taken.data.id };
+  if (answer.status === 400 || answer.status === 409) {
+    return { status: 'REFUSED', message: errorMessage(answer.body) ?? 'SMARTTT refused it.' };
+  }
+  return { status: 'UNAVAILABLE', reason: `SMARTTT answered HTTP ${answer.status}.` };
+}
+
 async function create<S extends z.ZodTypeAny, T>(
   path: string,
   body: Record<string, unknown>,
@@ -87,7 +118,7 @@ async function create<S extends z.ZodTypeAny, T>(
 
 type Answer = { kind: 'answered'; status: number; body: unknown } | { kind: 'failed'; reason: string };
 
-async function request(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<Answer> {
+async function request(method: 'GET' | 'POST' | 'PATCH', path: string, body?: Record<string, unknown>): Promise<Answer> {
   const base = (env.SMARTTT_BASE_URL ?? '').replace(/\/+$/, '');
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   let response: Response;
