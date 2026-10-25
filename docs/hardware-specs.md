@@ -57,7 +57,7 @@ templates, runs the 1:N match itself, and sends only a slot reference:
 | Matching | On the device, 1:N, against templates stored on the device |
 | Output | A slot or reference id: letters, digits, `:`, `_`, `-`, up to 64 characters |
 | Readers the docs target | R307, ZFM-20, GROW R503 or similar |
-| **Template capacity** | The key spec for a portable unit. A slot only means something on the reader that enrolled it, so a terminal carried between classes must hold every student who may use it. R503 holds about 200, R307 about 1,000. For a whole faculty, use an Android handheld whose app stores templates locally (this still fits the contract) |
+| **Template capacity** | The key spec for a portable unit. A slot only means something on the reader that enrolled it, so a terminal carried between classes must hold every student who may use it. R503 holds about 200, R307 about 1,000. For several departments, use an Android handheld whose app stores templates locally (this still fits the contract) |
 | Sensor | Optical or capacitive, tolerant of dry or dusty fingers; FAP20+ class preferred for large groups |
 
 **Operational cost:** each student must be enrolled on each device *and* mapped

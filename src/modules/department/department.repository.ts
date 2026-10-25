@@ -46,8 +46,8 @@ const MEASURABLE = `s.scheduled_start_at IS NOT NULL`;
 export interface OfficerDepartment {
   departmentId: string;
   departmentName: string;
-  facultyId: string | null;
-  facultyName: string | null;
+  /** Unique across the university; null for one made before codes existed. */
+  departmentCode: string | null;
 }
 
 /**
@@ -59,14 +59,11 @@ export async function findOfficerDepartment(userId: string): Promise<OfficerDepa
   const row = await queryOne<{
     department_id: string;
     department_name: string;
-    faculty_id: string | null;
-    faculty_name: string | null;
+    department_code: string | null;
   }>(
-    `SELECT d.id AS department_id, d.name AS department_name,
-            f.id AS faculty_id, f.name AS faculty_name
+    `SELECT d.id AS department_id, d.name AS department_name, d.code AS department_code
        FROM department_profiles dp
        JOIN departments d ON d.id = dp.department_id
-  LEFT JOIN faculties   f ON f.id = d.faculty_id
       WHERE dp.user_id = $1`,
     [userId],
   );
@@ -74,8 +71,7 @@ export async function findOfficerDepartment(userId: string): Promise<OfficerDepa
   return {
     departmentId: row.department_id,
     departmentName: row.department_name,
-    facultyId: row.faculty_id,
-    facultyName: row.faculty_name,
+    departmentCode: row.department_code,
   };
 }
 
@@ -559,8 +555,8 @@ export async function listLecturerSessions(
 }
 
 /**
- * Course provisioning: faculty provides a course to the department
- * (`faculty.repository.ts createCourseOffering`); the department decides how
+ * Course provisioning: a course is provided to the department
+ * (`course_offerings`); the department decides how
  * many lecturer-taught segments it needs and allocates its own lecturers to
  * them. Allocating is the moment a real `units` row is created — see
  * `allocateLecturerToSegment` — reusing `units.base_code`/`class_group`

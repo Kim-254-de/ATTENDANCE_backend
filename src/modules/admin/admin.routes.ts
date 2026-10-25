@@ -4,30 +4,20 @@ import { requireAuth } from '../../middleware/authenticate.js';
 import { validate } from '../../middleware/validate.js';
 import * as adminController from './admin.controller.js';
 import { adminSmartttRouter } from './admin.smarttt.js';
-import { adminInvitationSchema, aliasIdParamSchema, createFacultySchema, departmentIdParamSchema, lecturerListQuerySchema, lecturerUserIdParamSchema, mergeDepartmentSchema, moveLecturerSchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
+import { adminInvitationSchema, aliasIdParamSchema, createDepartmentSchema, departmentIdParamSchema, lecturerListQuerySchema, lecturerUserIdParamSchema, mergeDepartmentSchema, moveLecturerSchema, officerUserIdParamSchema, unitIdParamSchema } from './admin.schema.js';
 
 /** Every route is gated to the ADMIN role. */
 export const adminRouter: Router = Router();
 
-/** Every faculty, with its department and officer counts. */
-adminRouter.get('/faculties', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.faculties));
-
-/** Creates a faculty. 409 when the name is taken. */
-adminRouter.post(
-  '/faculties',
-  asyncHandler(requireAuth('ADMIN')),
-  validate({ body: createFacultySchema }),
-  asyncHandler(adminController.createFaculty),
-);
-
-/** Every administrator, faculty officer and department officer, with invitation status. */
+/** Every administrator, management, department and QA officer, with invitation status. */
 adminRouter.get('/officers', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.officers));
 
 /**
- * Invites an administrator, or a faculty officer for one faculty (auth.invitation.ts).
+ * Invites an administrator, a QA officer, a member of management
+ * (university-wide) or one department's officer (auth.invitation.ts).
  *
  * 201 - { userId, emailSent }; emailSent false means re-send it
- * 400 - invalid input, unknown faculty, or an email outside OFFICER_EMAIL_DOMAINS
+ * 400 - invalid input, unknown department, or an email outside OFFICER_EMAIL_DOMAINS
  * 409 - someone already has an account with that email
  */
 adminRouter.post(
@@ -70,8 +60,23 @@ adminRouter.post(
   asyncHandler(adminController.verifyUnit),
 );
 
-/** Every department with its faculty, for placing a lecturer. */
+/** Every department with its code (SMARTTT's read in first), for placing lecturers and inviting officers. */
 adminRouter.get('/departments', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.departments));
+
+/**
+ * Creates a department: in SMARTTT first, then here, linked. The Timetable
+ * Allocator and Generator import it from here.
+ *
+ * 201 - { departmentId, name, code }
+ * 409 - the name or code is already in use (here or in SMARTTT)
+ * 503 - SMARTTT could not be reached; nothing was created
+ */
+adminRouter.post(
+  '/departments',
+  asyncHandler(requireAuth('ADMIN')),
+  validate({ body: createDepartmentSchema }),
+  asyncHandler(adminController.createDepartment),
+);
 
 /** Lecturers, unassigned ones first. `?q=&unassigned=true` */
 adminRouter.get(
@@ -81,7 +86,7 @@ adminRouter.get(
   asyncHandler(adminController.lecturers),
 );
 
-/** Places or moves a lecturer in any department, across faculties too. Units stay with their owners. */
+/** Places or moves a lecturer in any department. Units stay with their owners. */
 adminRouter.patch(
   '/lecturers/:lecturerUserId/department',
   asyncHandler(requireAuth('ADMIN')),
@@ -112,12 +117,12 @@ adminRouter.post(
 );
 
 /**
- * Faculties and departments belong to SMARTTT (src/modules/directory): whether
- * it is connected, and how many exist only here.
+ * Departments belong to SMARTTT (src/modules/directory): whether it is
+ * connected, and how many exist only here.
  */
 adminRouter.get('/directory', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.directoryStatus));
 
-/** Reads SMARTTT's faculties and departments now and sends the ones only here to SMARTTT. 503 when SMARTTT can't be reached. */
+/** Reads SMARTTT's departments now and sends the ones only here to SMARTTT. 503 when SMARTTT can't be reached. */
 adminRouter.post('/directory/sync', asyncHandler(requireAuth('ADMIN')), asyncHandler(adminController.syncDirectory));
 
 /** SMARTTT's admin functions, for the signed-in administrator (admin.smarttt.ts). */

@@ -9,7 +9,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 /**
  * The one admin console: SMARTTT's admin functions reached through attendance
  * for an administrator signed in with their SMARTTT account (admin.smarttt.ts),
- * and faculties and departments owned by SMARTTT (src/modules/directory).
+ * and departments owned by SMARTTT (src/modules/directory), which the
+ * Timetable Generator and Allocator read.
  * SMARTTT is stubbed at the fetch boundary.
  */
 const TEST_DB = 'attendance_admin_console_test';
@@ -33,8 +34,7 @@ interface Call { method: string; path: string; key: string | null; acting: strin
 const calls: Call[] = [];
 /** Answers for integrations/admin/<path>, by "METHOD path". */
 let adminAnswers: Record<string, Response | (() => Response)> = {};
-let smartttFaculties: { id: number; name: string; code: string }[] = [];
-let smartttDepartments: { id: number; name: string; code: string; faculty_id: number; status: string }[] = [];
+let smartttDepartments: { id: number; name: string; code: string; status: string }[] = [];
 let nextId = 100;
 
 function stubFetch() {
@@ -58,19 +58,15 @@ function smartttAnswer(input: string | URL | Request, init: RequestInit | undefi
     }
 
     const sent = raw.length ? (JSON.parse(raw.toString()) as Record<string, unknown>) : {};
-    if (url.pathname === '/api/v1/integrations/attendance/faculties/') {
-      if (method === 'GET') return Response.json({ faculties: smartttFaculties });
-      const taken = smartttFaculties.find((f) => f.name.toLowerCase() === String(sent['name']).toLowerCase());
-      if (taken) return Response.json({ detail: 'That name is already in use.', code: 'name_taken', id: taken.id }, { status: 409 });
-      const created = { id: nextId++, name: String(sent['name']), code: `F${nextId}` };
-      smartttFaculties.push(created);
-      return Response.json(created, { status: 201 });
-    }
     if (url.pathname === '/api/v1/integrations/attendance/departments/') {
       if (method === 'GET') return Response.json({ departments: smartttDepartments });
       const taken = smartttDepartments.find((d) => d.name.toLowerCase() === String(sent['name']).toLowerCase());
       if (taken) return Response.json({ detail: 'That name is already in use.', code: 'name_taken', id: taken.id }, { status: 409 });
-      const created = { id: nextId++, name: String(sent['name']), code: `D${nextId}`, faculty_id: Number(sent['faculty_id']), status: 'active' };
+      const code = (typeof sent['code'] === 'string' ? sent['code'] : `D${nextId}`).toUpperCase();
+      if (smartttDepartments.some((d) => d.code === code)) {
+        return Response.json({ detail: `The department code ${code} is already in use.`, code: 'code_taken' }, { status: 409 });
+      }
+      const created = { id: nextId++, name: String(sent['name']), code, status: 'active' };
       smartttDepartments.push(created);
       return Response.json(created, { status: 201 });
     }
@@ -81,15 +77,12 @@ function smartttAnswer(input: string | URL | Request, init: RequestInit | undefi
 // --- Helpers ---------------------------------------------------------------------------
 
 /** A signed-in account, as a bearer token; an administrator is linked to a SMARTTT account unless `linked` is false. */
-async function makeUser(role: 'ADMIN' | 'LECTURER' | 'FACULTY', options: { linked?: boolean; facultyId?: string } = {}) {
+async function makeUser(role: 'ADMIN' | 'LECTURER', options: { linked?: boolean } = {}) {
   const smartttUserId = role === 'ADMIN' && options.linked !== false ? randomUUID() : null;
   const { rows: [u] } = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, full_name, role, status, email_verified_at, smarttt_user_id)
      VALUES ($1, 'x', $2, $3, 'ACTIVE', NOW(), $4) RETURNING id`,
     [`${role.toLowerCase()}${uniq()}@uni.ac.ke`, `${role} person`, role, smartttUserId]);
-  if (role === 'FACULTY') {
-    await pool.query(`INSERT INTO faculty_profiles (user_id, faculty_id) VALUES ($1, $2)`, [u!.id, options.facultyId]);
-  }
   if (role === 'LECTURER') {
     await pool.query(`INSERT INTO lecturer_profiles (user_id, staff_number, erp_verified_at) VALUES ($1, $2, NOW())`, [u!.id, `STF/${uniq()}`]);
   }
@@ -126,6 +119,7 @@ beforeAll(async () => {
   process.env.SMARTTT_BASE_URL = SMARTTT;
   process.env.SMARTTT_API_KEY = KEY;
   process.env.GENERATOR_API_KEY = 'generator-key';
+  process.env.ALLOCATOR_API_KEY = 'allocator-key';
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
   for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {
@@ -257,110 +251,107 @@ describe("SMARTTT's admin functions in the console", () => {
   });
 });
 
-// --- Faculties and departments ----------------------------------------------------------------
+// --- Departments ----------------------------------------------------------------------------
 
-describe('faculties and departments, owned by SMARTTT', () => {
-  it("listing reads SMARTTT's: same names are linked, new ones are added", async () => {
+describe('departments, owned by SMARTTT, created by the administrator', () => {
+  it("listing reads SMARTTT's: same names are linked and take SMARTTT's code, new ones are added", async () => {
     const admin = await makeUser('ADMIN');
-    const { rows: [local] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Faculty of Education') RETURNING id`);
-    smartttFaculties = [{ id: 1, name: 'Faculty of Education', code: 'FE' }, { id: 2, name: 'Faculty of Law', code: 'FL' }];
-    smartttDepartments = [{ id: 11, name: 'Department of Commercial Law', code: 'DCL', faculty_id: 2, status: 'active' }];
+    const { rows: [local] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Department of Education') RETURNING id`);
+    smartttDepartments = [
+      { id: 1, name: 'Department of Education', code: 'DEDU', status: 'active' },
+      { id: 11, name: 'Department of Commercial Law', code: 'DCL', status: 'active' },
+    ];
 
-    const res = await as(admin.auth).get('/admin/faculties');
+    const res = await as(admin.auth).get('/admin/departments');
     expect(res.status).toBe(200);
-    const faculties = body(res).data as { facultyId: string; name: string; departmentCount: number; inSmarttt: boolean }[];
-    expect(faculties.find((f) => f.name === 'Faculty of Education')).toMatchObject({ facultyId: local!.id, inSmarttt: true });
-    expect(faculties.find((f) => f.name === 'Faculty of Law')).toMatchObject({ departmentCount: 1, inSmarttt: true });
-    const { rows: [dept] } = await pool.query<{ smarttt_department_id: number }>(
-      `SELECT smarttt_department_id FROM departments WHERE name = 'Department of Commercial Law'`);
-    expect(dept!.smarttt_department_id).toBe(11);
+    const departments = body(res).data as { departmentId: string; name: string; code: string | null; inSmarttt: boolean }[];
+    expect(departments.find((d) => d.name === 'Department of Education')).toMatchObject({ departmentId: local!.id, code: 'DEDU', inSmarttt: true });
+    expect(departments.find((d) => d.name === 'Department of Commercial Law')).toMatchObject({ code: 'DCL', inSmarttt: true });
+    expect(departments[0]).not.toHaveProperty('facultyName');
+    // No faculties are asked for any more.
+    expect(calls.map((c) => c.path)).not.toContain('/api/v1/integrations/attendance/faculties/');
   });
 
-  it('a new faculty is created in SMARTTT, then here, linked', async () => {
+  it('a new department is created in SMARTTT with its name and code, then here, linked', async () => {
     const admin = await makeUser('ADMIN');
-    const res = await as(admin.auth).post('/admin/faculties').send({ name: 'Faculty of Agriculture' });
+    smartttDepartments = [];
+    const res = await as(admin.auth).post('/admin/departments').send({ name: 'Department of Agriculture', code: 'dagr' });
     expect(res.status).toBe(201);
-    const made = smartttFaculties.find((f) => f.name === 'Faculty of Agriculture')!;
-    const { rows: [row] } = await pool.query<{ id: string; smarttt_faculty_id: number }>(
-      `SELECT id, smarttt_faculty_id FROM faculties WHERE name = 'Faculty of Agriculture'`);
-    expect(row).toEqual({ id: (body(res).data as { facultyId: string }).facultyId, smarttt_faculty_id: made.id });
+    expect(body(res).data).toMatchObject({ name: 'Department of Agriculture', code: 'DAGR' });
+    const sent = JSON.parse(calls.find((c) => c.method === 'POST')!.body.toString()) as Record<string, unknown>;
+    expect(sent).toEqual({ name: 'Department of Agriculture', code: 'DAGR' });
+    const made = smartttDepartments.find((d) => d.name === 'Department of Agriculture')!;
+    const { rows: [row] } = await pool.query<{ id: string; code: string; smarttt_department_id: number }>(
+      `SELECT id, code, smarttt_department_id FROM departments WHERE name = 'Department of Agriculture'`);
+    expect(row).toEqual({ id: (body(res).data as { departmentId: string }).departmentId, code: 'DAGR', smarttt_department_id: made.id });
+    expect(await audits('DEPARTMENT_CREATED')).toHaveLength(1);
 
-    const again = await as(admin.auth).post('/admin/faculties').send({ name: 'faculty of agriculture' });
-    expect(again.status).toBe(409);
+    expect((await as(admin.auth).post('/admin/departments').send({ name: 'department of agriculture', code: 'OTHER' })).status).toBe(409);
+  });
+
+  it("refuses a code SMARTTT already gives another department, in SMARTTT's words", async () => {
+    const admin = await makeUser('ADMIN');
+    smartttDepartments = [{ id: 51, name: 'Department of Botany', code: 'DBOT', status: 'active' }];
+    // Not read in yet (the sync is throttled), so only SMARTTT knows the code.
+    const res = await as(admin.auth).post('/admin/departments').send({ name: 'Department of Biology', code: 'DBOT' });
+    expect(res.status).toBe(409);
+    expect(body(res).error?.message).toMatch(/DBOT is already in use/);
   });
 
   it('nothing is created here when SMARTTT is down', async () => {
     const admin = await makeUser('ADMIN');
     vi.restoreAllMocks();
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
-    const res = await as(admin.auth).post('/admin/faculties').send({ name: 'Faculty of Medicine' });
+    const res = await as(admin.auth).post('/admin/departments').send({ name: 'Department of Medicine', code: 'DMED' });
     expect(res.status).toBe(503);
-    expect((await pool.query(`SELECT 1 FROM faculties WHERE name = 'Faculty of Medicine'`)).rowCount).toBe(0);
+    expect((await pool.query(`SELECT 1 FROM departments WHERE name = 'Department of Medicine'`)).rowCount).toBe(0);
   });
 
-  it("a faculty officer's new department goes to SMARTTT under the faculty's SMARTTT id", async () => {
-    smartttFaculties = [{ id: 7, name: 'Faculty of Science', code: 'FS' }];
-    const { rows: [faculty] } = await pool.query<{ id: string }>(
-      `INSERT INTO faculties (name, smarttt_faculty_id) VALUES ('Faculty of Science', 7) ON CONFLICT (name) DO UPDATE SET smarttt_faculty_id = 7 RETURNING id`);
-    const officer = await makeUser('FACULTY', { facultyId: faculty!.id });
-
-    const res = await as(officer.auth).post('/faculties/departments').send({ name: 'Department of Physics' });
-    expect(res.status).toBe(201);
-    expect(smartttDepartments.find((d) => d.name === 'Department of Physics')).toMatchObject({ faculty_id: 7 });
-    const { rows: [row] } = await pool.query<{ faculty_id: string; smarttt_department_id: number | null }>(
-      `SELECT faculty_id, smarttt_department_id FROM departments WHERE name = 'Department of Physics'`);
-    expect(row!.faculty_id).toBe(faculty!.id);
-    expect(row!.smarttt_department_id).not.toBeNull();
-  });
-
-  it("another spelling of a department here is refused before SMARTTT is asked", async () => {
-    smartttFaculties = [{ id: 8, name: 'Faculty of Pure Sciences', code: 'FPS' }];
+  it('another spelling of a department here is refused before SMARTTT is asked', async () => {
+    const admin = await makeUser('ADMIN');
     smartttDepartments = [];
-    const { rows: [faculty] } = await pool.query<{ id: string }>(
-      `INSERT INTO faculties (name, smarttt_faculty_id) VALUES ('Faculty of Pure Sciences', 8) RETURNING id`);
-    await pool.query(`INSERT INTO departments (name, faculty_id) VALUES ('Chemistry', $1)`, [faculty!.id]);
-    const officer = await makeUser('FACULTY', { facultyId: faculty!.id });
-
-    const res = await as(officer.auth).post('/faculties/departments').send({ name: 'Department of Chemistry' });
+    await pool.query(`INSERT INTO departments (name, code) VALUES ('Chemistry', 'DCHEM')`);
+    const res = await as(admin.auth).post('/admin/departments').send({ name: 'Department of Chemistry', code: 'DCHEM2' });
     expect(res.status).toBe(409);
     expect(smartttDepartments).toEqual([]);
+  });
+
+  it('is for administrators only', async () => {
+    const lecturer = await makeUser('LECTURER');
+    expect((await as(lecturer.auth).post('/admin/departments').send({ name: 'Department of Music', code: 'DMUS' })).status).toBe(403);
+    expect((await request(app).get('/api/v1/admin/faculties').set('Authorization', (await makeUser('ADMIN')).auth)).status).toBe(404);
   });
 
   it('a department read from SMARTTT places the lecturers who were waiting for it', async () => {
     const admin = await makeUser('ADMIN');
     const lecturer = await makeUser('LECTURER');
     await pool.query(`UPDATE lecturer_profiles SET department = 'Agricultural Economics', department_id = NULL WHERE user_id = $1`, [lecturer.id]);
-    smartttFaculties = [{ id: 9, name: 'Faculty of Agriculture and Food', code: 'FAF' }];
-    smartttDepartments = [{ id: 19, name: 'Department of Agricultural Economics', code: 'DAE', faculty_id: 9, status: 'active' }];
+    smartttDepartments = [{ id: 19, name: 'Department of Agricultural Economics', code: 'DAE', status: 'active' }];
 
-    expect((await as(admin.auth).get('/admin/faculties')).status).toBe(200);
+    expect((await as(admin.auth).get('/admin/departments')).status).toBe(200);
     const { rows: [placed] } = await pool.query<{ name: string }>(
       `SELECT d.name FROM lecturer_profiles lp JOIN departments d ON d.id = lp.department_id WHERE lp.user_id = $1`, [lecturer.id]);
     expect(placed?.name).toBe('Department of Agricultural Economics');
   });
 
-  it('an administrator sends the ones that only exist here to SMARTTT', async () => {
+  it('an administrator sends the ones that only exist here to SMARTTT, with their codes', async () => {
     const admin = await makeUser('ADMIN');
-    smartttFaculties = [];
     smartttDepartments = [];
-    const { rows: [f] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Faculty of Arts ${uniq()}') RETURNING id, name`);
     const deptName = `Department of History ${uniq()}`;
-    await pool.query(`INSERT INTO departments (name, faculty_id) VALUES ($1, $2)`, [deptName, f!.id]);
-    const orphan = `Department of Nowhere ${uniq()}`;
-    await pool.query(`INSERT INTO departments (name) VALUES ($1)`, [orphan]);
+    await pool.query(`INSERT INTO departments (name, code) VALUES ($1, 'DHIS')`, [deptName]);
 
-    const before = body(await as(admin.auth).get('/admin/directory')).data as { onlyHere: { faculties: number; departments: number } };
-    expect(before.onlyHere.faculties).toBeGreaterThan(0);
+    const before = body(await as(admin.auth).get('/admin/directory')).data as { onlyHere: { departments: number } };
+    expect(before.onlyHere.departments).toBeGreaterThan(0);
+    expect(before.onlyHere).not.toHaveProperty('faculties');
 
     const res = await as(admin.auth).post('/admin/directory/sync');
     expect(res.status).toBe(200);
-    const report = body(res).data as { toSmarttt: { faculties: number; departments: number; skipped: string[] } };
+    const report = body(res).data as { toSmarttt: { departments: number; skipped: string[] } };
     expect(report.toSmarttt.departments).toBeGreaterThan(0);
-    expect(report.toSmarttt.skipped.some((s) => s.includes(orphan))).toBe(true);
-    expect(smartttDepartments.some((d) => d.name === deptName)).toBe(true);
+    expect(smartttDepartments.find((d) => d.name === deptName)).toMatchObject({ code: 'DHIS' });
 
-    const after = body(await as(admin.auth).get('/admin/directory')).data as { onlyHere: { faculties: number; departments: number } };
-    expect(after.onlyHere).toEqual({ faculties: 0, departments: 1 });
+    const after = body(await as(admin.auth).get('/admin/directory')).data as { onlyHere: { departments: number } };
+    expect(after.onlyHere).toEqual({ departments: 0 });
     expect(await audits('DIRECTORY_SYNCED')).toHaveLength(1);
   });
 });
@@ -374,11 +365,11 @@ describe('the Timetable Generator reads the departments', () => {
   it('needs its own key', async () => {
     expect((await read()).status).toBe(401);
     expect((await read(KEY)).status).toBe(401); // SMARTTT's key is not the Generator's
+    expect((await read('allocator-key')).status).toBe(401);
   });
 
-  it("lists every department with its faculty, SMARTTT id and active lecturers, SMARTTT's first", async () => {
-    smartttFaculties = [{ id: 31, name: 'Faculty of Health Sciences', code: 'FHS' }];
-    smartttDepartments = [{ id: 41, name: 'Department of Nursing', code: 'DN', faculty_id: 31, status: 'active' }];
+  it("lists every department with its code, SMARTTT id and active lecturers, SMARTTT's first", async () => {
+    smartttDepartments = [{ id: 41, name: 'Department of Nursing', code: 'DN', status: 'active' }];
     const { rows: [local] } = await pool.query<{ id: string }>(`INSERT INTO departments (name) VALUES ('Department of Geography ${uniq()}') RETURNING id`);
     const lecturer = await makeUser('LECTURER');
     await pool.query(`UPDATE lecturer_profiles SET department_id = $2 WHERE user_id = $1`, [lecturer.id, local!.id]);
@@ -387,8 +378,32 @@ describe('the Timetable Generator reads the departments', () => {
     expect(res.status).toBe(200);
     const departments = (body(res).data as { departments: Record<string, unknown>[] }).departments;
     expect(departments.find((d) => d['name'] === 'Department of Nursing')).toMatchObject({
-      facultyName: 'Faculty of Health Sciences', smartttDepartmentId: 41, lecturerCount: 0,
+      code: 'DN', smartttDepartmentId: 41, lecturerCount: 0,
     });
-    expect(departments.find((d) => d['id'] === local!.id)).toMatchObject({ smartttDepartmentId: null, facultyId: null, lecturerCount: 1 });
+    expect(departments.find((d) => d['id'] === local!.id)).toMatchObject({ code: null, smartttDepartmentId: null, lecturerCount: 1 });
+    expect(departments[0]).not.toHaveProperty('facultyName');
+  });
+});
+
+describe('the Timetable Allocator reads the departments', () => {
+  const read = (key?: string) => {
+    const req = request(app).get('/api/v1/integrations/allocator/departments');
+    return key ? req.set('X-API-Key', key) : req;
+  };
+
+  it('needs its own key', async () => {
+    expect((await read()).status).toBe(401);
+    expect((await read('generator-key')).status).toBe(401);
+  });
+
+  it('lists every department it can address, by code and name', async () => {
+    smartttDepartments = [{ id: 61, name: 'Department of Statistics', code: 'DSTAT', status: 'active' }];
+    await pool.query(`INSERT INTO departments (name) VALUES ('Department of Codeless ${uniq()}')`);
+    const res = await read('allocator-key');
+    expect(res.status).toBe(200);
+    const departments = (body(res).data as { departments: { code: string; name: string }[] }).departments;
+    expect(departments).toContainEqual({ code: 'DSTAT', name: 'Department of Statistics' });
+    expect(departments.every((d) => typeof d.code === 'string' && d.code.length > 0)).toBe(true);
+    expect(departments.some((d) => d.name.startsWith('Department of Codeless'))).toBe(false);
   });
 });

@@ -55,8 +55,6 @@ const erpStaffPayloadSchema = z
     // --- placement ---
     department: z.string().optional().nullable(),
     departmentName: z.string().optional().nullable(),
-    faculty: z.string().optional().nullable(),
-    school: z.string().optional().nullable(),
     title: z.string().optional().nullable(),
     designation: z.string().optional().nullable(),
   })
@@ -160,7 +158,6 @@ export function toStaffRecord(body: unknown, requestedStaffNumber: string): ErpS
     email: first(payload.email, payload.emailAddress, payload.workEmail)?.toLowerCase().trim() ?? null,
     isActive: deriveIsActive(payload),
     department: first(payload.department, payload.departmentName),
-    faculty: first(payload.faculty, payload.school),
     title: first(payload.title, payload.designation),
     raw: body,
   };

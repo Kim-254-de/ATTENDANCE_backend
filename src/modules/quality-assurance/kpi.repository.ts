@@ -13,20 +13,17 @@ import { query, queryOne } from '../../db/database.js';
 
 export interface DashboardFilters {
   targetDepartmentId?: string;
-  targetFacultyId?: string;
   from?: string;
   to?: string;
 }
 
 const AUDIT_TARGET_FILTER = `
   AND ($1::uuid IS NULL OR a.target_department_id = $1)
-  AND ($2::uuid IS NULL OR a.target_faculty_id = $2)
-  AND ($3::date IS NULL OR a.scheduled_date >= $3)
-  AND ($4::date IS NULL OR a.scheduled_date <= $4)`;
+  AND ($2::date IS NULL OR a.scheduled_date >= $2)
+  AND ($3::date IS NULL OR a.scheduled_date <= $3)`;
 
 const auditTargetParams = (f: DashboardFilters): unknown[] => [
   f.targetDepartmentId ?? null,
-  f.targetFacultyId ?? null,
   f.from ?? null,
   f.to ?? null,
 ];
@@ -99,7 +96,7 @@ export async function getAttendanceTrends(
   groupBy: 'week' | 'month',
 ): Promise<AttendanceTrendRow[]> {
   const { rows } = await query<AttendanceTrendRow>(
-    `SELECT date_trunc($3, s.scheduled_start_at) AS period_start,
+    `SELECT date_trunc($2, s.scheduled_start_at) AS period_start,
             d.id AS department_id, d.name AS department_name,
             AVG(
               (SELECT COUNT(*) FROM attendance_records r WHERE r.session_id = s.id)::numeric
@@ -111,12 +108,11 @@ export async function getAttendanceTrends(
        JOIN departments d ON d.id = u.department_id
       WHERE s.scheduled_start_at IS NOT NULL
         AND ($1::uuid IS NULL OR d.id = $1)
-        AND ($2::uuid IS NULL OR d.faculty_id = $2)
-        AND ($4::date IS NULL OR s.scheduled_start_at >= $4)
-        AND ($5::date IS NULL OR s.scheduled_start_at <= $5)
+        AND ($3::date IS NULL OR s.scheduled_start_at >= $3)
+        AND ($4::date IS NULL OR s.scheduled_start_at <= $4)
       GROUP BY period_start, d.id, d.name
       ORDER BY period_start, d.name`,
-    [filters.targetDepartmentId ?? null, filters.targetFacultyId ?? null, groupBy, filters.from ?? null, filters.to ?? null],
+    [filters.targetDepartmentId ?? null, groupBy, filters.from ?? null, filters.to ?? null],
   );
   return rows.filter((r) => r.avg_attendance_rate !== null);
 }

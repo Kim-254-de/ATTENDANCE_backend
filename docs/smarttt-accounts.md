@@ -8,7 +8,7 @@ login and password they use for SMARTTT.
 Administrators sign in with their SMARTTT account too: a SMARTTT administrator
 (an active staff account that is not a student's or lecturer's; SMARTTT sends
 `account.is_admin`) is an administrator here, with the one admin console
-(`src/modules/admin/README.md`). Department and faculty officers are not in
+(`src/modules/admin/README.md`). Management, department and QA officers are not in
 SMARTTT. They keep attendance's own accounts and passwords, unchanged.
 
 ## Switch
@@ -28,8 +28,8 @@ Against an older SMARTTT, attendance logs an error and answers sign-ins with
 
 `POST /api/v1/auth/login` with `{ identifier, password }`:
 
-1. The identifier finds an attendance account, if any. A department or faculty
-   officer goes through the local password check as before. Anyone else
+1. The identifier finds an attendance account, if any. A management, department
+   or QA officer goes through the local password check as before. Anyone else
    (student, lecturer, or nobody yet) goes to SMARTTT.
 2. A locked local account is refused (429) before SMARTTT is asked.
 3. Attendance POSTs `{ identifier, password }` to SMARTTT with `X-API-Key`.

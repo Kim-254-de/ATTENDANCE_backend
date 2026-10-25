@@ -8,7 +8,7 @@ import type { RegistrationContext } from '../auth/auth.service.js';
  * Sign-in places a lecturer by matching SMARTTT's department name
  * (`auth.repository.ts DEPARTMENT_BY_NAME`). When nothing matches, the
  * lecturer is left unassigned rather than a department being invented, and
- * a faculty officer or an administrator places them here. The same call moves
+ * an administrator places them here. The same call moves
  * a lecturer who changed departments. Sign-in never overrides a placement.
  *
  * Placing an unassigned lecturer also teaches the system their SMARTTT
@@ -21,8 +21,7 @@ import type { RegistrationContext } from '../auth/auth.service.js';
  * the departments that own them (`db/migrations/033_unit_owning_department.sql`);
  * units with no owner yet follow them into the new department.
  *
- * Shared by `faculty.service.ts` (scoped to one faculty) and
- * `admin.service.ts` (institution-wide); the scope checks are theirs.
+ * Used by `admin.service.ts`, which checks who may call it.
  */
 
 export interface PlacementLecturerRow {
@@ -33,23 +32,19 @@ export interface PlacementLecturerRow {
   email: string;
   departmentId: string | null;
   departmentName: string | null;
-  facultyId: string | null;
-  facultyName: string | null;
-  /** The department and faculty names SMARTTT/ERP gave at sign-in, to help decide where an unassigned lecturer goes. */
+  /** The department name SMARTTT/ERP gave at sign-in, to help decide where an unassigned lecturer goes. */
   reportedDepartment: string | null;
-  reportedFaculty: string | null;
   unitCount: number;
 }
 
 const PLACEMENT_SELECT = `
   SELECT lp.user_id, usr.full_name, lp.staff_number, lp.title, usr.email,
-         d.id AS department_id, d.name AS department_name, f.id AS faculty_id, f.name AS faculty_name,
-         lp.department AS reported_department, lp.faculty AS reported_faculty,
+         d.id AS department_id, d.name AS department_name,
+         lp.department AS reported_department,
          (SELECT COUNT(*) FROM units un WHERE un.lecturer_user_id = lp.user_id)::int AS unit_count
     FROM lecturer_profiles lp
     JOIN users usr ON usr.id = lp.user_id
-LEFT JOIN departments d ON d.id = lp.department_id
-LEFT JOIN faculties   f ON f.id = d.faculty_id`;
+LEFT JOIN departments d ON d.id = lp.department_id`;
 
 interface PlacementDbRow {
   user_id: string;
@@ -59,10 +54,7 @@ interface PlacementDbRow {
   email: string;
   department_id: string | null;
   department_name: string | null;
-  faculty_id: string | null;
-  faculty_name: string | null;
   reported_department: string | null;
-  reported_faculty: string | null;
   unit_count: number;
 }
 
@@ -74,20 +66,15 @@ const toRow = (r: PlacementDbRow): PlacementLecturerRow => ({
   email: r.email,
   departmentId: r.department_id,
   departmentName: r.department_name,
-  facultyId: r.faculty_id,
-  facultyName: r.faculty_name,
   reportedDepartment: r.reported_department,
-  reportedFaculty: r.reported_faculty,
   unitCount: r.unit_count,
 });
 
 /**
- * Lecturers to place, newest problems first: unassigned ones, then (when
- * `facultyId` is given) that faculty's own staff, or (when not) everyone.
- * `unassignedOnly` drops the second group. Capped by `limit`.
+ * Lecturers to place, newest problems first: unassigned ones, then everyone
+ * else. `unassignedOnly` drops the second group. Capped by `limit`.
  */
 export async function listLecturers(options: {
-  facultyId?: string;
   unassignedOnly?: boolean;
   search?: string | null;
   limit: number;
@@ -95,12 +82,11 @@ export async function listLecturers(options: {
   const { rows } = await query<PlacementDbRow>(
     `${PLACEMENT_SELECT}
       WHERE usr.deleted_at IS NULL
-        AND (lp.department_id IS NULL
-             OR (NOT $2::boolean AND ($1::uuid IS NULL OR d.faculty_id = $1)))
-        AND ($3::text IS NULL OR usr.full_name ILIKE '%' || $3 || '%' OR lp.staff_number ILIKE '%' || $3 || '%')
+        AND (lp.department_id IS NULL OR NOT $1::boolean)
+        AND ($2::text IS NULL OR usr.full_name ILIKE '%' || $2 || '%' OR lp.staff_number ILIKE '%' || $2 || '%')
       ORDER BY (lp.department_id IS NOT NULL), usr.full_name
-      LIMIT $4`,
-    [options.facultyId ?? null, options.unassignedOnly ?? false, options.search ?? null, options.limit],
+      LIMIT $3`,
+    [options.unassignedOnly ?? false, options.search ?? null, options.limit],
   );
   return rows.map(toRow);
 }
@@ -113,12 +99,8 @@ export async function findLecturer(lecturerUserId: string): Promise<PlacementLec
   return row ? toRow(row) : null;
 }
 
-export async function findDepartment(departmentId: string): Promise<{ id: string; name: string; facultyId: string | null } | null> {
-  const row = await queryOne<{ id: string; name: string; faculty_id: string | null }>(
-    `SELECT id, name, faculty_id FROM departments WHERE id = $1`,
-    [departmentId],
-  );
-  return row ? { id: row.id, name: row.name, facultyId: row.faculty_id } : null;
+export async function findDepartment(departmentId: string): Promise<{ id: string; name: string } | null> {
+  return queryOne<{ id: string; name: string }>(`SELECT id, name FROM departments WHERE id = $1`, [departmentId]);
 }
 
 export interface MoveResult extends PlacementLecturerRow {
@@ -137,7 +119,7 @@ export interface MoveResult extends PlacementLecturerRow {
 export async function moveLecturer(
   lecturer: PlacementLecturerRow,
   department: { id: string; name: string },
-  actor: { userId: string; kind: 'ADMIN' | 'FACULTY' },
+  actor: { userId: string; kind: 'ADMIN' },
   context: RegistrationContext,
 ): Promise<MoveResult> {
   const { learnedSpelling, alsoPlaced } = await transaction(async (client) => {

@@ -14,7 +14,6 @@ export interface ErpStaffRecord {
   /** False for retired, suspended or otherwise non-serving staff. */
   isActive: boolean;
   department: string | null;
-  faculty: string | null;
   title: string | null;
   /** Untouched ERP payload, stored as evidence against future disputes. */
   raw: unknown;

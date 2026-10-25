@@ -20,7 +20,6 @@ export const listAuditsQuerySchema = z
   .object({
     status: auditStatusSchema.optional(),
     targetDepartmentId: z.string().uuid('Not a valid identifier.').optional(),
-    targetFacultyId: z.string().uuid('Not a valid identifier.').optional(),
     from: z.string().date().optional(),
     to: z.string().date().optional(),
   })
@@ -30,18 +29,13 @@ export type ListAuditsQuery = z.infer<typeof listAuditsQuerySchema>;
 export const createAuditSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
-    targetDepartmentId: z.string().uuid('Not a valid identifier.').optional(),
-    targetFacultyId: z.string().uuid('Not a valid identifier.').optional(),
+    targetDepartmentId: z.string().uuid('Choose the department to audit.'),
     checklistTemplateId: z.string().uuid('Not a valid identifier.'),
     leadAuditorUserId: z.string().uuid('Not a valid identifier.'),
     scheduledDate: z.string().date(),
     notes: z.string().trim().max(5000).optional(),
   })
-  .strict()
-  .refine((v) => Boolean(v.targetDepartmentId) !== Boolean(v.targetFacultyId), {
-    message: 'Exactly one of targetDepartmentId or targetFacultyId is required.',
-    path: ['targetDepartmentId'],
-  });
+  .strict();
 export type CreateAuditInput = z.infer<typeof createAuditSchema>;
 
 export const updateAuditSchema = z

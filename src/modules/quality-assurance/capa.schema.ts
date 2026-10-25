@@ -13,7 +13,6 @@ export const listCapaQuerySchema = z
     status: capaStatusSchema.optional(),
     ownerUserId: z.string().uuid('Not a valid identifier.').optional(),
     targetDepartmentId: z.string().uuid('Not a valid identifier.').optional(),
-    targetFacultyId: z.string().uuid('Not a valid identifier.').optional(),
     overdue: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
   })
   .strict();

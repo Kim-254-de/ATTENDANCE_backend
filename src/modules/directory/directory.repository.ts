@@ -1,78 +1,51 @@
 import type { PoolClient } from 'pg';
 import { query, queryOne, transaction } from '../../db/database.js';
 
-/** SQL for attendance's copy of SMARTTT's faculties and departments (directory.service.ts). Every value is a bind parameter. */
-
-export interface LocalFaculty {
-  id: string;
-  name: string;
-  smartttId: number | null;
-}
+/** SQL for attendance's copy of SMARTTT's departments (directory.service.ts). Every value is a bind parameter. */
 
 export interface LocalDepartment {
   id: string;
   name: string;
-  facultyId: string | null;
+  /** Unique across the university (case-insensitive); null for one made here before codes existed. */
+  code: string | null;
   smartttId: number | null;
 }
 
-export async function listFaculties(client?: PoolClient): Promise<LocalFaculty[]> {
-  const { rows } = await query<{ id: string; name: string; smarttt_faculty_id: number | null }>(
-    `SELECT id, name, smarttt_faculty_id FROM faculties ORDER BY name`,
-    [],
-    client,
-  );
-  return rows.map((r) => ({ id: r.id, name: r.name, smartttId: r.smarttt_faculty_id }));
-}
-
 export async function listDepartments(client?: PoolClient): Promise<LocalDepartment[]> {
-  const { rows } = await query<{ id: string; name: string; faculty_id: string | null; smarttt_department_id: number | null }>(
-    `SELECT id, name, faculty_id, smarttt_department_id FROM departments ORDER BY name`,
+  const { rows } = await query<{ id: string; name: string; code: string | null; smarttt_department_id: number | null }>(
+    `SELECT id, name, code, smarttt_department_id FROM departments ORDER BY name`,
     [],
     client,
   );
-  return rows.map((r) => ({ id: r.id, name: r.name, facultyId: r.faculty_id, smartttId: r.smarttt_department_id }));
+  return rows.map((r) => ({ id: r.id, name: r.name, code: r.code, smartttId: r.smarttt_department_id }));
 }
 
-export async function findFaculty(id: string): Promise<LocalFaculty | null> {
-  const row = await queryOne<{ id: string; name: string; smarttt_faculty_id: number | null }>(
-    `SELECT id, name, smarttt_faculty_id FROM faculties WHERE id = $1`,
-    [id],
-  );
-  return row ? { id: row.id, name: row.name, smartttId: row.smarttt_faculty_id } : null;
-}
-
-/** Links a local faculty to SMARTTT's and takes SMARTTT's name. */
-export async function linkFaculty(client: PoolClient, id: string, smartttId: number, name: string): Promise<void> {
-  await query(
-    `UPDATE faculties SET smarttt_faculty_id = $2, name = $3, updated_at = NOW() WHERE id = $1`,
-    [id, smartttId, name],
+/** The department holding this code, if any (case-insensitive). */
+export async function findByCode(code: string, client?: PoolClient): Promise<LocalDepartment | null> {
+  const row = await queryOne<{ id: string; name: string; code: string | null; smarttt_department_id: number | null }>(
+    `SELECT id, name, code, smarttt_department_id FROM departments WHERE upper(code) = upper($1)`,
+    [code],
     client,
   );
+  return row ? { id: row.id, name: row.name, code: row.code, smartttId: row.smarttt_department_id } : null;
 }
 
-export async function insertFaculty(client: PoolClient | undefined, name: string, smartttId: number | null): Promise<string> {
-  const { rows: [row] } = await query<{ id: string }>(
-    `INSERT INTO faculties (name, smarttt_faculty_id) VALUES ($1, $2) RETURNING id`,
-    [name, smartttId],
-    client,
-  );
-  return row!.id;
+/**
+ * The department this name means, if any: the same canonical name or a
+ * learned spelling (department_for_name, 036_department_spelling.sql), so
+ * "Department of Computer Science" finds "Computer Science".
+ */
+export async function findForName(name: string): Promise<{ id: string; name: string } | null> {
+  return queryOne<{ id: string; name: string }>(`SELECT d.id, d.name FROM departments d WHERE d.id = department_for_name($1)`, [name]);
 }
 
-/** Links a local department to SMARTTT's and takes SMARTTT's name and faculty. */
-export async function linkDepartment(
-  client: PoolClient,
-  id: string,
-  smartttId: number,
-  name: string,
-  facultyId: string | null,
-): Promise<void> {
+/** Links a local department to SMARTTT's and takes SMARTTT's name and code. */
+export async function linkDepartment(client: PoolClient, id: string, smartttId: number, name: string, code: string | null): Promise<void> {
   await query(
     `UPDATE departments
-        SET smarttt_department_id = $2, name = $3, faculty_id = COALESCE($4, faculty_id), updated_at = NOW()
+        SET smarttt_department_id = $2, name = $3, code = COALESCE($4, code), updated_at = NOW()
       WHERE id = $1`,
-    [id, smartttId, name, facultyId],
+    [id, smartttId, name, code],
     client,
   );
 }
@@ -81,13 +54,13 @@ export async function linkDepartment(
 export async function insertDepartment(
   client: PoolClient | undefined,
   name: string,
-  facultyId: string | null,
+  code: string | null,
   smartttId: number | null,
 ): Promise<string> {
-  if (!client) return transaction((tx) => insertDepartment(tx, name, facultyId, smartttId));
+  if (!client) return transaction((tx) => insertDepartment(tx, name, code, smartttId));
   const { rows: [row] } = await query<{ id: string }>(
-    `INSERT INTO departments (name, faculty_id, smarttt_department_id) VALUES ($1, $2, $3) RETURNING id`,
-    [name, facultyId, smartttId],
+    `INSERT INTO departments (name, code, smarttt_department_id) VALUES ($1, $2, $3) RETURNING id`,
+    [name, code, smartttId],
     client,
   );
   // Unassigned lecturers whose SMARTTT department name means this one are
@@ -102,42 +75,37 @@ export async function insertDepartment(
   return row!.id;
 }
 
-export async function setFacultySmartttId(id: string, smartttId: number): Promise<void> {
-  await query(`UPDATE faculties SET smarttt_faculty_id = $2, updated_at = NOW() WHERE id = $1`, [id, smartttId]);
-}
-
-export async function setDepartmentSmartttId(id: string, smartttId: number): Promise<void> {
-  await query(`UPDATE departments SET smarttt_department_id = $2, updated_at = NOW() WHERE id = $1`, [id, smartttId]);
+export async function setDepartmentSmartttId(id: string, smartttId: number, code: string | null): Promise<void> {
+  await query(
+    `UPDATE departments SET smarttt_department_id = $2, code = COALESCE($3, code), updated_at = NOW() WHERE id = $1`,
+    [id, smartttId, code],
+  );
 }
 
 export interface DepartmentForTimetabling {
   id: string;
   name: string;
-  facultyId: string | null;
-  facultyName: string | null;
+  code: string | null;
   smartttDepartmentId: number | null;
   /** Active lecturers placed in the department here. */
   lecturerCount: number;
 }
 
-/** Every department, for the Timetable Generator (src/modules/integration). */
+/** Every department, for the Timetable Generator and Allocator (src/modules/integration). */
 export async function listDepartmentsForTimetabling(): Promise<DepartmentForTimetabling[]> {
   const { rows } = await query<{
-    id: string; name: string; faculty_id: string | null; faculty_name: string | null;
-    smarttt_department_id: number | null; lecturer_count: number;
+    id: string; name: string; code: string | null; smarttt_department_id: number | null; lecturer_count: number;
   }>(
-    `SELECT d.id, d.name, d.faculty_id, f.name AS faculty_name, d.smarttt_department_id,
+    `SELECT d.id, d.name, d.code, d.smarttt_department_id,
             (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
               WHERE lp.department_id = d.id AND u.status = 'ACTIVE' AND u.deleted_at IS NULL)::int AS lecturer_count
        FROM departments d
-  LEFT JOIN faculties f ON f.id = d.faculty_id
       ORDER BY d.name`,
   );
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
-    facultyId: r.faculty_id,
-    facultyName: r.faculty_name,
+    code: r.code,
     smartttDepartmentId: r.smarttt_department_id,
     lecturerCount: r.lecturer_count,
   }));

@@ -43,7 +43,7 @@ export async function auditsCsv(filters: ListAuditsQuery): Promise<CsvExport> {
     ...rows.map((r) =>
       csvLine([
         r.title,
-        r.target_department_name ?? r.target_faculty_name ?? '',
+        r.target_department_name,
         r.checklist_template_name,
         r.lead_auditor_name,
         r.scheduled_date.toISOString().slice(0, 10),
@@ -84,7 +84,7 @@ export async function auditsPdf(filters: ListAuditsQuery, generatedBy: string): 
   for (const r of rows) {
     drawTableRow(doc, [
       { text: r.title, width: wTitle },
-      { text: r.target_department_name ?? r.target_faculty_name ?? '—', width: wTarget },
+      { text: r.target_department_name, width: wTarget },
       { text: r.status, width: wStatus },
       { text: r.scheduled_date.toISOString().slice(0, 10), width: wScheduled },
       { text: `${r.findings_count}/${r.total_items}`, width: wFindings },
@@ -129,7 +129,7 @@ export async function auditDetailPdf(auditId: string, generatedBy: string): Prom
     subtitle: audit.title,
     generatedBy,
     filtersApplied: {
-      Target: audit.target_department_name ?? audit.target_faculty_name ?? undefined,
+      Target: audit.target_department_name,
       'Lead Auditor': audit.lead_auditor_name,
       Status: audit.status,
       Scheduled: audit.scheduled_date.toISOString().slice(0, 10),

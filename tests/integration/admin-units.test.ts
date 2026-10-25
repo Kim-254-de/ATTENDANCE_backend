@@ -76,8 +76,7 @@ beforeAll(async () => {
 
   admin = await makeUser('ADMIN', 'Ada Admin');
   lecturer = await makeUser('LECTURER', 'Lee Lecturer');
-  const { rows: [f] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Science') RETURNING id`);
-  const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, faculty_id) VALUES ('Computing', $1) RETURNING id`, [f!.id]);
+  const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, code) VALUES ('Computing', 'COMP') RETURNING id`);
   await pool.query(
     `INSERT INTO lecturer_profiles (user_id, staff_number, department_id, erp_verified_at) VALUES ($1, 'STF/0042', $2, NOW())`,
     [lecturer.id, d!.id]);

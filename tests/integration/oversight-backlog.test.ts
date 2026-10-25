@@ -11,8 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * lecturers between departments by hand, the exam-eligibility rule and its
  * reports, and student course evaluations.
  *
- * Fixture: two faculties. Science has Computer Science and Mathematics; Arts
- * has History. One CS unit (CSC 101) has three students with 4, 3 and 1 of 4
+ * Fixture: three departments, Computer Science, Mathematics and History,
+ * each with its code. One CS unit (CSC 101) has three students with 4, 3 and 1 of 4
  * classes attended (100%, 75%, 25%), so against the default 75% rule with a
  * 10-point margin they are eligible, at risk and not eligible.
  */
@@ -27,7 +27,7 @@ interface Body<T = Record<string, unknown>> { data: T; error?: { code: string; m
 const body = <T = Record<string, unknown>>(res: request.Response) => res.body as Body<T>;
 const uniq = (() => { let n = 0; return () => ++n; })();
 
-type Role = 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'QA' | 'ADMIN';
+type Role = 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'QA' | 'ADMIN';
 
 async function makeUser(role: Role, fullName: string) {
   const n = uniq();
@@ -45,9 +45,8 @@ async function makeUser(role: Role, fullName: string) {
 
 const one = async <T>(sql: string, params: unknown[] = []) => (await pool.query(sql, params)).rows[0] as T;
 
-const makeFaculty = async (name: string) => (await one<{ id: string }>(`INSERT INTO faculties (name) VALUES ($1) RETURNING id`, [name])).id;
-const makeDepartment = async (name: string, facultyId: string) =>
-  (await one<{ id: string }>(`INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id`, [name, facultyId])).id;
+const makeDepartment = async (name: string, code: string | null = null) =>
+  (await one<{ id: string }>(`INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [name, code])).id;
 
 async function makeLecturer(fullName: string, departmentId: string | null, reportedDepartment: string | null = null) {
   const user = await makeUser('LECTURER', fullName);
@@ -61,12 +60,6 @@ async function makeLecturer(fullName: string, departmentId: string | null, repor
 async function makeDepartmentOfficer(departmentId: string) {
   const user = await makeUser('DEPARTMENT', 'Dept Officer');
   await pool.query(`INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)`, [user.id, departmentId]);
-  return user;
-}
-
-async function makeFacultyOfficer(facultyId: string) {
-  const user = await makeUser('FACULTY', 'Faculty Officer');
-  await pool.query(`INSERT INTO faculty_profiles (user_id, faculty_id) VALUES ($1, $2)`, [user.id, facultyId]);
   return user;
 }
 
@@ -117,10 +110,8 @@ const api = (auth: string) => ({
 type User = { id: string; auth: string };
 type Student = User & { reg: string; fullName: string };
 interface Fixture {
-  scienceId: string; artsId: string;
   csId: string; mathsId: string; historyId: string;
   csOfficer: User; mathsOfficer: User; historyOfficer: User;
-  scienceOfficer: User; artsOfficer: User;
   qa: User; admin: User;
   csLecturer: User; unassigned: User; historian: User;
   csUnit: string; mathsUnit: string;
@@ -129,11 +120,9 @@ interface Fixture {
 let fx: Fixture;
 
 async function seed(): Promise<Fixture> {
-  const scienceId = await makeFaculty('Science');
-  const artsId = await makeFaculty('Arts');
-  const csId = await makeDepartment('Computer Science', scienceId);
-  const mathsId = await makeDepartment('Mathematics', scienceId);
-  const historyId = await makeDepartment('History', artsId);
+  const csId = await makeDepartment('Computer Science', 'DCOMP');
+  const mathsId = await makeDepartment('Mathematics', 'DMATH');
+  const historyId = await makeDepartment('History', 'DHIST');
 
   const csLecturer = await makeLecturer('Dr. Coder', csId);
   const mathsLecturer = await makeLecturer('Dr. Number', mathsId);
@@ -162,12 +151,10 @@ async function seed(): Promise<Fixture> {
   }
 
   return {
-    scienceId, artsId, csId, mathsId, historyId,
+    csId, mathsId, historyId,
     csOfficer: await makeDepartmentOfficer(csId),
     mathsOfficer: await makeDepartmentOfficer(mathsId),
     historyOfficer: await makeDepartmentOfficer(historyId),
-    scienceOfficer: await makeFacultyOfficer(scienceId),
-    artsOfficer: await makeFacultyOfficer(artsId),
     qa: await makeQa(),
     admin: await makeUser('ADMIN', 'Admin'),
     csLecturer, unassigned, historian,
@@ -215,16 +202,15 @@ describe('units belong to a department', () => {
 describe('placing lecturers in departments', () => {
   type Placement = { userId: string; fullName: string; departmentId: string | null; reportedDepartment: string | null };
 
-  it('lists unassigned lecturers first, with the department name SMARTTT reported, to any faculty officer', async () => {
-    const res = await api(fx.scienceOfficer.auth).get('/faculties/lecturer-placement');
+  it('lists unassigned lecturers first, with the department name SMARTTT reported, to the administrator', async () => {
+    const res = await api(fx.admin.auth).get('/admin/lecturers');
     expect(res.status).toBe(200);
     const rows = body<Placement[]>(res).data;
     expect(rows[0]).toMatchObject({ fullName: 'Dr. Nowhere', departmentId: null, reportedDepartment: 'Comp. Sci.' });
-    // The faculty's own staff, never another faculty's.
-    expect(rows.map((r) => r.fullName)).toEqual(expect.arrayContaining(['Dr. Coder', 'Dr. Number']));
-    expect(rows.map((r) => r.fullName)).not.toContain('Dr. Past');
+    expect(rows.map((r) => r.fullName)).toEqual(expect.arrayContaining(['Dr. Coder', 'Dr. Number', 'Dr. Past']));
+    expect(rows[0]).not.toHaveProperty('facultyName');
 
-    const onlyUnassigned = body<Placement[]>(await api(fx.artsOfficer.auth).get('/faculties/lecturer-placement?unassigned=true')).data;
+    const onlyUnassigned = body<Placement[]>(await api(fx.admin.auth).get('/admin/lecturers?unassigned=true')).data;
     expect(onlyUnassigned.map((r) => r.fullName)).toEqual(['Dr. Nowhere']);
   });
 
@@ -233,13 +219,8 @@ describe('placing lecturers in departments', () => {
     expect(rows.map((r) => r.fullName)).not.toContain('Dr. Nowhere');
   });
 
-  it('a faculty officer cannot place a lecturer in another faculty\'s department', async () => {
-    const res = await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${fx.unassigned.id}/department`, { departmentId: fx.historyId });
-    expect(res.status).toBe(400);
-  });
-
-  it('a faculty officer places an unassigned lecturer, and it is audited', async () => {
-    const res = await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${fx.unassigned.id}/department`, { departmentId: fx.csId });
+  it('an administrator places an unassigned lecturer, and it is audited', async () => {
+    const res = await api(fx.admin.auth).patch(`/admin/lecturers/${fx.unassigned.id}/department`, { departmentId: fx.csId });
     expect(res.status).toBe(200);
     expect(body<Placement>(res).data.departmentId).toBe(fx.csId);
 
@@ -248,11 +229,11 @@ describe('placing lecturers in departments', () => {
 
     const audit = await one<{ user_id: string; metadata: { toDepartmentId: string; fromDepartmentId: string | null; by: string } }>(
       `SELECT user_id, metadata FROM audit_logs WHERE action = 'LECTURER_DEPARTMENT_CHANGED' ORDER BY created_at DESC LIMIT 1`);
-    expect(audit).toMatchObject({ user_id: fx.scienceOfficer.id, metadata: { toDepartmentId: fx.csId, fromDepartmentId: null, by: 'FACULTY' } });
+    expect(audit).toMatchObject({ user_id: fx.admin.id, metadata: { toDepartmentId: fx.csId, fromDepartmentId: null, by: 'ADMIN' } });
   });
 
-  it('moves a lecturer between the faculty\'s departments, leaving their units with the department that owns them', async () => {
-    const res = await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${fx.csLecturer.id}/department`, { departmentId: fx.mathsId });
+  it('moves a lecturer between departments, leaving their units with the department that owns them', async () => {
+    const res = await api(fx.admin.auth).patch(`/admin/lecturers/${fx.csLecturer.id}/department`, { departmentId: fx.mathsId });
     expect(res.status).toBe(200);
     const unit = await one<{ department_id: string }>(`SELECT department_id FROM units WHERE id = $1`, [fx.csUnit]);
     expect(unit.department_id).toBe(fx.csId);
@@ -261,38 +242,36 @@ describe('placing lecturers in departments', () => {
     const lecturers = body<Array<{ fullName: string; isOwnStaff: boolean }>>(await api(fx.csOfficer.auth).get('/departments/lecturers')).data;
     expect(lecturers.find((l) => l.fullName === 'Dr. Coder')).toMatchObject({ isOwnStaff: false });
     // Move them back for the rest of the suite.
-    await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${fx.csLecturer.id}/department`, { departmentId: fx.csId });
+    await api(fx.admin.auth).patch(`/admin/lecturers/${fx.csLecturer.id}/department`, { departmentId: fx.csId });
   });
 
-  it('404s on a lecturer in another faculty, instead of confirming they exist', async () => {
-    const res = await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${fx.historian.id}/department`, { departmentId: fx.csId });
-    expect(res.status).toBe(404);
+  it('lists every department with its code', async () => {
+    const departments = body<Array<{ departmentId: string; name: string; code: string | null }>>(await api(fx.admin.auth).get('/admin/departments')).data;
+    expect(departments.map((d) => [d.name, d.code])).toEqual([['Computer Science', 'DCOMP'], ['History', 'DHIST'], ['Mathematics', 'DMATH']]);
+    expect(departments[0]).not.toHaveProperty('facultyName');
   });
 
-  it('an administrator may move a lecturer across faculties', async () => {
-    const departments = body<Array<{ departmentId: string; facultyName: string }>>(await api(fx.admin.auth).get('/admin/departments')).data;
-    expect(departments).toHaveLength(3);
-
-    const list = body<Placement[]>(await api(fx.admin.auth).get('/admin/lecturers?q=past')).data;
-    expect(list.map((r) => r.fullName)).toEqual(['Dr. Past']);
-
-    const res = await api(fx.admin.auth).patch(`/admin/lecturers/${fx.historian.id}/department`, { departmentId: fx.mathsId });
-    expect(res.status).toBe(200);
-    expect(body<Placement>(res).data.departmentId).toBe(fx.mathsId);
-    await api(fx.admin.auth).patch(`/admin/lecturers/${fx.historian.id}/department`, { departmentId: fx.historyId });
-  });
-
-  it('refuses everyone but faculty officers and administrators', async () => {
-    expect((await api(fx.csOfficer.auth).get('/faculties/lecturer-placement')).status).toBe(403);
+  it('refuses everyone but administrators', async () => {
+    expect((await api(fx.csOfficer.auth).get('/admin/lecturers')).status).toBe(403);
     expect((await api(fx.qa.auth).patch(`/admin/lecturers/${fx.historian.id}/department`, { departmentId: fx.csId })).status).toBe(403);
+    expect((await api(fx.csOfficer.auth).post('/admin/departments', { name: 'Physics', code: 'DPHY' })).status).toBe(403);
   });
 
   it('a new department picks up unassigned lecturers whose SMARTTT department name matches', async () => {
     const lecturer = await makeLecturer('Dr. Early', null, 'Physics');
-    const res = await api(fx.scienceOfficer.auth).post('/faculties/departments', { name: 'physics' });
+    const res = await api(fx.admin.auth).post('/admin/departments', { name: 'physics', code: 'dphy' });
     expect(res.status).toBe(201);
+    expect(body<{ code: string }>(res).data.code).toBe('DPHY');
     const profile = await one<{ department_id: string }>(`SELECT department_id FROM lecturer_profiles WHERE user_id = $1`, [lecturer.id]);
     expect(profile.department_id).toBe(body<{ departmentId: string }>(res).data.departmentId);
+  });
+
+  it('refuses a department code that is already used, in any case', async () => {
+    const res = await api(fx.admin.auth).post('/admin/departments', { name: 'Applied Mathematics', code: 'dmath' });
+    expect(res.status).toBe(409);
+    expect(body(res).error?.message).toMatch(/DMATH is already used by Mathematics/);
+    expect((await api(fx.admin.auth).post('/admin/departments', { name: 'Chemistry', code: '<bad>' })).status).toBe(400);
+    expect((await api(fx.admin.auth).post('/admin/departments', { name: 'Chemistry' })).status).toBe(400);
   });
 });
 
@@ -312,7 +291,7 @@ describe('unifying department spellings', () => {
   });
 
   it('refuses a new department that is only another spelling of an existing one', async () => {
-    const res = await api(fx.scienceOfficer.auth).post('/faculties/departments', { name: 'Department of Mathematics' });
+    const res = await api(fx.admin.auth).post('/admin/departments', { name: 'Department of Mathematics', code: 'DMATH2' });
     expect(res.status).toBe(409);
     expect(body(res).error?.message).toMatch(/same department as "Mathematics"/);
   });
@@ -322,7 +301,7 @@ describe('unifying department spellings', () => {
     const second = await makeLecturer('Dr. Spelling Two', null, 'Computer Science and I.T.');
     expect(await departmentFor('Comp. Sci & IT')).toBeNull();
 
-    const res = await api(fx.scienceOfficer.auth).patch(`/faculties/lecturers/${first.id}/department`, { departmentId: fx.csId });
+    const res = await api(fx.admin.auth).patch(`/admin/lecturers/${first.id}/department`, { departmentId: fx.csId });
     expect(res.status).toBe(200);
     expect(body(res).data).toMatchObject({ departmentId: fx.csId, learnedSpelling: 'Comp. Sci & IT', alsoPlaced: 1 });
 
@@ -344,7 +323,7 @@ describe('unifying department spellings', () => {
 
   it('lists duplicate departments and merges one into the other, moving everything across', async () => {
     // Created before this rule existed, the way the real database already has one.
-    const duplicateId = await makeDepartment('Dept. of History', fx.artsId);
+    const duplicateId = await makeDepartment('Dept. of History');
     const lecturer = await makeLecturer('Dr. Duplicate', duplicateId);
     const unit = await makeUnit('HIS 900', lecturer.id);
     const officer = await makeDepartmentOfficer(duplicateId);
@@ -405,14 +384,6 @@ describe('exam eligibility', () => {
     expect(report.rows).toEqual([]);
   });
 
-  it('the faculty sees its departments, and may narrow to one of them but not another faculty\'s', async () => {
-    const report = body<Report>(await api(fx.scienceOfficer.auth).get('/faculties/eligibility')).data;
-    expect(report.summary.total).toBe(4);
-    expect((await api(fx.scienceOfficer.auth).get(`/faculties/eligibility?departmentId=${fx.mathsId}`)).status).toBe(200);
-    expect((await api(fx.scienceOfficer.auth).get(`/faculties/eligibility?departmentId=${fx.historyId}`)).status).toBe(404);
-    expect(body<Report>(await api(fx.artsOfficer.auth).get('/faculties/eligibility')).data.summary.total).toBe(0);
-  });
-
   it('only QA may change the rule; the change is audited and every report follows it', async () => {
     expect((await api(fx.csOfficer.auth).put('/quality-assurance/attendance-policy', { minAttendancePercent: 70 })).status).toBe(403);
     expect((await api(fx.qa.auth).put('/quality-assurance/attendance-policy', {})).status).toBe(400);
@@ -423,7 +394,7 @@ describe('exam eligibility', () => {
     expect(body(res).data).toMatchObject({ minAttendancePercent: 66.67, atRiskMarginPercent: 5, updatedByName: 'QA Officer' });
 
     // 75% is now comfortably above two-thirds + 5.
-    const report = body<Report>(await api(fx.qa.auth).get(`/quality-assurance/eligibility?facultyId=${fx.scienceId}`)).data;
+    const report = body<Report>(await api(fx.qa.auth).get(`/quality-assurance/eligibility?departmentId=${fx.csId}`)).data;
     expect(report.summary).toMatchObject({ eligible: 2, atRisk: 0, notEligible: 1 });
 
     const audit = await one<{ metadata: { to: { minAttendancePercent: number } } }>(
@@ -536,11 +507,9 @@ describe('student course evaluations', () => {
     expect(results.overall[0]).toMatchObject({ average: 4, distribution: [0, 0, 1, 0, 1] });
   });
 
-  it('another department sees nothing; the faculty and QA see it; a faculty cannot narrow to another faculty\'s department', async () => {
+  it('another department sees nothing; QA sees it, narrowed to a department', async () => {
     expect(body<Results>(await api(fx.mathsOfficer.auth).get(`/departments/evaluations/${round.id}`)).data.units).toEqual([]);
-    expect(body<Results>(await api(fx.scienceOfficer.auth).get(`/faculties/evaluations/${round.id}`)).data.totalResponses).toBe(2);
-    expect(body<Results>(await api(fx.artsOfficer.auth).get(`/faculties/evaluations/${round.id}`)).data.totalResponses).toBe(0);
-    expect((await api(fx.scienceOfficer.auth).get(`/faculties/evaluations/${round.id}?departmentId=${fx.historyId}`)).status).toBe(404);
+    expect(body<Results>(await api(fx.qa.auth).get(`/quality-assurance/evaluations/${round.id}/results?departmentId=${fx.historyId}`)).data.totalResponses).toBe(0);
     expect(body<Results>(await api(fx.qa.auth).get(`/quality-assurance/evaluations/${round.id}/results?departmentId=${fx.csId}`)).data.totalResponses).toBe(2);
   });
 

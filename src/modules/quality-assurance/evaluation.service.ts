@@ -6,8 +6,8 @@ import type { CreateRoundInput, SubmitEvaluationInput, UpdateRoundInput } from '
 /**
  * Student course evaluations: the QA directorate's other core activity next
  * to audits. QA opens a round (questions plus a window); students rate each
- * unit they are on, once; QA sees every result, a faculty officer its
- * faculty's, a department officer its department's.
+ * unit they are on, once; QA sees every result, a department officer its
+ * department's.
  *
  * Two anonymity rules hold everywhere here:
  * - A unit's results (ratings and comments) are hidden until it has the
@@ -294,7 +294,7 @@ function combine(rows: evaluationRepository.RatingResultRow[]): QuestionResultDt
 
 /**
  * Results of one round within a scope. The callers resolve the scope from
- * the signed-in officer (department, faculty) or the QA officer's filters.
+ * the signed-in department officer or the QA officer's filters.
  * A round that has not opened has nothing to show and is reported as not found
  * to officers outside QA, so they cannot see QA's drafts.
  */

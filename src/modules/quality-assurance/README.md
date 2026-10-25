@@ -1,7 +1,7 @@
 # quality-assurance module
 
 Internal Quality Assurance (IQA): a standards catalog, checklist-driven
-internal audits of a department or faculty, findings against each checklist
+internal audits of a department, findings against each checklist
 item, corrective action plans (CAPA) tracked to verified closure, and a KPI
 dashboard that rolls findings up by standard/category and pulls in the
 attendance-rate figures the rest of this system already captures. Every
@@ -13,10 +13,10 @@ PDF; see "Not built" below.
 
 ## Scoping
 
-Unlike `department`/`faculty`, this module is **not auto-scoped to the
-caller**: a QA officer's remit is the whole institution (`qa_profiles` has no
-department/faculty FK), so every list endpoint takes explicit
-`targetDepartmentId`/`targetFacultyId`/date-range filters instead of
+Unlike `department`, this module is **not auto-scoped to the caller**: a QA
+officer's remit is the whole institution (`qa_profiles` has no department
+FK), so every list endpoint takes explicit `targetDepartmentId`/date-range
+filters instead of
 resolving one from the signed-in officer's own row.
 
 ## Sub-resources
@@ -27,8 +27,8 @@ resolving one from the signed-in officer's own row.
   each item mapped to one standard. An item cannot be removed once any audit
   has recorded a finding against it (409).
 - **Audits + findings** (`audit.*`) — one audit targets exactly one
-  department *or* one faculty (`CHECK (num_nonnulls(...) = 1)` on
-  `qa_audits`), against one checklist template. Status is forward-only
+  department (`qa_audits.target_department_id`, required; faculties play no
+  part since `039_no_faculties.sql`), against one checklist template. Status is forward-only
   (`PLANNED → IN_PROGRESS → COMPLETED`, `canTransitionAuditStatus` in
   `audit.service.ts`); `COMPLETED` is refused until every checklist item has
   a finding. Recording a finding (`PUT .../findings/:checklistItemId`) is a
@@ -80,16 +80,15 @@ with what that department's own officer sees.
 | `GET`/`POST` | `/api/v1/quality-assurance/corrective-actions[/:id]` | CAPA |
 | `PATCH` | `/api/v1/quality-assurance/corrective-actions/:id` | Update fields / status transition |
 | `GET` | `/api/v1/quality-assurance/corrective-actions/export.{csv,pdf}` | CAPA register |
-| `GET` | `/api/v1/quality-assurance/dashboard` | `?targetDepartmentId=&targetFacultyId=&from=&to=&groupBy=week\|month` |
+| `GET` | `/api/v1/quality-assurance/dashboard` | `?targetDepartmentId=&from=&to=&groupBy=week\|month` |
 | `GET` | `/api/v1/quality-assurance/dashboard/export.{csv,pdf}` | Dashboard report |
 | `GET` | `/api/v1/quality-assurance/departments` | `{id, name}[]` — every department, for the audit-target picker |
-| `GET` | `/api/v1/quality-assurance/faculties` | `{id, name}[]` — every faculty, for the audit-target picker |
 | `GET`/`PUT` | `/api/v1/quality-assurance/attendance-policy` | The minimum attendance to sit exams, and the at-risk margin; PUT is audited |
-| `GET` | `/api/v1/quality-assurance/eligibility` | `?departmentId=&facultyId=&all=true` — exam eligibility, institution-wide unless narrowed |
+| `GET` | `/api/v1/quality-assurance/eligibility` | `?departmentId=&all=true` — exam eligibility, institution-wide unless narrowed |
 | `GET`/`POST` | `/api/v1/quality-assurance/evaluations` | Student course evaluation rounds |
 | `GET`/`PATCH`/`DELETE` | `/api/v1/quality-assurance/evaluations/:id` | One round; questions fixed (409) and DELETE refused (409) once anyone has answered |
 | `POST` | `/api/v1/quality-assurance/evaluations/:id/close` | Ends the round now |
-| `GET` | `/api/v1/quality-assurance/evaluations/:id/results` | `?departmentId=&facultyId=` |
+| `GET` | `/api/v1/quality-assurance/evaluations/:id/results` | `?departmentId=` |
 
 Every route requires `requireAuth('QA')`.
 
@@ -105,9 +104,9 @@ each change is audited as `ATTENDANCE_POLICY_UPDATED` with before and after.
 Each active (student, unit) pair is judged separately against the classes
 held so far: below the minimum is `NOT_ELIGIBLE`, below minimum + margin is
 `AT_RISK`, anything higher is `ELIGIBLE`, and a unit with no classes yet is
-`NOT_YET_MEASURED`. The comparison uses the unrounded ratio. Department and
-faculty officers get the same report for their own scope
-(`/departments/eligibility`, `/faculties/eligibility`). The code is in
+`NOT_YET_MEASURED`. The comparison uses the unrounded ratio. Department
+officers get the same report for their own department
+(`/departments/eligibility`). The code is in
 `src/modules/eligibility`.
 
 ## Course evaluations
@@ -116,9 +115,9 @@ QA opens a **round**: a title, a window (`opensAt`–`closesAt`), a minimum
 number of responses, and questions that are either a 1–5 `RATING` or a free
 `TEXT` comment. While a round is open, each student evaluates each unit they
 are actively on, once (`GET`/`POST /students/me/evaluations...`). QA sees
-every result. A faculty officer sees their faculty's results and a department
-officer their department's, matched on the department that owned the unit
-when the student answered (`/faculties/evaluations`, `/departments/evaluations`).
+every result. A department officer sees their department's, matched on the
+department that owned the unit when the student answered
+(`/departments/evaluations`).
 Officers cannot see rounds that have not opened yet.
 
 Anonymity is built into the schema (`db/migrations/035_qa_course_evaluations.sql`):
@@ -144,6 +143,6 @@ committee meeting minutes: those are a later phase, deliberately left off
 this one.
 
 No self-registration for the QA role, the same reasoning as
-`department`/`faculty`: there is no ERP record to verify an officer against.
+`department`: there is no ERP record to verify an officer against.
 For local work: `npm run dev:seed-qa` (also seeds a default standards catalog
 and one default checklist template).

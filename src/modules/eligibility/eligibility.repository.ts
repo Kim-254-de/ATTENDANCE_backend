@@ -66,10 +66,9 @@ export interface StandingRow {
  * `held` and `attended` have exactly the meaning `department.repository.ts
  * listStudents` gives them, so a student's rate here matches what the
  * department's student list shows. Scope is the unit's owning department:
- * `departmentId`, or every department of `facultyId`, or (neither) the whole
- * institution — QA's view.
+ * `departmentId`, or (none given) the whole institution — QA's view.
  */
-export async function listStanding(scope: { departmentId?: string; facultyId?: string }): Promise<StandingRow[]> {
+export async function listStanding(scope: { departmentId?: string }): Promise<StandingRow[]> {
   const { rows } = await query<StandingRow>(
     `SELECT a.id AS allocation_id, a.student_user_id, a.registration_number,
             COALESCE(a.full_name, su.full_name) AS full_name,
@@ -90,11 +89,10 @@ export async function listStanding(scope: { departmentId?: string; facultyId?: s
   LEFT JOIN attendance_records r   ON r.session_id = se.id AND r.student_user_id = a.student_user_id
       WHERE a.status = 'ACTIVE'
         AND ($1::uuid IS NULL OR u.department_id = $1)
-        AND ($2::uuid IS NULL OR d.faculty_id = $2)
       GROUP BY a.id, a.student_user_id, a.registration_number, a.full_name, su.full_name,
                u.id, u.code, u.name, lu.full_name, d.id, d.name
       ORDER BY full_name NULLS LAST, u.code`,
-    [scope.departmentId ?? null, scope.facultyId ?? null],
+    [scope.departmentId ?? null],
   );
   return rows;
 }

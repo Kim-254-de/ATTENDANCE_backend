@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
-import type { AdminInvitationInput, AliasIdParam, CreateFacultyInput, DepartmentIdParam, LecturerListQuery, LecturerUserIdParam, MergeDepartmentInput, MoveLecturerInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
+import type { AdminInvitationInput, AliasIdParam, CreateDepartmentInput, DepartmentIdParam, LecturerListQuery, LecturerUserIdParam, MergeDepartmentInput, MoveLecturerInput, OfficerUserIdParam, UnitIdParam } from './admin.schema.js';
 import * as adminService from './admin.service.js';
 
 /** HTTP in and out only. */
@@ -15,15 +15,9 @@ function actor(req: Request): adminService.Actor {
 
 const context = (req: Request) => ({ ...clientFingerprint(req), requestId: req.requestId });
 
-/** GET /api/v1/admin/faculties */
-export async function faculties(_req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await adminService.listFaculties());
-}
-
-/** POST /api/v1/admin/faculties */
-export async function createFaculty(req: Request, res: Response): Promise<void> {
-  const { name } = req.body as CreateFacultyInput;
-  sendCreated(res, await adminService.createFaculty(name, actor(req), context(req)));
+/** POST /api/v1/admin/departments */
+export async function createDepartment(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await adminService.createDepartment(req.body as CreateDepartmentInput, actor(req), context(req)));
 }
 
 /** GET /api/v1/admin/officers */

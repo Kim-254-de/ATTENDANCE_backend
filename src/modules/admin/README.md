@@ -19,18 +19,20 @@ now there is one administrator, one account and one console:
   `integrations/admin/` endpoints with the shared key and the administrator's
   SMARTTT id (`X-Acting-Account`); SMARTTT re-checks on every call that they
   are still an administrator and keeps its own permission checks and records.
-- **Faculties and departments** belong to SMARTTT (`src/modules/directory`):
-  created there first, read back into attendance's linked copy.
+- **Departments** belong to SMARTTT (`src/modules/directory`): an
+  administrator creates one here with a name and a code (unique across the
+  university), it is created in SMARTTT first and read back into
+  attendance's linked copy, and the Timetable Allocator and Generator import
+  it from here. Faculties play no part (`039_no_faculties.sql`).
 
 With SMARTTT accounts off (`SMARTTT_ACCOUNTS=false` or no `SMARTTT_BASE_URL`,
 development), administrators are invited here as before:
 
 ```
-administrator  ──invites──▶  administrators, faculty officers   (this module)
-faculty officer ──invites──▶ department officers                (faculty module)
+administrator  ──invites──▶  administrators, management, department and QA officers   (this module)
 ```
 
-Faculty and department officers are not in SMARTTT, so they are always
+Management, department and QA officers are not in SMARTTT, so they are always
 invited here. An invitation creates the account at once, scoped and
 `PENDING_VERIFICATION` with no usable password, and emails a single-use link
 (`OFFICER_INVITE_TTL_HOURS`, default 72); the invitee chooses their own
@@ -47,28 +49,27 @@ logs `bootstrap admin:` and does nothing once an administrator is ACTIVE).
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/admin/faculties` | Every faculty with department and officer counts |
-| `POST` | `/api/v1/admin/faculties` | Creates a faculty (in SMARTTT first); 409 when the name is taken |
-| `GET` | `/api/v1/admin/officers` | Every administrator, faculty officer and department officer, with invitation status |
-| `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }` or `{ role: 'faculty', facultyId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
+| `GET` | `/api/v1/admin/officers` | Every administrator, management, department and QA officer, with invitation status |
+| `POST` | `/api/v1/admin/invitations` | `{ role: 'admin' }`, `{ role: 'qa' }`, `{ role: 'management' }` or `{ role: 'department', departmentId }`, plus `fullName`, `email`; returns `{ userId, emailSent }` |
 | `POST` | `/api/v1/admin/officers/:userId/resend` | Re-sends a pending invitation; the old link stops working |
 | `POST` | `/api/v1/admin/officers/:userId/deactivate` | Removes access: DEACTIVATED, signed out, invitation withdrawn. Not oneself |
 | `GET` | `/api/v1/admin/units/pending` | Units still `PENDING_VERIFICATION` (the timetable doesn't list their lecturer), oldest first, with lecturer and weekly slots |
 | `POST` | `/api/v1/admin/units/:unitId/verify` | Confirms the lecturer-unit assignment: `VERIFIED`, audited as `UNIT_VERIFIED`. 404 unknown, 409 already verified |
 
-| `GET` | `/api/v1/admin/departments` | Every department with its faculty and staff count, for placing a lecturer |
+| `GET` | `/api/v1/admin/departments` | Every department with its code, staff count and whether it is in SMARTTT |
+| `POST` | `/api/v1/admin/departments` | `{ name, code }` — creates a department (in SMARTTT first); 409 when the name or code is taken |
 | `GET` | `/api/v1/admin/lecturers` | `?q=&unassigned=true` — lecturers, unassigned ones first, with the department SMARTTT reported |
-| `PATCH` | `/api/v1/admin/lecturers/:lecturerUserId/department` | `{ departmentId }` — places or moves a lecturer in any department, across faculties too; audited |
+| `PATCH` | `/api/v1/admin/lecturers/:lecturerUserId/department` | `{ departmentId }` — places or moves a lecturer in any department |
 | `GET` | `/api/v1/admin/department-duplicates` | Groups of departments whose names mean the same thing, busiest first |
 | `POST` | `/api/v1/admin/departments/:departmentId/merge` | `{ intoDepartmentId }` — folds the duplicate into the one kept; audited, cannot be undone |
 | `GET` | `/api/v1/admin/department-aliases` | Spellings learned from placements and merges |
 | `DELETE` | `/api/v1/admin/department-aliases/:aliasId` | Removes a wrongly learned spelling; audited |
-| `GET` | `/api/v1/admin/directory` | `{ smartttConnected, onlyHere: { faculties, departments } }`: faculties and departments not yet in SMARTTT |
-| `POST` | `/api/v1/admin/directory/sync` | Reads SMARTTT's faculties and departments now, then sends the ones only here to SMARTTT (`{ fromSmarttt, toSmarttt }`, with what was skipped and why). 503 when SMARTTT can't be reached |
+| `GET` | `/api/v1/admin/directory` | `{ smartttConnected, onlyHere: { departments } }`: departments not yet in SMARTTT |
+| `POST` | `/api/v1/admin/directory/sync` | Reads SMARTTT's departments now, then sends the ones only here to SMARTTT (`{ fromSmarttt, toSmarttt }`) |
 
-`GET /admin/faculties` reads SMARTTT's faculties into the copy first (at most
-every `SMARTTT_DIRECTORY_SYNC_SECONDS`) and marks each `inSmarttt`;
-`POST /admin/faculties` creates the faculty in SMARTTT, then here.
+`GET /admin/departments` reads SMARTTT's departments into the copy first
+(at most every `SMARTTT_DIRECTORY_SYNC_SECONDS`), and `POST /admin/departments`
+creates the department in SMARTTT, then here.
 
 ### SMARTTT's admin functions (`/api/v1/admin/smarttt/...`)
 
@@ -105,10 +106,8 @@ Public counterparts: `POST /auth/invitations/lookup` and
 ## Placing lecturers
 
 A lecturer whose SMARTTT department name matches no department signs in
-unassigned and counts toward no department. A faculty officer can place them
-in one of its own departments. An administrator can place or move anyone,
-including across faculties, which no faculty officer can do. The rules are in
-`src/modules/faculty/README.md` ("Placing lecturers"), and the shared code is
+unassigned and counts toward no department. An administrator places them, or
+moves anyone, from the Lecturers page. The code is
 `src/modules/lecturer/lecturer.placement.ts`.
 
 ## One department, one spelling

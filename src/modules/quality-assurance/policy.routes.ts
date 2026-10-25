@@ -44,13 +44,13 @@ policyRouter.put(
   }),
 );
 
-/** `?departmentId=&facultyId=&all=true` — institution-wide unless narrowed. */
+/** `?departmentId=&all=true` — institution-wide unless narrowed. */
 policyRouter.get(
   '/eligibility',
   asyncHandler(requireAuth('QA')),
   validate({ query: qaEligibilityQuerySchema }),
   asyncHandler(async (req: Request, res: Response) => {
-    const { all, departmentId, facultyId } = req.query as unknown as QaEligibilityQuery;
-    sendSuccess(res, await eligibilityService.buildReport({ departmentId, facultyId }, { includeAll: all }));
+    const { all, departmentId } = req.query as unknown as QaEligibilityQuery;
+    sendSuccess(res, await eligibilityService.buildReport({ departmentId }, { includeAll: all }));
   }),
 );

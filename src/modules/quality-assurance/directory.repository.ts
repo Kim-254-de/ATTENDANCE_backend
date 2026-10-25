@@ -11,8 +11,3 @@ export async function listDepartments(): Promise<DirectoryRow[]> {
   const { rows } = await query<DirectoryRow>(`SELECT id, name FROM departments ORDER BY name`);
   return rows;
 }
-
-export async function listFaculties(): Promise<DirectoryRow[]> {
-  const { rows } = await query<DirectoryRow>(`SELECT id, name FROM faculties ORDER BY name`);
-  return rows;
-}

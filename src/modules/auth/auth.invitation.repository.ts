@@ -3,17 +3,17 @@ import { query, queryOne, transaction } from '../../db/database.js';
 import type { AccountStatus } from '../../db/types.js';
 
 /**
- * SQL for invited accounts (auth.invitation.ts): administrators, faculty
- * officers, department officers and QA officers. Every value goes through a bind parameter.
+ * SQL for invited accounts (auth.invitation.ts): administrators, management,
+ * department officers and QA officers. Every value goes through a bind parameter.
  */
 
-export type InvitedRole = 'ADMIN' | 'FACULTY' | 'DEPARTMENT' | 'QA';
+export type InvitedRole = 'ADMIN' | 'MANAGEMENT' | 'DEPARTMENT' | 'QA';
 
-/** What an invitation is for: the role, and the faculty or department it is scoped to (QA is institution-wide). */
+/** What an invitation is for: the role, and for a department officer the department (the others are university-wide). */
 export type InvitationScope =
   | { role: 'ADMIN' }
   | { role: 'QA' }
-  | { role: 'FACULTY'; facultyId: string }
+  | { role: 'MANAGEMENT' }
   | { role: 'DEPARTMENT'; departmentId: string };
 
 export interface ExistingAccount {
@@ -52,7 +52,7 @@ export async function withdrawInvitations(userId: string): Promise<void> {
 
 /**
  * Creates the invited account: PENDING_VERIFICATION, with a password hash
- * nothing can match, plus its faculty or department profile.
+ * nothing can match, plus its department or QA profile.
  */
 export async function createInvitedAccount(
   client: PoolClient,
@@ -89,14 +89,7 @@ export async function reopenInvitedAccount(
 }
 
 async function setScope(client: PoolClient, userId: string, scope: InvitationScope): Promise<void> {
-  if (scope.role === 'FACULTY') {
-    await query(
-      `INSERT INTO faculty_profiles (user_id, faculty_id) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET faculty_id = EXCLUDED.faculty_id, updated_at = NOW()`,
-      [userId, scope.facultyId],
-      client,
-    );
-  } else if (scope.role === 'DEPARTMENT') {
+  if (scope.role === 'DEPARTMENT') {
     await query(
       `INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)
        ON CONFLICT (user_id) DO UPDATE SET department_id = EXCLUDED.department_id, updated_at = NOW()`,
@@ -137,7 +130,7 @@ export interface StoredInvitation {
   status: AccountStatus;
   email: string;
   fullName: string;
-  /** The faculty's or department's name; null for an administrator. */
+  /** The department's name; null for the university-wide roles. */
   scopeName: string | null;
 }
 
@@ -149,14 +142,12 @@ export async function findInvitation(tokenHash: string): Promise<StoredInvitatio
   }>(
     `SELECT i.id, i.user_id, i.expires_at, i.consumed_at, i.invalidated_at,
             u.role, u.status, u.email, u.full_name, u.deleted_at,
-            COALESCE(f.name, d.name) AS scope_name
+            d.name AS scope_name
        FROM account_invitations i
        JOIN users u ON u.id = i.user_id
-  LEFT JOIN faculty_profiles    fp ON fp.user_id = u.id
-  LEFT JOIN faculties           f  ON f.id = fp.faculty_id
   LEFT JOIN department_profiles dp ON dp.user_id = u.id
   LEFT JOIN departments         d  ON d.id = dp.department_id
-      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'FACULTY', 'DEPARTMENT', 'QA')`,
+      WHERE i.token_hash = $1 AND u.role IN ('ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA')`,
     [tokenHash],
   );
   if (!row || row.deleted_at) return null;
@@ -206,8 +197,6 @@ export interface OfficerRow {
   fullName: string;
   email: string;
   status: AccountStatus;
-  facultyId: string | null;
-  facultyName: string | null;
   departmentId: string | null;
   departmentName: string | null;
   /** When the most recent invitation was sent. */
@@ -217,37 +206,29 @@ export interface OfficerRow {
   lastLoginAt: Date | null;
 }
 
-/**
- * Administrators, faculty, department and QA officers. A department
- * officer's faculty is their department's, so filtering by `facultyId` finds
- * the faculty's own officers and the officers of its departments.
- */
-export async function listOfficers(filter: { roles: InvitedRole[]; facultyId?: string; userId?: string }): Promise<OfficerRow[]> {
+/** Administrators, management, department and QA officers. */
+export async function listOfficers(filter: { roles: InvitedRole[]; userId?: string }): Promise<OfficerRow[]> {
   const { rows } = await query<{
     id: string; role: InvitedRole; full_name: string; email: string; status: AccountStatus;
-    faculty_id: string | null; faculty_name: string | null; department_id: string | null; department_name: string | null;
+    department_id: string | null; department_name: string | null;
     invited_at: Date | null; invitation_expires_at: Date | null; last_login_at: Date | null;
   }>(
     `SELECT u.id, u.role, u.full_name, u.email, u.status, u.last_login_at,
-            COALESCE(fp.faculty_id, d.faculty_id) AS faculty_id, f.name AS faculty_name,
             d.id AS department_id, d.name AS department_name,
             inv.created_at AS invited_at,
             CASE WHEN inv.consumed_at IS NULL AND inv.invalidated_at IS NULL THEN inv.expires_at END AS invitation_expires_at
        FROM users u
-  LEFT JOIN faculty_profiles    fp ON fp.user_id = u.id
   LEFT JOIN department_profiles dp ON dp.user_id = u.id
   LEFT JOIN departments         d  ON d.id = dp.department_id
-  LEFT JOIN faculties           f  ON f.id = COALESCE(fp.faculty_id, d.faculty_id)
   LEFT JOIN LATERAL (
          SELECT created_at, expires_at, consumed_at, invalidated_at FROM account_invitations
           WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1
        ) inv ON TRUE
       WHERE u.deleted_at IS NULL
         AND u.role = ANY($1::text[])
-        AND ($2::uuid IS NULL OR COALESCE(fp.faculty_id, d.faculty_id) = $2)
-        AND ($3::uuid IS NULL OR u.id = $3)
-      ORDER BY u.status = 'DEACTIVATED', f.name NULLS FIRST, d.name NULLS FIRST, u.full_name`,
-    [filter.roles, filter.facultyId ?? null, filter.userId ?? null],
+        AND ($2::uuid IS NULL OR u.id = $2)
+      ORDER BY u.status = 'DEACTIVATED', d.name NULLS FIRST, u.full_name`,
+    [filter.roles, filter.userId ?? null],
   );
   return rows.map((r) => ({
     userId: r.id,
@@ -255,8 +236,6 @@ export async function listOfficers(filter: { roles: InvitedRole[]; facultyId?: s
     fullName: r.full_name,
     email: r.email,
     status: r.status,
-    facultyId: r.faculty_id,
-    facultyName: r.faculty_name,
     departmentId: r.department_id,
     departmentName: r.department_name,
     invitedAt: r.invited_at,

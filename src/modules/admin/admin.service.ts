@@ -10,9 +10,9 @@ import * as placement from '../lecturer/lecturer.placement.js';
 
 /**
  * The administrator's console: the top of the invitation chain
- * (auth.invitation.ts). An administrator creates faculties, invites
- * administrators and faculty officers, and can remove anyone's officer access.
- * Department officers are invited by their faculty officer, not here.
+ * (auth.invitation.ts). An administrator creates departments, invites
+ * administrators, management, department and QA officers, and can remove
+ * anyone's officer access.
  */
 
 export interface Actor {
@@ -20,34 +20,35 @@ export interface Actor {
   fullName: string;
 }
 
-/** GET /admin/faculties — SMARTTT's faculties (read into the copy here first), plus any only here. */
-export async function listFaculties(): Promise<adminRepository.FacultyRow[]> {
-  await directoryService.syncFromSmarttt();
-  return adminRepository.listFaculties();
-}
-
-/** POST /admin/faculties — created in SMARTTT, which owns faculties, then linked here. */
-export async function createFaculty(name: string, actor: Actor, context: RegistrationContext): Promise<{ facultyId: string; name: string }> {
-  const faculty = await directoryService.createFaculty(name);
+/**
+ * POST /admin/departments — created in SMARTTT, which owns departments, then
+ * linked here; the Allocator and Generator read it from here.
+ */
+export async function createDepartment(
+  input: { name: string; code: string },
+  actor: Actor,
+  context: RegistrationContext,
+): Promise<{ departmentId: string; name: string; code: string }> {
+  const department = await directoryService.createDepartment(input.name, input.code);
   await auditService.record({
-    action: 'FACULTY_CREATED',
+    action: 'DEPARTMENT_CREATED',
     outcome: 'SUCCESS',
     userId: actor.userId,
     requestId: context.requestId,
     ipAddress: context.ipAddress,
     userAgent: context.userAgent,
-    metadata: { facultyId: faculty.id, name: faculty.name },
+    metadata: { departmentId: department.id, name: department.name, code: department.code },
   });
-  return { facultyId: faculty.id, name: faculty.name };
+  return { departmentId: department.id, name: department.name, code: department.code };
 }
 
 /** GET /admin/directory — whether SMARTTT is connected, and what only exists here. */
-export async function directoryStatus(): Promise<{ smartttConnected: boolean; onlyHere: { faculties: number; departments: number } }> {
+export async function directoryStatus(): Promise<{ smartttConnected: boolean; onlyHere: { departments: number } }> {
   return { smartttConnected: directoryService.smartttDirectoryEnabled(), onlyHere: await directoryService.unlinkedCounts() };
 }
 
 /**
- * POST /admin/directory/sync — reads SMARTTT's faculties and departments now,
+ * POST /admin/directory/sync — reads SMARTTT's departments now,
  * then sends the ones that only exist here to SMARTTT.
  */
 export async function syncDirectory(actor: Actor, context: RegistrationContext): Promise<{
@@ -68,10 +69,10 @@ export async function syncDirectory(actor: Actor, context: RegistrationContext):
   return { fromSmarttt, toSmarttt };
 }
 
-/** Every role an administrator manages; QA officers sit outside faculties, so only the admin console lists them. */
-const OFFICER_ROLES: InvitedRole[] = ['ADMIN', 'FACULTY', 'DEPARTMENT', 'QA'];
+/** Every role an administrator manages. */
+const OFFICER_ROLES: InvitedRole[] = ['ADMIN', 'MANAGEMENT', 'DEPARTMENT', 'QA'];
 
-/** GET /admin/officers — every administrator, faculty, department and QA officer. */
+/** GET /admin/officers — every administrator, management, department and QA officer. */
 export async function listAllOfficers(): Promise<invitationService.OfficerDto[]> {
   return (await listOfficers({ roles: OFFICER_ROLES })).map(invitationService.officerDto);
 }
@@ -83,14 +84,14 @@ export async function invite(
   context: RegistrationContext,
 ): Promise<invitationService.InvitationResult> {
   const inviter = { userId: actor.userId, fullName: actor.fullName };
-  if (input.role === 'admin' || input.role === 'qa') {
-    const scope = input.role === 'admin' ? { role: 'ADMIN' as const } : { role: 'QA' as const };
+  if (input.role !== 'department') {
+    const scope = { role: input.role.toUpperCase() as 'ADMIN' | 'QA' | 'MANAGEMENT' };
     return invitationService.invite({ email: input.email, fullName: input.fullName, scope, scopeName: null }, inviter, context);
   }
-  const facultyName = await adminRepository.findFacultyName(input.facultyId);
-  if (!facultyName) throw AppError.badRequest('That faculty does not exist.');
+  const departmentName = await adminRepository.findDepartmentName(input.departmentId);
+  if (!departmentName) throw AppError.badRequest('That department does not exist.');
   return invitationService.invite(
-    { email: input.email, fullName: input.fullName, scope: { role: 'FACULTY', facultyId: input.facultyId }, scopeName: facultyName },
+    { email: input.email, fullName: input.fullName, scope: { role: 'DEPARTMENT', departmentId: input.departmentId }, scopeName: departmentName },
     inviter,
     context,
   );
@@ -140,8 +141,9 @@ export async function verifyUnit(unitId: string, actor: Actor, context: Registra
   return { unitId, code: result.code, status: 'VERIFIED' };
 }
 
-/** GET /admin/departments */
+/** GET /admin/departments — SMARTTT's departments (read into the copy here first), plus any only here. */
 export async function listDepartments(): Promise<adminRepository.DepartmentRow[]> {
+  await directoryService.syncFromSmarttt();
   return adminRepository.listDepartments();
 }
 
@@ -157,7 +159,7 @@ export async function listLecturers(options: { search?: string; unassignedOnly?:
   });
 }
 
-/** PATCH /admin/lecturers/:lecturerUserId/department — any lecturer, any department, across faculties too. */
+/** PATCH /admin/lecturers/:lecturerUserId/department — any lecturer, any department. */
 export async function moveLecturer(
   lecturerUserId: string,
   departmentId: string,

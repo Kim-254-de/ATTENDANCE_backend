@@ -46,8 +46,7 @@ export interface CapaDto {
   rating: string;
   standardCode: string;
   standardTitle: string;
-  targetDepartmentId: string | null;
-  targetFacultyId: string | null;
+  targetDepartmentId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,7 +71,6 @@ const toDto = (row: capaRepository.CapaRow): CapaDto => ({
   standardCode: row.standard_code,
   standardTitle: row.standard_title,
   targetDepartmentId: row.target_department_id,
-  targetFacultyId: row.target_faculty_id,
   createdAt: row.created_at.toISOString(),
   updatedAt: row.updated_at.toISOString(),
 });

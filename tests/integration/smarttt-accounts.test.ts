@@ -94,7 +94,7 @@ function smartttLecturer(over: Partial<SmartttUser> = {}): SmartttUser {
     fullName: `Dr. Lecturer ${n}`, password: PASSWORD,
     staff: {
       staff_number: staffNumber, full_name: `Dr. Lecturer ${n}`, email: `lecturer${n}@uni.ac.ke`,
-      department: 'Computer Science', faculty: 'Science', title: 'Dr.', has_account: true, is_active: true,
+      department: 'Computer Science', title: 'Dr.', has_account: true, is_active: true,
     },
     ...over,
   };

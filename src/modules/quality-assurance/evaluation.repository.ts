@@ -287,23 +287,19 @@ export async function submit(
 
 /**
  * Which responses a reader may see: one department (department officer),
- * every department of a faculty (faculty officer), or everything, optionally
- * narrowed (QA). Matched on the department that owned the unit when the
+ * or everything, optionally narrowed to a department (QA). Matched on the department that owned the unit when the
  * student answered.
  */
 export interface ResultScope {
   departmentId?: string;
-  facultyId?: string;
 }
 
 const SCOPE_FILTER = `
-  AND ($2::uuid IS NULL OR r.department_id = $2)
-  AND ($3::uuid IS NULL OR r.department_id IN (SELECT id FROM departments WHERE faculty_id = $3))`;
+  AND ($2::uuid IS NULL OR r.department_id = $2)`;
 
 const scopeParams = (roundId: string, scope: ResultScope): unknown[] => [
   roundId,
   scope.departmentId ?? null,
-  scope.facultyId ?? null,
 ];
 
 export interface UnitResultRow {

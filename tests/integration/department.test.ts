@@ -44,15 +44,9 @@ async function makeUser(role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT', fullName: s
   return { id: u!.id, auth: `Bearer ${await signAccessToken({ userId: u!.id, sessionId, role })}` };
 }
 
-async function makeFaculty(name: string): Promise<string> {
-  const { rows: [f] } = await pool.query<{ id: string }>(
-    `INSERT INTO faculties (name) VALUES ($1) RETURNING id`, [name]);
-  return f!.id;
-}
-
-async function makeDepartment(name: string, facultyId: string | null): Promise<string> {
+async function makeDepartment(name: string, code: string | null = null): Promise<string> {
   const { rows: [d] } = await pool.query<{ id: string }>(
-    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id`, [name, facultyId]);
+    `INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [name, code]);
   return d!.id;
 }
 
@@ -123,7 +117,6 @@ const BASE = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 const after = (minutes: number) => new Date(BASE.getTime() + minutes * 60_000);
 
 interface Fixture {
-  facultyName: string;
   departmentName: string;
   officer: { id: string; auth: string };
   otherOfficer: { id: string; auth: string };
@@ -137,11 +130,9 @@ interface Fixture {
 let fx: Fixture;
 
 async function seed(): Promise<Fixture> {
-  const facultyName = 'Faculty of Science and Technology';
-  const facultyId = await makeFaculty(facultyName);
   const departmentName = 'Department of Computer Science';
-  const deptA = await makeDepartment(departmentName, facultyId);
-  const deptB = await makeDepartment('Department of Mathematics', facultyId);
+  const deptA = await makeDepartment(departmentName, 'DCS');
+  const deptB = await makeDepartment('Department of Mathematics', 'DMATH');
 
   const officer = await makeOfficer('CS Officer', deptA);
   const otherOfficer = await makeOfficer('Maths Officer', deptB);
@@ -182,7 +173,7 @@ async function seed(): Promise<Fixture> {
   const sB = await makeSession({ unitId: unitB1, lecturerUserId: outsider.id, scheduledStartAt: BASE, opensAt: BASE });
   await recordAttendance(sB, student4.id, b14);
 
-  return { facultyName, departmentName, officer, otherOfficer, punctual, late, outsider, unitA1, unitA2, student1 };
+  return { departmentName, officer, otherOfficer, punctual, late, outsider, unitA1, unitA2, student1 };
 }
 
 beforeAll(async () => {
@@ -268,12 +259,12 @@ describe('the DEPARTMENT role', () => {
 });
 
 describe('GET /departments/me', () => {
-  it('names the officer\'s department and the faculty above it', async () => {
+  it('names the officer\'s department and its code', async () => {
     const res = await api(fx.officer.auth).get('/departments/me');
     expect(res.status).toBe(200);
     expect(body(res).data).toMatchObject({
       departmentName: fx.departmentName,
-      facultyName: fx.facultyName,
+      departmentCode: 'DCS',
     });
   });
 

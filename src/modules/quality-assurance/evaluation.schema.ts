@@ -40,19 +40,11 @@ export const updateRoundSchema = z
   .strict();
 export type UpdateRoundInput = z.infer<typeof updateRoundSchema>;
 
-/** Results narrowing for QA; department and faculty officers get their own scope instead. */
+/** Results narrowing for QA; department officers get their own scope instead. */
 export const resultsQuerySchema = z
-  .object({
-    departmentId: z.string().uuid('Not a valid identifier.').optional(),
-    facultyId: z.string().uuid('Not a valid identifier.').optional(),
-  })
-  .strict();
-export type ResultsQuery = z.infer<typeof resultsQuerySchema>;
-
-export const facultyResultsQuerySchema = z
   .object({ departmentId: z.string().uuid('Not a valid identifier.').optional() })
   .strict();
-export type FacultyResultsQuery = z.infer<typeof facultyResultsQuerySchema>;
+export type ResultsQuery = z.infer<typeof resultsQuerySchema>;
 
 /** POST /students/me/evaluations/:roundId/units/:unitId */
 export const submitParamSchema = z

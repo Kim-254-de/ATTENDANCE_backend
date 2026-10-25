@@ -28,10 +28,8 @@ export interface AuditDto {
   id: string;
   title: string;
   auditType: string;
-  targetDepartmentId: string | null;
-  targetDepartmentName: string | null;
-  targetFacultyId: string | null;
-  targetFacultyName: string | null;
+  targetDepartmentId: string;
+  targetDepartmentName: string;
   checklistTemplateId: string;
   checklistTemplateName: string;
   leadAuditorUserId: string;
@@ -55,8 +53,6 @@ const toAuditDto = (row: auditRepository.AuditRow): AuditDto => ({
   auditType: row.audit_type,
   targetDepartmentId: row.target_department_id,
   targetDepartmentName: row.target_department_name,
-  targetFacultyId: row.target_faculty_id,
-  targetFacultyName: row.target_faculty_name,
   checklistTemplateId: row.checklist_template_id,
   checklistTemplateName: row.checklist_template_name,
   leadAuditorUserId: row.lead_auditor_user_id,
@@ -96,7 +92,7 @@ export async function create(input: CreateAuditInput, createdByUserId: string): 
     return toAuditDto(row);
   } catch (error) {
     if (isForeignKeyViolation(error)) {
-      throw AppError.badRequest('The target department/faculty, checklist template or lead auditor does not exist.');
+      throw AppError.badRequest('The target department, checklist template or lead auditor does not exist.');
     }
     throw error;
   }

@@ -7,8 +7,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * Course provisioning against a real Postgres database: faculty provides a
- * course to a department, the department decides how many lecturer-taught
+ * Course provisioning against a real Postgres database: a course is provided
+ * to a department (seeded here: faculties, which used to provide them, are
+ * gone), the department decides how many lecturer-taught
  * segments it needs and allocates its own lecturers to them. The point of
  * this suite is proving the claim the plan made — that a unit created this
  * way needs zero changes to any existing read path — by checking the
@@ -27,7 +28,7 @@ const body = <T = Record<string, unknown>>(res: request.Response) => res.body as
 
 const uniq = (() => { let n = 0; return () => ++n; })();
 
-async function makeUser(role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY', fullName: string) {
+async function makeUser(role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT', fullName: string) {
   const n = uniq();
   const { rows: [u] } = await pool.query<{ id: string }>(
     `INSERT INTO users (email, password_hash, full_name, role, status, email_verified_at)
@@ -41,21 +42,17 @@ async function makeUser(role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY',
   return { id: u!.id, auth: `Bearer ${await signAccessToken({ userId: u!.id, sessionId, role })}` };
 }
 
-async function makeFaculty(name: string): Promise<string> {
-  const { rows: [f] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ($1) RETURNING id`, [name]);
-  return f!.id;
-}
-
-async function makeDepartment(name: string, facultyId: string): Promise<string> {
+async function makeDepartment(name: string, code: string): Promise<string> {
   const { rows: [d] } = await pool.query<{ id: string }>(
-    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id`, [name, facultyId]);
+    `INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [name, code]);
   return d!.id;
 }
 
-async function makeFacultyOfficer(fullName: string, facultyId: string) {
-  const user = await makeUser('FACULTY', fullName);
-  await pool.query(`INSERT INTO faculty_profiles (user_id, faculty_id, title) VALUES ($1, $2, 'Prof.')`, [user.id, facultyId]);
-  return user;
+/** A course provided to a department, as `course_offerings` holds it. */
+async function provideCourse(departmentId: string, code: string, name: string): Promise<string> {
+  const { rows: [o] } = await pool.query<{ id: string }>(
+    `INSERT INTO course_offerings (code, name, department_id) VALUES ($1, $2, $3) RETURNING id`, [code, name, departmentId]);
+  return o!.id;
 }
 
 async function makeDepartmentOfficer(fullName: string, departmentId: string) {
@@ -82,8 +79,6 @@ const api = (auth: string) => ({
 });
 
 interface Fixture {
-  facultyOfficer: { id: string; auth: string };
-  otherFacultyOfficer: { id: string; auth: string };
   deptOfficer: { id: string; auth: string };
   deptId: string;
   otherDeptId: string;
@@ -94,20 +89,16 @@ interface Fixture {
 let fx: Fixture;
 
 async function seed(): Promise<Fixture> {
-  const facultyId = await makeFaculty('Faculty of Provisioning');
-  const otherFacultyId = await makeFaculty('Faculty of Elsewhere');
-  const deptId = await makeDepartment('Department of Widgets', facultyId);
-  const otherDeptId = await makeDepartment('Department of Elsewhere', otherFacultyId);
+  const deptId = await makeDepartment('Department of Widgets', 'DWGT');
+  const otherDeptId = await makeDepartment('Department of Elsewhere', 'DELSE');
 
-  const facultyOfficer = await makeFacultyOfficer('Faculty Officer', facultyId);
-  const otherFacultyOfficer = await makeFacultyOfficer('Other Faculty Officer', otherFacultyId);
   const deptOfficer = await makeDepartmentOfficer('Dept Officer', deptId);
 
   const lecturerA = await makeLecturer('Dr. Widget A', deptId);
   const lecturerB = await makeLecturer('Dr. Widget B', deptId);
   const outsiderLecturer = await makeLecturer('Dr. Elsewhere', otherDeptId);
 
-  return { facultyOfficer, otherFacultyOfficer, deptOfficer, deptId, otherDeptId, lecturerA, lecturerB, outsiderLecturer };
+  return { deptOfficer, deptId, otherDeptId, lecturerA, lecturerB, outsiderLecturer };
 }
 
 beforeAll(async () => {
@@ -137,48 +128,14 @@ afterAll(async () => {
   await admin.end();
 });
 
-describe('POST /faculties/departments', () => {
-  it('creates a department in the caller\'s own faculty', async () => {
-    const res = await api(fx.facultyOfficer.auth).post('/faculties/departments', { name: 'Department of Gadgets' });
-    expect(res.status).toBe(201);
-    expect(body<{ departmentName: string }>(res).data.departmentName).toBe('Department of Gadgets');
-
-    const listed = await api(fx.facultyOfficer.auth).get('/faculties/departments');
-    expect(body<Array<{ departmentName: string }>>(listed).data.map((d) => d.departmentName)).toContain('Department of Gadgets');
-  });
-
-  it('rejects a duplicate department name', async () => {
-    const res = await api(fx.facultyOfficer.auth).post('/faculties/departments', { name: 'Department of Widgets' });
-    expect(res.status).toBe(409);
-  });
-
-  it('refuses a department officer or lecturer', async () => {
-    expect((await api(fx.deptOfficer.auth).post('/faculties/departments', { name: 'Nope' })).status).toBe(403);
-  });
-});
-
-describe('POST /faculties/departments/:departmentId/courses', () => {
-  it('provides a course to one of the caller\'s own departments', async () => {
-    const res = await api(fx.facultyOfficer.auth).post(`/faculties/departments/${fx.deptId}/courses`, { code: 'wgt 101', name: 'Intro to Widgets' });
-    expect(res.status).toBe(201);
-    expect(body(res).data).toMatchObject({ code: 'WGT 101', name: 'Intro to Widgets', departmentId: fx.deptId, segmentsPlanned: 1 });
-  });
-
-  it('404s on a department in another faculty instead of confirming it exists', async () => {
-    const res = await api(fx.facultyOfficer.auth).post(`/faculties/departments/${fx.otherDeptId}/courses`, { code: 'ELSE 100' });
-    expect(res.status).toBe(404);
-  });
-
-  it('rejects a duplicate course code', async () => {
-    const res = await api(fx.facultyOfficer.auth).post(`/faculties/departments/${fx.deptId}/courses`, { code: 'WGT 101' });
-    expect(res.status).toBe(409);
-  });
-});
-
 describe('the whole provisioning flow', () => {
   let offeringId: string;
 
-  it('the department sees the course faculty provided, unfilled', async () => {
+  beforeAll(async () => {
+    await provideCourse(fx.deptId, 'WGT 101', 'Intro to Widgets');
+  });
+
+  it('the department sees the course provided to it, unfilled', async () => {
     const res = await api(fx.deptOfficer.auth).get('/departments/courses');
     expect(res.status).toBe(200);
     const rows = body<Array<{ id: string; code: string; segmentsPlanned: number; segmentsFilled: number }>>(res).data;
@@ -232,28 +189,13 @@ describe('the whole provisioning flow', () => {
     const res = await api(fx.deptOfficer.auth).patch(`/departments/courses/${offeringId}`, { segmentsPlanned: 1 });
     expect(res.status).toBe(400);
   });
-
-  it('the faculty\'s own course list already shows it, department named, no changes needed', async () => {
-    const res = await api(fx.facultyOfficer.auth).get('/faculties/courses');
-    expect(res.status).toBe(200);
-    const rows = body<Array<{ code: string; departmentName: string; segmentsPlanned: number; segmentsFilled: number }>>(res).data;
-    const row = rows.find((r) => r.code === 'WGT 101');
-    expect(row).toMatchObject({ departmentName: 'Department of Widgets', segmentsPlanned: 2, segmentsFilled: 2 });
-  });
-
-  it('never includes a course from another faculty', async () => {
-    const rows = body<Array<{ code: string }>>(
-      await api(fx.otherFacultyOfficer.auth).get('/faculties/courses')).data;
-    expect(rows.map((r) => r.code)).not.toContain('WGT 101');
-  });
 });
 
 describe('borrowing a lecturer from another department', () => {
   let offeringId: string;
 
   beforeAll(async () => {
-    const res = await api(fx.facultyOfficer.auth).post(`/faculties/departments/${fx.deptId}/courses`, { code: 'WGT 202', name: 'Service Widgets' });
-    offeringId = body<{ id: string }>(res).data.id;
+    offeringId = await provideCourse(fx.deptId, 'WGT 202', 'Service Widgets');
   });
 
   it('finds lecturers from any department in the picker, own staff first', async () => {
@@ -297,12 +239,5 @@ describe('borrowing a lecturer from another department', () => {
   it('but cannot delete the borrowed lecturer\'s account', async () => {
     const res = await api(fx.deptOfficer.auth).delete(`/departments/lecturers/${fx.outsiderLecturer.id}`);
     expect(res.status).toBe(404);
-  });
-
-  it('the lecturer\'s home faculty does not count the unit, the owning faculty does', async () => {
-    const home = body<Array<{ unitCode: string }>>(await api(fx.otherFacultyOfficer.auth).get('/faculties/units')).data;
-    expect(home.map((u) => u.unitCode)).not.toContain('WGT 202');
-    const owner = body<Array<{ unitCode: string; departmentName: string }>>(await api(fx.facultyOfficer.auth).get('/faculties/units')).data;
-    expect(owner.find((u) => u.unitCode === 'WGT 202')?.departmentName).toBe('Department of Widgets');
   });
 });

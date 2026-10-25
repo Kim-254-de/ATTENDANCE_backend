@@ -3,7 +3,7 @@ import { query, queryOne } from '../../db/database.js';
 /**
  * All SQL for audits and their findings. Every value is parameterised.
  *
- * QA is institution-wide — unlike the department/faculty modules, nothing
+ * QA is institution-wide — unlike the department module, nothing
  * here is auto-scoped to the caller. Every list takes explicit filters.
  */
 
@@ -11,10 +11,8 @@ export interface AuditRow {
   id: string;
   title: string;
   audit_type: string;
-  target_department_id: string | null;
-  target_department_name: string | null;
-  target_faculty_id: string | null;
-  target_faculty_name: string | null;
+  target_department_id: string;
+  target_department_name: string;
   checklist_template_id: string;
   checklist_template_name: string;
   lead_auditor_user_id: string;
@@ -33,20 +31,18 @@ export interface AuditRow {
 
 const AUDIT_SELECT = `
   SELECT a.*, t.name AS checklist_template_name,
-         d.name AS target_department_name, f.name AS target_faculty_name,
+         d.name AS target_department_name,
          u.full_name AS lead_auditor_name,
          (SELECT COUNT(*) FROM qa_checklist_items ci WHERE ci.template_id = a.checklist_template_id)::int AS total_items,
          (SELECT COUNT(*) FROM qa_audit_findings fi WHERE fi.audit_id = a.id)::int AS findings_count
     FROM qa_audits a
     JOIN qa_checklist_templates t ON t.id = a.checklist_template_id
     JOIN users u ON u.id = a.lead_auditor_user_id
-LEFT JOIN departments d ON d.id = a.target_department_id
-LEFT JOIN faculties   f ON f.id = a.target_faculty_id`;
+    JOIN departments d ON d.id = a.target_department_id`;
 
 export interface ListAuditsFilters {
   status?: string;
   targetDepartmentId?: string;
-  targetFacultyId?: string;
   from?: string;
   to?: string;
 }
@@ -56,14 +52,12 @@ export async function list(filters: ListAuditsFilters): Promise<AuditRow[]> {
     `${AUDIT_SELECT}
       WHERE ($1::text IS NULL OR a.status = $1)
         AND ($2::uuid IS NULL OR a.target_department_id = $2)
-        AND ($3::uuid IS NULL OR a.target_faculty_id = $3)
-        AND ($4::date IS NULL OR a.scheduled_date >= $4)
-        AND ($5::date IS NULL OR a.scheduled_date <= $5)
+        AND ($3::date IS NULL OR a.scheduled_date >= $3)
+        AND ($4::date IS NULL OR a.scheduled_date <= $4)
       ORDER BY a.scheduled_date DESC, a.created_at DESC`,
     [
       filters.status ?? null,
       filters.targetDepartmentId ?? null,
-      filters.targetFacultyId ?? null,
       filters.from ?? null,
       filters.to ?? null,
     ],
@@ -77,8 +71,7 @@ export async function findById(id: string): Promise<AuditRow | null> {
 
 export interface CreateAuditParams {
   title: string;
-  targetDepartmentId?: string;
-  targetFacultyId?: string;
+  targetDepartmentId: string;
   checklistTemplateId: string;
   leadAuditorUserId: string;
   scheduledDate: string;
@@ -89,14 +82,13 @@ export interface CreateAuditParams {
 export async function create(params: CreateAuditParams): Promise<AuditRow> {
   const inserted = await queryOne<{ id: string }>(
     `INSERT INTO qa_audits
-       (title, target_department_id, target_faculty_id, checklist_template_id,
+       (title, target_department_id, checklist_template_id,
         lead_auditor_user_id, scheduled_date, notes, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       params.title,
-      params.targetDepartmentId ?? null,
-      params.targetFacultyId ?? null,
+      params.targetDepartmentId,
       params.checklistTemplateId,
       params.leadAuditorUserId,
       params.scheduledDate,

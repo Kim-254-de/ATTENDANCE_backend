@@ -3,16 +3,32 @@ import { inviteeSchema } from '../auth/auth.schema.js';
 
 /** Request contracts for the admin module. */
 
-export const createFacultySchema = z
-  .object({ name: z.string().trim().min(3, 'Faculty name is too short.').max(160, 'Faculty name is too long.') })
+/**
+ * A department, as an administrator creates it: its name and its code
+ * ("DCOMP"), unique across the university. The Timetable Allocator and
+ * Generator know a department by its code.
+ */
+export const createDepartmentSchema = z
+  .object({
+    name: z.string().trim().min(3, 'Department name is too short.').max(160, 'Department name is too long.'),
+    code: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z0-9][A-Z0-9 ./&-]{0,31}$/, 'A code is up to 32 letters or digits, e.g. DCOMP.'),
+  })
   .strict();
-export type CreateFacultyInput = z.infer<typeof createFacultySchema>;
+export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
 
-/** An administrator invites another administrator, a QA officer, or a faculty officer for one faculty. */
+/**
+ * An administrator invites another administrator, a QA officer, a member of
+ * management (university-wide) or the officer for one department.
+ */
 export const adminInvitationSchema = z.discriminatedUnion('role', [
   inviteeSchema.extend({ role: z.literal('admin') }).strict(),
   inviteeSchema.extend({ role: z.literal('qa') }).strict(),
-  inviteeSchema.extend({ role: z.literal('faculty'), facultyId: z.string().uuid('Choose a faculty.') }).strict(),
+  inviteeSchema.extend({ role: z.literal('management') }).strict(),
+  inviteeSchema.extend({ role: z.literal('department'), departmentId: z.string().uuid('Choose a department.') }).strict(),
 ]);
 export type AdminInvitationInput = z.infer<typeof adminInvitationSchema>;
 

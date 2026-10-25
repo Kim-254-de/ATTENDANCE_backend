@@ -177,7 +177,7 @@ describe('session lifecycle', () => {
 
   it('GET /lecturers/profile returns the active registration details', async () => {
     const l = await makeLecturer('ACTIVE');
-    await pool.query(`UPDATE lecturer_profiles SET faculty = 'Science', phone = '+254700000000' WHERE user_id = $1`, [l.id]);
+    await pool.query(`UPDATE lecturer_profiles SET phone = '+254700000000' WHERE user_id = $1`, [l.id]);
     const agent = request.agent(app);
 
     expect((await agent.get('/api/v1/lecturers/profile')).status).toBe(401);
@@ -192,10 +192,10 @@ describe('session lifecycle', () => {
       email: l.email,
       staffNumber: l.staff,
       department: 'Computer Science',
-      faculty: 'Science',
       phone: '+254700000000',
     });
     expect(body(profile).data).not.toHaveProperty('passwordHash');
+    expect(body(profile).data).not.toHaveProperty('faculty');
   });
 
   it('rejects a tampered or foreign token', async () => {

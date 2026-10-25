@@ -96,10 +96,10 @@ authRouter.post(
  */
 authRouter.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
 
-/** The signed-in lecturer, student, department officer, faculty officer, administrator or QA officer, or 401. The portal calls this on load to restore the session. */
+/** The signed-in lecturer, student, department officer, member of management, administrator or QA officer, or 401. The portal calls this on load to restore the session. */
 authRouter.get(
   '/me',
-  asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN', 'QA')),
+  asyncHandler(requireAuth('LECTURER', 'STUDENT', 'DEPARTMENT', 'MANAGEMENT', 'ADMIN', 'QA')),
   asyncHandler(authController.me),
 );
 

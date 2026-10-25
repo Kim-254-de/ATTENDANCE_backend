@@ -64,14 +64,14 @@ not `0`, when no session is measurable, so "nothing measured" cannot read as
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| `GET` | `/api/v1/departments/me` | Department | The officer's department and its faculty |
+| `GET` | `/api/v1/departments/me` | Department | The officer's department and its code |
 | `GET` | `/api/v1/departments/overview` | Department | Head counts, `avgAttendanceRate`, `sessionsHeld`, `onTimeRate` |
 | `GET` | `/api/v1/departments/lecturers` | Department | One row per lecturer: units, students, attendance, `avgLateMinutes`, `onTimeRate` |
 | `GET` | `/api/v1/departments/lecturers/:lecturerUserId` | Department (own dept) | That lecturer's units and 20 most recent sessions with timekeeping |
 | `GET` | `/api/v1/departments/students` | Department | One row per (student, unit) across the department, with the owning lecturer |
 | `GET` | `/api/v1/departments/units` | Department | Units with aggregate attendance rate and lecturer name |
 | `GET` | `/api/v1/departments/timekeeping` | Department | `?lecturerUserId=&unitId=&limit=` — session-level punctuality log, newest first |
-| `GET` | `/api/v1/departments/courses` | Department | Courses faculty has provided, with segments planned/filled |
+| `GET` | `/api/v1/departments/courses` | Department | Courses provided to the department, with segments planned/filled |
 | `PATCH` | `/api/v1/departments/courses/:offeringId` | Department (own) | Sets how many lecturer-taught sections a course needs |
 | `GET` | `/api/v1/departments/lecturer-directory` | Department | `?q=` — lecturers anywhere in the institution, own staff first, for the allocation picker (25 at most) |
 | `POST` | `/api/v1/departments/courses/:offeringId/segments` | Department (own) | Allocates a lecturer, own or borrowed, to the next open section — immediate, creates a real `units` row owned by this department |
@@ -84,7 +84,7 @@ not `0`, when no session is measurable, so "nothing measured" cannot read as
 ## Course provisioning (writes)
 
 The only mutations this module has besides account deletion: a department can
-allocate lecturers to courses faculty has provided (`src/modules/faculty/README.md`),
+allocate lecturers to courses provided to it (`course_offerings`),
 and decide how many sections a course needs. See
 `db/migrations/023_course_offerings.sql` and
 [`docs/expected-schema.md`](../../../docs/expected-schema.md)'s
@@ -111,8 +111,8 @@ everyone.
 ## Accounts and writes
 
 There is no self-registration for this role: a department officer has no ERP
-staff record to verify against. Accounts are invite-only — the faculty officer
-invites them from the faculty portal (`auth.invitation.ts`), and they sign in
+staff record to verify against. Accounts are invite-only — an administrator
+invites them from the admin console (`auth.invitation.ts`), and they sign in
 at the unlisted `/oversight` page. `npm run dev:seed-department` still seeds
 one for local work.
 

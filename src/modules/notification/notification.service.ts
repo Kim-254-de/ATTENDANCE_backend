@@ -110,7 +110,7 @@ export interface OfficerInvitationMessage {
   fullName: string;
   /** Plaintext token. Only ever leaves the system inside this email. */
   token: string;
-  /** e.g. "faculty officer for the Faculty of Science". */
+  /** e.g. "department officer for Computer Science". */
   roleDescription: string;
   /** Who sent it, when known. */
   invitedByName: string | null;
@@ -118,7 +118,7 @@ export interface OfficerInvitationMessage {
 }
 
 /**
- * An administrator, faculty officer or department officer being given access.
+ * An administrator, member of management, department or QA officer being given access.
  * The link sets their own password; nobody else ever knows it. The staff
  * sign-in page is not linked from the public site, so it is given here.
  */

@@ -11,8 +11,8 @@ import { smartttAccountsEnabled } from './auth.smarttt.js';
 
 /**
  * Deleting a student or lecturer account: by its owner (DELETE /auth/me), or
- * by a department or faculty officer for someone in their scope (the
- * department and faculty modules check the scope, then call deleteAccount).
+ * by a department officer for someone in their department (the department
+ * module checks the scope, then calls deleteAccount).
  *
  * The account is anonymised, not removed (auth.deletion.repository.ts):
  * attendance figures stay correct, but nothing left in them names the person.
@@ -20,7 +20,7 @@ import { smartttAccountsEnabled } from './auth.smarttt.js';
  * the erased details either.
  */
 
-export type DeletedBy = 'SELF' | 'DEPARTMENT' | 'FACULTY';
+export type DeletedBy = 'SELF' | 'DEPARTMENT';
 
 export interface DeletionActor {
   userId: string;

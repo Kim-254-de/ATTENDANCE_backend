@@ -6,7 +6,7 @@ import {
   findSession,
   type AdminPublic,
   type DepartmentOfficerPublic,
-  type FacultyOfficerPublic,
+  type ManagementPublic,
   type LecturerPublic,
   type QaOfficerPublic,
   type StudentPublic,
@@ -20,8 +20,8 @@ export interface AuthContext {
   student: StudentPublic | null;
   /** The signed-in department officer and the department they oversee; null for every other role. */
   department: DepartmentOfficerPublic | null;
-  /** The signed-in faculty officer and the faculty they oversee; null for every other role. */
-  faculty: FacultyOfficerPublic | null;
+  /** The signed-in member of management; null for every other role. */
+  management: ManagementPublic | null;
   /** The signed-in administrator; null for every other role. */
   admin: AdminPublic | null;
   /** The signed-in QA officer; null for every other role. */
@@ -63,7 +63,7 @@ export function requireAuth(...roles: UserRole[]) {
         lecturer: session.lecturer,
         student: session.student,
         department: session.department,
-        faculty: session.faculty,
+        management: session.management,
         admin: session.admin,
         qa: session.qa,
       };

@@ -109,12 +109,12 @@ export interface EligibilityReportDto {
 const SEVERITY: Record<EligibilityStatus, number> = { NOT_ELIGIBLE: 0, AT_RISK: 1, NOT_YET_MEASURED: 2, ELIGIBLE: 3 };
 
 /**
- * The eligibility report for a scope. The callers (department, faculty and
- * QA services) resolve the scope from the signed-in officer, never from the
+ * The eligibility report for a scope. The callers (department and QA
+ * services) resolve the scope from the signed-in officer, never from the
  * request alone.
  */
 export async function buildReport(
-  scope: { departmentId?: string; facultyId?: string },
+  scope: { departmentId?: string },
   options: { includeAll?: boolean } = {},
 ): Promise<EligibilityReportDto> {
   const [policy, standing] = await Promise.all([eligibilityRepository.getPolicy(), eligibilityRepository.listStanding(scope)]);

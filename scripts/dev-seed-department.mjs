@@ -1,15 +1,15 @@
 // DEV ONLY. There is no registration flow for the DEPARTMENT role and there
 // never will be a self-service one: a department officer has no ERP staff
 // record to verify against, so an open sign-up form would have nothing to
-// check. Real accounts are invited instead (admin console / faculty portal,
+// check. Real accounts are invited instead (admin console,
 // src/modules/auth/auth.invitation.ts); this is a local shortcut that skips
 // the email and sets a known password.
 //   node scripts/dev-seed-department.mjs
-//   node scripts/dev-seed-department.mjs "School of Computing" "Computer Science" dept.cs@test.local
-// Creates one faculty, one department and one ACTIVE department-officer user
+//   node scripts/dev-seed-department.mjs DCOMP "Computer Science" dept.cs@test.local
+// Creates one department (code and name) and one ACTIVE department-officer user
 // with a department_profiles row, then prints the sign-in credentials.
 // Idempotent — re-running updates the existing rows rather than duplicating
-// them, keyed by faculty/department name and the officer's email.
+// them, keyed by department name and the officer's email.
 // Refuses to run against production.
 import 'dotenv/config';
 import { hash, Algorithm } from '@node-rs/argon2';
@@ -17,7 +17,7 @@ import pg from 'pg';
 
 if (process.env.NODE_ENV === 'production') { console.error('Refusing to run in production.'); process.exit(1); }
 
-const FACULTY = process.argv[2]?.trim() || 'Faculty of Science and Technology';
+const CODE = (process.argv[2]?.trim() || 'DCS').toUpperCase();
 const DEPARTMENT = process.argv[3]?.trim() || 'Department of Computer Science';
 const EMAIL = (process.argv[4]?.trim() || 'department.officer@test.local').toLowerCase();
 const PASSWORD = process.env.SEED_PASSWORD || 'DeptOfficer#2024';
@@ -37,18 +37,11 @@ await client.connect();
 try {
   await client.query('BEGIN');
 
-  const { rows: [faculty] } = await client.query(
-    `INSERT INTO faculties (name) VALUES ($1)
-     ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`,
-    [FACULTY],
-  );
-
   const { rows: [department] } = await client.query(
-    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2)
-     ON CONFLICT (name) DO UPDATE SET faculty_id = EXCLUDED.faculty_id
-     RETURNING id`,
-    [DEPARTMENT, faculty.id],
+    `INSERT INTO departments (name, code) VALUES ($1, $2)
+     ON CONFLICT (name) DO UPDATE SET code = COALESCE(departments.code, EXCLUDED.code)
+     RETURNING id, code`,
+    [DEPARTMENT, CODE],
   );
 
   const { rows: [officer] } = await client.query(
@@ -81,8 +74,7 @@ try {
 
   await client.query('COMMIT');
 
-  console.log(`Faculty:    ${FACULTY}`);
-  console.log(`Department: ${DEPARTMENT} (${department.id})`);
+  console.log(`Department: ${DEPARTMENT} [${department.code}] (${department.id})`);
   console.log(`Lecturers attached by name: ${attached}`);
   console.log('');
   console.log('Sign in with:');

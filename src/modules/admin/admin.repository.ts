@@ -2,30 +2,8 @@ import { query, queryOne, transaction } from '../../db/database.js';
 
 /** SQL for the admin module. Every value goes through a bind parameter. */
 
-export interface FacultyRow {
-  facultyId: string;
-  name: string;
-  departmentCount: number;
-  /** Active and invited faculty officers. */
-  officerCount: number;
-  /** Linked to SMARTTT's faculty (SMARTTT owns faculties); false for one that only exists here. */
-  inSmarttt: boolean;
-}
-
-export async function listFaculties(): Promise<FacultyRow[]> {
-  const { rows } = await query<{ id: string; name: string; department_count: number; officer_count: number; in_smarttt: boolean }>(
-    `SELECT f.id, f.name, (f.smarttt_faculty_id IS NOT NULL) AS in_smarttt,
-            (SELECT COUNT(*) FROM departments d WHERE d.faculty_id = f.id)::int AS department_count,
-            (SELECT COUNT(*) FROM faculty_profiles fp JOIN users u ON u.id = fp.user_id
-              WHERE fp.faculty_id = f.id AND u.deleted_at IS NULL AND u.status <> 'DEACTIVATED')::int AS officer_count
-       FROM faculties f
-      ORDER BY f.name`,
-  );
-  return rows.map((r) => ({ facultyId: r.id, name: r.name, departmentCount: r.department_count, officerCount: r.officer_count, inSmarttt: r.in_smarttt }));
-}
-
-export async function findFacultyName(facultyId: string): Promise<string | null> {
-  const row = await queryOne<{ name: string }>(`SELECT name FROM faculties WHERE id = $1`, [facultyId]);
+export async function findDepartmentName(departmentId: string): Promise<string | null> {
+  const row = await queryOne<{ name: string }>(`SELECT name FROM departments WHERE id = $1`, [departmentId]);
   return row?.name ?? null;
 }
 
@@ -96,26 +74,27 @@ export async function verifyUnit(unitId: string): Promise<{ code: string; lectur
 export interface DepartmentRow {
   departmentId: string;
   name: string;
-  facultyId: string | null;
-  facultyName: string | null;
+  /** Unique across the university; null for one made before codes existed. */
+  code: string | null;
+  /** Linked to SMARTTT's department; false for one that only exists here. */
+  inSmarttt: boolean;
   lecturerCount: number;
 }
 
-/** Every department, with its faculty — what an administrator picks from when placing a lecturer. */
+/** Every department with its code: the admin's list, and what it picks from when placing a lecturer. */
 export async function listDepartments(): Promise<DepartmentRow[]> {
-  const { rows } = await query<{ id: string; name: string; faculty_id: string | null; faculty_name: string | null; lecturer_count: number }>(
-    `SELECT d.id, d.name, f.id AS faculty_id, f.name AS faculty_name,
+  const { rows } = await query<{ id: string; name: string; code: string | null; in_smarttt: boolean; lecturer_count: number }>(
+    `SELECT d.id, d.name, d.code, (d.smarttt_department_id IS NOT NULL) AS in_smarttt,
             (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
               WHERE lp.department_id = d.id AND u.deleted_at IS NULL)::int AS lecturer_count
        FROM departments d
-  LEFT JOIN faculties f ON f.id = d.faculty_id
-      ORDER BY f.name NULLS LAST, d.name`,
+      ORDER BY d.name`,
   );
   return rows.map((r) => ({
     departmentId: r.id,
     name: r.name,
-    facultyId: r.faculty_id,
-    facultyName: r.faculty_name,
+    code: r.code,
+    inSmarttt: r.in_smarttt,
     lecturerCount: r.lecturer_count,
   }));
 }
@@ -125,7 +104,6 @@ export interface DepartmentAliasRow {
   alias: string;
   departmentId: string;
   departmentName: string;
-  facultyName: string | null;
   source: 'PLACEMENT' | 'MERGE';
   createdByName: string | null;
   createdAt: Date;
@@ -134,19 +112,18 @@ export interface DepartmentAliasRow {
 /** Every learned spelling, grouped by the department it means (`db/migrations/036_department_spelling.sql`). */
 export async function listDepartmentAliases(): Promise<DepartmentAliasRow[]> {
   const { rows } = await query<{
-    id: string; alias: string; department_id: string; department_name: string; faculty_name: string | null;
+    id: string; alias: string; department_id: string; department_name: string;
     source: 'PLACEMENT' | 'MERGE'; created_by_name: string | null; created_at: Date;
   }>(
-    `SELECT a.id, a.alias, d.id AS department_id, d.name AS department_name, f.name AS faculty_name,
+    `SELECT a.id, a.alias, d.id AS department_id, d.name AS department_name,
             a.source, u.full_name AS created_by_name, a.created_at
        FROM department_aliases a
        JOIN departments d ON d.id = a.department_id
-  LEFT JOIN faculties f ON f.id = d.faculty_id
   LEFT JOIN users u ON u.id = a.created_by_user_id
       ORDER BY d.name, a.alias`,
   );
   return rows.map((r) => ({
-    aliasId: r.id, alias: r.alias, departmentId: r.department_id, departmentName: r.department_name, facultyName: r.faculty_name,
+    aliasId: r.id, alias: r.alias, departmentId: r.department_id, departmentName: r.department_name,
     source: r.source, createdByName: r.created_by_name, createdAt: r.created_at,
   }));
 }
@@ -161,8 +138,7 @@ export async function deleteDepartmentAlias(aliasId: string): Promise<{ alias: s
 export interface DuplicateDepartmentRow {
   departmentId: string;
   name: string;
-  facultyId: string | null;
-  facultyName: string | null;
+  code: string | null;
   lecturerCount: number;
   unitCount: number;
 }
@@ -174,14 +150,13 @@ export interface DuplicateDepartmentRow {
  */
 export async function listDuplicateDepartments(): Promise<DuplicateDepartmentRow[][]> {
   const { rows } = await query<{
-    key: string; id: string; name: string; faculty_id: string | null; faculty_name: string | null; lecturer_count: number; unit_count: number;
+    key: string; id: string; name: string; code: string | null; lecturer_count: number; unit_count: number;
   }>(
-    `SELECT department_key(d.name) AS key, d.id, d.name, f.id AS faculty_id, f.name AS faculty_name,
+    `SELECT department_key(d.name) AS key, d.id, d.name, d.code,
             (SELECT COUNT(*) FROM lecturer_profiles lp JOIN users u ON u.id = lp.user_id
               WHERE lp.department_id = d.id AND u.deleted_at IS NULL)::int AS lecturer_count,
             (SELECT COUNT(*) FROM units un WHERE un.department_id = d.id)::int AS unit_count
        FROM departments d
-  LEFT JOIN faculties f ON f.id = d.faculty_id
       WHERE department_key(d.name) IN (
               SELECT department_key(name) FROM departments GROUP BY 1 HAVING COUNT(*) > 1)
       ORDER BY key, lecturer_count DESC, unit_count DESC, d.name`,
@@ -189,7 +164,7 @@ export async function listDuplicateDepartments(): Promise<DuplicateDepartmentRow
   const groups = new Map<string, DuplicateDepartmentRow[]>();
   for (const r of rows) {
     groups.set(r.key, [...(groups.get(r.key) ?? []), {
-      departmentId: r.id, name: r.name, facultyId: r.faculty_id, facultyName: r.faculty_name,
+      departmentId: r.id, name: r.name, code: r.code,
       lecturerCount: r.lecturer_count, unitCount: r.unit_count,
     }]);
   }

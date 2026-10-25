@@ -22,13 +22,12 @@ export interface CapaRow {
   rating: string;
   standard_code: string;
   standard_title: string;
-  target_department_id: string | null;
-  target_faculty_id: string | null;
+  target_department_id: string;
 }
 
 const CAPA_SELECT = `
   SELECT ca.*, owner.full_name AS owner_name, verifier.full_name AS verified_by_name,
-         a.id AS audit_id, a.title AS audit_title, a.target_department_id, a.target_faculty_id,
+         a.id AS audit_id, a.title AS audit_title, a.target_department_id,
          fi.rating, s.code AS standard_code, s.title AS standard_title
     FROM qa_corrective_actions ca
     JOIN users owner ON owner.id = ca.owner_user_id
@@ -42,7 +41,6 @@ export interface ListCapaFilters {
   status?: string;
   ownerUserId?: string;
   targetDepartmentId?: string;
-  targetFacultyId?: string;
   overdue?: boolean;
 }
 
@@ -52,14 +50,12 @@ export async function list(filters: ListCapaFilters): Promise<CapaRow[]> {
       WHERE ($1::text IS NULL OR ca.status = $1)
         AND ($2::uuid IS NULL OR ca.owner_user_id = $2)
         AND ($3::uuid IS NULL OR a.target_department_id = $3)
-        AND ($4::uuid IS NULL OR a.target_faculty_id = $4)
-        AND ($5::boolean IS NULL OR ($5 = TRUE AND ca.due_date < CURRENT_DATE AND ca.status NOT IN ('VERIFIED', 'CLOSED')))
+        AND ($4::boolean IS NULL OR ($4 = TRUE AND ca.due_date < CURRENT_DATE AND ca.status NOT IN ('VERIFIED', 'CLOSED')))
       ORDER BY ca.due_date, ca.created_at`,
     [
       filters.status ?? null,
       filters.ownerUserId ?? null,
       filters.targetDepartmentId ?? null,
-      filters.targetFacultyId ?? null,
       filters.overdue ?? null,
     ],
   );

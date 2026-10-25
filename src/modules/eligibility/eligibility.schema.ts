@@ -20,18 +20,11 @@ const includeAll = z.enum(['true', 'false']).transform((v) => v === 'true').opti
 export const eligibilityQuerySchema = z.object({ all: includeAll }).strict();
 export type EligibilityQuery = z.infer<typeof eligibilityQuerySchema>;
 
-/** Faculty: may narrow to one of its departments. */
-export const facultyEligibilityQuerySchema = z
-  .object({ all: includeAll, departmentId: z.string().uuid('Not a valid identifier.').optional() })
-  .strict();
-export type FacultyEligibilityQuery = z.infer<typeof facultyEligibilityQuerySchema>;
-
-/** QA: institution-wide, optionally narrowed to a department or a faculty. */
+/** QA: institution-wide, optionally narrowed to a department. */
 export const qaEligibilityQuerySchema = z
   .object({
     all: includeAll,
     departmentId: z.string().uuid('Not a valid identifier.').optional(),
-    facultyId: z.string().uuid('Not a valid identifier.').optional(),
   })
   .strict();
 export type QaEligibilityQuery = z.infer<typeof qaEligibilityQuerySchema>;

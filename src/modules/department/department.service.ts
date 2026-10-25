@@ -55,8 +55,7 @@ const lateMinutes = (scheduledStartAt: Date | null, opensAt: Date): number | nul
 export interface DepartmentDto {
   departmentId: string;
   departmentName: string;
-  facultyId: string | null;
-  facultyName: string | null;
+  departmentCode: string | null;
 }
 
 /**
@@ -339,8 +338,8 @@ export async function listTimekeeping(
 }
 
 /**
- * Course provisioning, the department's half: faculty has already provided
- * the course (`faculty.service.ts provideCourse`); from here the department
+ * Course provisioning, the department's half: the course has already been
+ * provided (`course_offerings`); from here the department
  * decides how many lecturer-taught segments it needs and assigns lecturers to
  * them — its own, or borrowed from another department. Allocating is immediate — no confirmation step, no
  * ERP check — and reuses `units.base_code`/`class_group`, so the resulting

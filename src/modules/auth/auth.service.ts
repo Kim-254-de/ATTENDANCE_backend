@@ -72,7 +72,6 @@ interface StaffRecord {
   erpStaffId: string | null;
   title: string | null;
   department: string | null;
-  faculty: string | null;
   raw: unknown;
 }
 
@@ -99,7 +98,6 @@ async function lookupStaff(staffNumber: string): Promise<StaffLookup> {
       erpStaffId: null,
       title: r.title,
       department: r.department,
-      faculty: r.faculty,
       raw: r.raw,
     };
     return r.isActive ? { status: 'VERIFIED', record } : { status: 'INACTIVE', record };
@@ -119,7 +117,6 @@ async function lookupStaffInErp(staffNumber: string): Promise<StaffLookup> {
     erpStaffId: r.erpStaffId,
     title: r.title,
     department: r.department,
-    faculty: r.faculty,
     raw: r.raw,
   };
   return result.status === 'VERIFIED' ? { status: 'VERIFIED', record } : { status: 'INACTIVE', record };
@@ -208,7 +205,6 @@ export async function registerLecturer(
         erpSnapshot: record.raw,
         title: record.title,
         department: record.department,
-        faculty: record.faculty,
       },
       // Committed with the account, so a successful registration can never
       // exist without its audit entry.

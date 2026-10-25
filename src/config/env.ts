@@ -72,7 +72,7 @@ const envSchema = z
     // account, so its useful life is measured in minutes, not days.
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
 
-    // --- Invited accounts (administrators, faculty and department officers) ---
+    // --- Invited accounts (administrators, management, department and QA officers) ---
     // Longer than a reset link: the invitee may not open their mail the same day.
     OFFICER_INVITE_TTL_HOURS: z.coerce.number().int().min(1).max(336).default(72),
     /**
@@ -149,7 +149,7 @@ const envSchema = z
      * creates or links theirs on first sign-in. Registration here is closed.
      * On whenever SMARTTT_BASE_URL is set; false keeps attendance's own
      * registration and passwords (development without SMARTTT).
-     * Department and faculty officers always sign in with attendance passwords.
+     * Management, department and QA officers always sign in with attendance passwords.
      */
     SMARTTT_ACCOUNTS: booleanish.default('true'),
     SMARTTT_AUTHENTICATE_PATH: z.string().min(1).default('/api/v1/integrations/attendance/authenticate/'),
@@ -172,16 +172,19 @@ const envSchema = z
     SMARTTT_ADMIN_PATH: z.string().min(1).default('/api/v1/integrations/admin/'),
     // A timetable upload is parsed while the administrator waits; give it time.
     SMARTTT_ADMIN_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(120_000),
-    // Faculties and departments are SMARTTT's; attendance re-reads them at most this often.
+    // Departments are SMARTTT's; attendance re-reads them at most this often.
     SMARTTT_DIRECTORY_SYNC_SECONDS: z.coerce.number().int().min(0).default(60),
-    SMARTTT_FACULTIES_PATH: z.string().min(1).default('/api/v1/integrations/attendance/faculties/'),
     SMARTTT_DEPARTMENTS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/departments/'),
 
     // --- Timetable Generator ---
-    // The Generator reads the departments faculty officers create here
+    // The Generator reads the departments administrators create here
     // (GET /integrations/generator/departments, X-API-Key). Must equal
     // ATTENDANCE_API_KEY in the Generator. Unset = the Generator can't connect.
     GENERATOR_API_KEY: emptyAsUnset(z.string().optional()),
+    // --- Timetable Allocator ---
+    // The Allocator reads them too (GET /integrations/allocator/departments).
+    // Must equal ATTENDANCE_API_KEY in the Allocator. Unset = it can't connect.
+    ALLOCATOR_API_KEY: emptyAsUnset(z.string().optional()),
 
     // --- WebAuthn / phone biometrics ---
     WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),

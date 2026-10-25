@@ -11,9 +11,9 @@ const fake = (...parts: string[]) => parts.join('');
 
 /**
  * Invited accounts (auth.invitation.ts) against a real Postgres database:
- * an administrator creates faculties and invites faculty officers, a faculty
- * officer invites department officers, and each invitee chooses their own
- * password from the emailed link before they can sign in.
+ * an administrator invites management, department and QA officers (and,
+ * without SMARTTT accounts, other administrators), and each invitee chooses
+ * their own password from the emailed link before they can sign in.
  *
  * Email is captured rather than sent, so the tests can follow the link.
  */
@@ -43,7 +43,7 @@ let pool: pg.Pool;
 interface Body<T = Record<string, unknown>> { data: T; error?: { code: string; message: string } }
 const body = <T = Record<string, unknown>>(res: request.Response) => res.body as Body<T>;
 
-interface Officer { userId: string; role: string; email: string; status: string; departmentName: string | null; facultyName: string | null; invitationExpiresAt: string | null }
+interface Officer { userId: string; role: string; email: string; status: string; departmentName: string | null; invitationExpiresAt: string | null }
 
 const uniq = (() => { let n = 0; return () => ++n; })();
 
@@ -79,8 +79,6 @@ async function signIn(email: string) {
 }
 
 let admin: { id: string; auth: string };
-let scienceId: string;
-let artsId: string;
 let computingId: string;
 let historyId: string;
 
@@ -101,13 +99,8 @@ beforeAll(async () => {
   app = (await import('../../src/app.js')).createApp();
 
   admin = await makeUser('ADMIN', 'Ada Admin');
-  const { rows: [arts] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Arts') RETURNING id`);
-  artsId = arts!.id;
-  const created = await api(admin.auth).post('/admin/faculties', { name: 'Science' });
-  expect(created.status).toBe(201);
-  scienceId = body<{ facultyId: string }>(created).data.facultyId;
-  const { rows: [c] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, faculty_id) VALUES ('Computing', $1) RETURNING id`, [scienceId]);
-  const { rows: [h] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, faculty_id) VALUES ('History', $1) RETURNING id`, [artsId]);
+  const { rows: [c] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, code) VALUES ('Computing', 'DCOMP') RETURNING id`);
+  const { rows: [h] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, code) VALUES ('History', 'DHIST') RETURNING id`);
   computingId = c!.id;
   historyId = h!.id;
 }, 60_000);
@@ -124,10 +117,13 @@ afterAll(async () => {
 beforeEach(() => { sent.length = 0; });
 
 describe('the admin console', () => {
-  it('lists faculties and refuses a duplicate name', async () => {
-    const list = body<{ name: string; departmentCount: number }[]>(await api(admin.auth).get('/admin/faculties')).data;
-    expect(list.map((f) => f.name)).toEqual(['Arts', 'Science']);
-    expect((await api(admin.auth).post('/admin/faculties', { name: 'Science' })).status).toBe(409);
+  it('creates departments with a code, and has no faculties', async () => {
+    const created = await api(admin.auth).post('/admin/departments', { name: 'Geography', code: 'DGEO' });
+    expect(created.status).toBe(201);
+    const list = body<{ name: string; code: string }[]>(await api(admin.auth).get('/admin/departments')).data;
+    expect(list.map((d) => [d.name, d.code])).toEqual([['Computing', 'DCOMP'], ['Geography', 'DGEO'], ['History', 'DHIST']]);
+    expect((await api(admin.auth).post('/admin/departments', { name: 'Geography', code: 'DGEO2' })).status).toBe(409);
+    expect((await api(admin.auth).get('/admin/faculties')).status).toBe(404);
   });
 
   it('is closed to everyone but administrators', async () => {
@@ -141,20 +137,21 @@ describe('the admin console', () => {
   });
 });
 
-describe('inviting a faculty officer', () => {
+describe('inviting officers', () => {
   it('creates a pending account that only the emailed link can activate', async () => {
-    const email = 'fiona.faculty@uni.ac.ke';
-    const res = await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId: scienceId, fullName: 'Fiona Faculty', email });
+    const email = 'fiona.management@uni.ac.ke';
+    const res = await api(admin.auth).post('/admin/invitations', { role: 'management', fullName: 'Fiona Management', email });
     expect(res.status).toBe(201);
     expect(body(res).data).toMatchObject({ emailSent: true });
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.roleDescription).toBe('faculty officer for Science');
+    expect(sent[0]!.roleDescription).toBe('a member of management');
     // The token never comes back over HTTP.
     expect(JSON.stringify(res.body)).not.toContain(sent[0]!.token);
 
     const officers = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
     const fiona = officers.find((o) => o.email === email)!;
-    expect(fiona).toMatchObject({ role: 'faculty', status: 'PENDING_VERIFICATION', facultyName: 'Science' });
+    expect(fiona).toMatchObject({ role: 'management', status: 'PENDING_VERIFICATION', departmentName: null });
+    expect(fiona).not.toHaveProperty('facultyName');
     expect(fiona.invitationExpiresAt).not.toBeNull();
 
     // No password exists yet, so nothing signs in.
@@ -162,31 +159,32 @@ describe('inviting a faculty officer', () => {
 
     const token = lastTokenFor(email);
     const details = await publicPost('/auth/invitations/lookup', { token });
-    expect(body(details).data).toMatchObject({ fullName: 'Fiona Faculty', email, role: 'faculty', scopeName: 'Science' });
+    expect(body(details).data).toMatchObject({ fullName: 'Fiona Management', email, role: 'management', scopeName: null });
 
     expect((await accept(token, 'weak')).status).toBe(400);
     expect((await accept(token)).status).toBe(200);
 
     const { res: signedIn } = await signIn(email);
-    expect(body(signedIn).data).toMatchObject({ role: 'faculty', facultyName: 'Science' });
+    expect(body(signedIn).data).toMatchObject({ role: 'management', fullName: 'Fiona Management' });
+    expect(body(signedIn).data).not.toHaveProperty('facultyId');
 
     // Single use.
     expect((await accept(token)).status).toBe(400);
     expect((await publicPost('/auth/invitations/lookup', { token })).status).toBe(400);
   });
 
-  it('refuses an email that already has an account, and a faculty that does not exist', async () => {
-    const email = 'dup.faculty@uni.ac.ke';
-    expect((await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId: scienceId, fullName: 'Dup Faculty', email })).status).toBe(201);
-    const again = await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId: scienceId, fullName: 'Dup Faculty', email });
+  it('refuses an email that already has an account, and the old faculty role', async () => {
+    const email = 'dup.management@uni.ac.ke';
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'management', fullName: 'Dup Management', email })).status).toBe(201);
+    const again = await api(admin.auth).post('/admin/invitations', { role: 'management', fullName: 'Dup Management', email });
     expect(again.status).toBe(409);
     expect(body(again).error!.message).toMatch(/re-send/i);
-    expect((await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId: randomUUID(), fullName: 'No Faculty', email: 'nf@uni.ac.ke' })).status).toBe(400);
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'faculty', fullName: 'No Faculty', email: 'nf@uni.ac.ke' })).status).toBe(400);
   });
 
   it('re-sends with a new link that replaces the old one', async () => {
-    const email = 'resend.faculty@uni.ac.ke';
-    const created = await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId: artsId, fullName: 'Resend Faculty', email });
+    const email = 'resend.management@uni.ac.ke';
+    const created = await api(admin.auth).post('/admin/invitations', { role: 'management', fullName: 'Resend Management', email });
     const first = lastTokenFor(email);
     const { userId } = body<{ userId: string }>(created).data;
 
@@ -197,6 +195,35 @@ describe('inviting a faculty officer', () => {
     expect((await accept(second)).status).toBe(200);
     // Accepted: nothing left to re-send.
     expect((await api(admin.auth).post(`/admin/officers/${userId}/resend`)).status).toBe(409);
+  });
+
+  it('invites management, who signs in and sees the whole university', async () => {
+    const email = 'mona.management@uni.ac.ke';
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'management', fullName: 'Mona Management', email })).status).toBe(201);
+    expect(sent.at(-1)!.roleDescription).toBe('a member of management');
+    expect((await accept(lastTokenFor(email))).status).toBe(200);
+
+    const { res, cookies } = await signIn(email);
+    expect(body(res).data).toMatchObject({ role: 'management', fullName: 'Mona Management' });
+    const university = await request(app).get('/api/v1/management/departments').set('Cookie', cookies);
+    expect(university.status).toBe(200);
+    const names = body<{ departments: { departmentName: string }[] }>(university).data.departments.map((d) => d.departmentName);
+    expect(names).toEqual(expect.arrayContaining(['Computing', 'History']));
+    // The faculty portal's API is gone.
+    expect((await request(app).get('/api/v1/faculties/me').set('Cookie', cookies)).status).toBe(404);
+  });
+
+  it('invites the officer for one department', async () => {
+    const email = 'dora.department@uni.ac.ke';
+    const res = await api(admin.auth).post('/admin/invitations', { role: 'department', departmentId: historyId, fullName: 'Dora Department', email });
+    expect(res.status).toBe(201);
+    expect(sent.at(-1)!.roleDescription).toBe('department officer for History');
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'department', departmentId: randomUUID(), fullName: 'Nobody', email: 'nd@uni.ac.ke' })).status).toBe(400);
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'department', fullName: 'Nobody', email: 'nd@uni.ac.ke' })).status).toBe(400);
+
+    expect((await accept(lastTokenFor(email))).status).toBe(200);
+    const { res: signedIn } = await signIn(email);
+    expect(body(signedIn).data).toMatchObject({ role: 'department', departmentName: 'History' });
   });
 
   it('only invites addresses on the allowed domains, when any are set', async () => {
@@ -226,7 +253,7 @@ describe('inviting a faculty officer', () => {
     expect(sent.at(-1)!.roleDescription).toBe('quality assurance officer');
 
     const officers = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
-    expect(officers.find((o) => o.email === email)).toMatchObject({ role: 'qa', status: 'PENDING_VERIFICATION', facultyName: null });
+    expect(officers.find((o) => o.email === email)).toMatchObject({ role: 'qa', status: 'PENDING_VERIFICATION', departmentName: null });
 
     const token = lastTokenFor(email);
     expect(body(await publicPost('/auth/invitations/lookup', { token })).data).toMatchObject({ role: 'qa', scopeName: null });
@@ -234,36 +261,19 @@ describe('inviting a faculty officer', () => {
 
     const { res, cookies } = await signIn(email);
     expect(body(res).data).toMatchObject({ role: 'qa', fullName: 'Quinn QA' });
-    expect((await request(app).get('/api/v1/quality-assurance/faculties').set('Cookie', cookies)).status).toBe(200);
+    expect((await request(app).get('/api/v1/quality-assurance/departments').set('Cookie', cookies)).status).toBe(200);
   });
 });
 
-describe('a faculty officer inviting department officers', () => {
-  /** A faculty officer who accepted their invitation and signed in through the real form. */
-  async function activeFacultyOfficer(facultyId: string) {
-    const email = `fo${uniq()}@uni.ac.ke`;
-    await api(admin.auth).post('/admin/invitations', { role: 'faculty', facultyId, fullName: 'Faculty Officer', email });
-    await accept(lastTokenFor(email));
-    return (await signIn(email)).cookies;
-  }
-
-  const withCookies = (cookies: string[]) => ({
-    get: (path: string) => request(app).get(`/api/v1${path}`).set('Cookie', cookies),
-    post: (path: string, data?: object) => request(app).post(`/api/v1${path}`).set('Cookie', cookies).send(data),
-  });
-
-  it('invites, lists and removes the officer for one of its own departments only', async () => {
-    const fo = withCookies(await activeFacultyOfficer(scienceId));
-
+describe('an administrator managing department officers', () => {
+  it('invites, lists, removes and re-invites the officer for one department', async () => {
     const email = 'dora.dept@uni.ac.ke';
-    const invited = await fo.post(`/faculties/departments/${computingId}/officers`, { fullName: 'Dora Department', email });
+    const invited = await api(admin.auth).post('/admin/invitations', { role: 'department', departmentId: computingId, fullName: 'Dora Dept', email });
     expect(invited.status).toBe(201);
     expect(sent.at(-1)!.roleDescription).toBe('department officer for Computing');
-    expect((await fo.post(`/faculties/departments/${historyId}/officers`, { fullName: 'Outside Person', email: 'out@uni.ac.ke' })).status).toBe(404);
 
-    const list = body<Officer[]>(await fo.get('/faculties/officers')).data;
-    expect(list.map((o) => o.email)).toEqual([email]);
-    expect(list[0]).toMatchObject({ role: 'department', departmentName: 'Computing', status: 'PENDING_VERIFICATION' });
+    const list = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
+    expect(list.find((o) => o.email === email)).toMatchObject({ role: 'department', departmentName: 'Computing', status: 'PENDING_VERIFICATION' });
 
     expect((await accept(lastTokenFor(email))).status).toBe(200);
     const dora = await signIn(email);
@@ -273,28 +283,14 @@ describe('a faculty officer inviting department officers', () => {
     expect((await request(app).post('/api/v1/auth/refresh').set('Cookie', dora.cookies)).status).toBe(204);
 
     const { userId } = body<{ userId: string }>(invited).data;
-    expect((await fo.post(`/faculties/officers/${userId}/deactivate`)).status).toBe(204);
+    expect((await api(admin.auth).post(`/admin/officers/${userId}/deactivate`)).status).toBe(204);
     expect((await request(app).get('/api/v1/auth/me').set('Cookie', dora.cookies)).status).toBe(401);
     expect((await login(email)).status).toBe(403);
-
-    // The admin sees it, deactivated.
-    const all = body<Officer[]>(await api(admin.auth).get('/admin/officers')).data;
-    expect(all.find((o) => o.email === email)).toMatchObject({ status: 'DEACTIVATED' });
+    expect(body<Officer[]>(await api(admin.auth).get('/admin/officers')).data.find((o) => o.email === email)).toMatchObject({ status: 'DEACTIVATED' });
 
     // Re-inviting the same person re-opens the account.
-    expect((await fo.post(`/faculties/departments/${computingId}/officers`, { fullName: 'Dora Department', email })).status).toBe(201);
+    expect((await api(admin.auth).post('/admin/invitations', { role: 'department', departmentId: computingId, fullName: 'Dora Dept', email })).status).toBe(201);
     expect((await accept(lastTokenFor(email))).status).toBe(200);
     expect((await login(email)).status).toBe(200);
-  });
-
-  it('cannot manage another faculty’s department officers', async () => {
-    const arts = withCookies(await activeFacultyOfficer(artsId));
-    const science = withCookies(await activeFacultyOfficer(scienceId));
-    const invited = await arts.post(`/faculties/departments/${historyId}/officers`, { fullName: 'Hugo History', email: 'hugo@uni.ac.ke' });
-    const { userId } = body<{ userId: string }>(invited).data;
-
-    expect((await science.post(`/faculties/officers/${userId}/deactivate`)).status).toBe(404);
-    expect((await science.post(`/faculties/officers/${userId}/resend`)).status).toBe(404);
-    expect(body<Officer[]>(await science.get('/faculties/officers')).data.map((o) => o.email)).not.toContain('hugo@uni.ac.ke');
   });
 });

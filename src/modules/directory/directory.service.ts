@@ -6,17 +6,21 @@ import * as smartttDirectory from '../../integrations/smarttt/smarttt.directory.
 import * as repo from './directory.repository.js';
 
 /**
- * Faculties and departments belong to SMARTTT (db/migrations/037_smarttt_directory.sql).
+ * Departments belong to SMARTTT (db/migrations/037_smarttt_directory.sql);
+ * faculties play no part (039_no_faculties.sql). Each has a name and a code
+ * ("DCOMP") unique across the university, which is how the Timetable
+ * Allocator and Generator know it.
  *
  * Attendance keeps a copy, linked by SMARTTT's id, because its officers,
  * terminals, course offerings and oversight hang off local rows:
  *
  *  - reading: SMARTTT's list is pulled into the copy (syncFromSmarttt), at
- *    most every SMARTTT_DIRECTORY_SYNC_SECONDS, whenever the admin or a
- *    faculty officer lists them. A local row with the same name and no link
- *    yet is linked rather than duplicated; SMARTTT's name wins.
- *  - creating: a new faculty or department is created in SMARTTT first, then
- *    here, linked (createFaculty, createDepartment).
+ *    most every SMARTTT_DIRECTORY_SYNC_SECONDS, whenever the admin lists
+ *    them or the timetabling systems read them. A local row with the same
+ *    name and no link yet is linked rather than duplicated; SMARTTT's name
+ *    and code win.
+ *  - creating: an administrator's new department is created in SMARTTT
+ *    first, then here, linked (createDepartment).
  *  - rows that only exist here (made before this change) are sent to SMARTTT
  *    when an administrator asks (sendLocalToSmarttt); nothing is sent
  *    unasked.
@@ -26,14 +30,12 @@ import * as repo from './directory.repository.js';
  */
 
 export interface SyncReport {
-  faculties: { linked: number; created: number };
   departments: { linked: number; created: number };
-  /** SMARTTT rows that could not be brought in, and why (a name already linked to another SMARTTT row). */
+  /** SMARTTT rows that could not be brought in, and why (a name or code already used by another department here). */
   skipped: string[];
 }
 
 export interface SendReport {
-  faculties: number;
   departments: number;
   /** Local rows that could not be sent, and why. */
   skipped: string[];
@@ -45,11 +47,12 @@ let lastSync = 0;
 let inFlight: Promise<SyncReport> | null = null;
 
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+const sameCode = (a: string | null, b: string | null) => !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
 
 /**
- * Pulls SMARTTT's faculties and departments into the copy. Throttled unless
- * `force`; throws only when forced (an administrator asked), otherwise a
- * failure is logged and the copy is used as it is.
+ * Pulls SMARTTT's departments into the copy. Throttled unless `force`;
+ * throws only when forced (an administrator asked), otherwise a failure is
+ * logged and the copy is used as it is.
  */
 export async function syncFromSmarttt(options: { force?: boolean } = {}): Promise<SyncReport | null> {
   if (!smartttDirectoryEnabled()) return null;
@@ -64,7 +67,7 @@ export async function syncFromSmarttt(options: { force?: boolean } = {}): Promis
     return await inFlight;
   } catch (error) {
     if (options.force) throw error;
-    logger.error({ err: error }, 'directory: could not read faculties and departments from SMARTTT; using the copy here');
+    logger.error({ err: error }, 'directory: could not read departments from SMARTTT; using the copy here');
     return null;
   }
 }
@@ -76,104 +79,74 @@ async function pull(): Promise<SyncReport> {
   }
 
   return transaction(async (tx) => {
-    const report: SyncReport = { faculties: { linked: 0, created: 0 }, departments: { linked: 0, created: 0 }, skipped: [] };
-    const faculties = await repo.listFaculties(tx);
-    const facultyOf = new Map<number, string>();
-
-    for (const sf of answer.faculties) {
-      const linked = faculties.find((f) => f.smartttId === sf.id);
-      const byName = faculties.find((f) => sameName(f.name, sf.name));
-      if (linked) {
-        facultyOf.set(sf.id, linked.id);
-        if (linked.name !== sf.name) {
-          if (byName && byName.id !== linked.id) report.skipped.push(`Faculty "${sf.name}": the name is used by another faculty here.`);
-          else await repo.linkFaculty(tx, linked.id, sf.id, sf.name);
-        }
-      } else if (byName && byName.smartttId === null) {
-        await repo.linkFaculty(tx, byName.id, sf.id, sf.name);
-        byName.smartttId = sf.id;
-        facultyOf.set(sf.id, byName.id);
-        report.faculties.linked += 1;
-      } else if (byName) {
-        report.skipped.push(`Faculty "${sf.name}": the name is linked to another SMARTTT faculty.`);
-      } else {
-        const id = await repo.insertFaculty(tx, sf.name, sf.id);
-        faculties.push({ id, name: sf.name, smartttId: sf.id });
-        facultyOf.set(sf.id, id);
-        report.faculties.created += 1;
-      }
-    }
-
+    const report: SyncReport = { departments: { linked: 0, created: 0 }, skipped: [] };
     const departments = await repo.listDepartments(tx);
+
+    /** SMARTTT's code, unless another department here already holds it (then the one here keeps its own). */
+    const codeFor = (sd: smartttDirectory.SmartttDepartment, selfId: string | null): string | null => {
+      const holder = departments.find((d) => d.id !== selfId && sameCode(d.code, sd.code));
+      if (!holder) return sd.code;
+      report.skipped.push(`Department "${sd.name}": its code ${sd.code} is used by "${holder.name}" here.`);
+      return null;
+    };
+
     for (const sd of answer.departments) {
-      const facultyId = facultyOf.get(sd.facultyId) ?? null;
       const linked = departments.find((d) => d.smartttId === sd.id);
       const byName = departments.find((d) => sameName(d.name, sd.name));
       if (linked) {
         if (byName && byName.id !== linked.id) report.skipped.push(`Department "${sd.name}": the name is used by another department here.`);
-        else if (linked.name !== sd.name || (facultyId && linked.facultyId !== facultyId)) {
-          await repo.linkDepartment(tx, linked.id, sd.id, sd.name, facultyId);
+        else if (linked.name !== sd.name || !sameCode(linked.code, sd.code)) {
+          const code = codeFor(sd, linked.id);
+          await repo.linkDepartment(tx, linked.id, sd.id, sd.name, code);
+          linked.name = sd.name;
+          linked.code = code ?? linked.code;
         }
       } else if (byName && byName.smartttId === null) {
-        await repo.linkDepartment(tx, byName.id, sd.id, sd.name, facultyId);
+        const code = codeFor(sd, byName.id);
+        await repo.linkDepartment(tx, byName.id, sd.id, sd.name, code);
         byName.smartttId = sd.id;
+        byName.code = code ?? byName.code;
         report.departments.linked += 1;
       } else if (byName) {
-        // Attendance keeps department names unique across the university; SMARTTT only within a faculty.
         report.skipped.push(`Department "${sd.name}": another SMARTTT department here already has this name.`);
       } else {
-        const id = await repo.insertDepartment(tx, sd.name, facultyId, sd.id);
-        departments.push({ id, name: sd.name, facultyId, smartttId: sd.id });
+        const code = codeFor(sd, null);
+        const id = await repo.insertDepartment(tx, sd.name, code, sd.id);
+        departments.push({ id, name: sd.name, code, smartttId: sd.id });
         report.departments.created += 1;
       }
     }
 
-    if (report.faculties.linked + report.faculties.created + report.departments.linked + report.departments.created > 0) {
-      logger.info(report, 'directory: faculties and departments brought in line with SMARTTT');
+    if (report.departments.linked + report.departments.created > 0) {
+      logger.info(report, 'directory: departments brought in line with SMARTTT');
     }
     return report;
   });
 }
 
-/** How many faculties and departments exist only here, not yet in SMARTTT. */
-export async function unlinkedCounts(): Promise<{ faculties: number; departments: number }> {
-  const [faculties, departments] = await Promise.all([repo.listFaculties(), repo.listDepartments()]);
-  return {
-    faculties: faculties.filter((f) => f.smartttId === null).length,
-    departments: departments.filter((d) => d.smartttId === null).length,
-  };
+/** How many departments exist only here, not yet in SMARTTT. */
+export async function unlinkedCounts(): Promise<{ departments: number }> {
+  const departments = await repo.listDepartments();
+  return { departments: departments.filter((d) => d.smartttId === null).length };
 }
 
 /**
- * Sends the faculties and departments that only exist here to SMARTTT (one
- * that SMARTTT already has by name is linked to it instead), after reading
- * SMARTTT's list so nothing it already has is sent twice.
+ * Sends the departments that only exist here to SMARTTT (one that SMARTTT
+ * already has by name is linked to it instead), after reading SMARTTT's list
+ * so nothing it already has is sent twice.
  */
 export async function sendLocalToSmarttt(): Promise<SendReport> {
   if (!smartttDirectoryEnabled()) throw new AppError(503, ErrorCode.SMARTTT_UNAVAILABLE, 'SMARTTT is not connected.');
   await syncFromSmarttt({ force: true });
-  const report: SendReport = { faculties: 0, departments: 0, skipped: [] };
+  const report: SendReport = { departments: 0, skipped: [] };
 
-  for (const faculty of (await repo.listFaculties()).filter((f) => f.smartttId === null)) {
-    const answer = await smartttDirectory.createFaculty(faculty.name);
-    if (answer.status === 'CREATED' || answer.status === 'NAME_TAKEN') {
-      await repo.setFacultySmartttId(faculty.id, answer.status === 'CREATED' ? answer.record.id : answer.id);
-      report.faculties += 1;
-    } else {
-      report.skipped.push(`Faculty "${faculty.name}": ${refusal(answer)}`);
-    }
-  }
-
-  const faculties = new Map((await repo.listFaculties()).map((f) => [f.id, f]));
   for (const department of (await repo.listDepartments()).filter((d) => d.smartttId === null)) {
-    const smartttFacultyId = department.facultyId ? faculties.get(department.facultyId)?.smartttId : null;
-    if (!smartttFacultyId) {
-      report.skipped.push(`Department "${department.name}": it has no faculty in SMARTTT. Place it in a faculty first.`);
-      continue;
-    }
-    const answer = await smartttDirectory.createDepartment(smartttFacultyId, department.name);
-    if (answer.status === 'CREATED' || answer.status === 'NAME_TAKEN') {
-      await repo.setDepartmentSmartttId(department.id, answer.status === 'CREATED' ? answer.record.id : answer.id);
+    const answer = await smartttDirectory.createDepartment(department.name, department.code);
+    if (answer.status === 'CREATED') {
+      await repo.setDepartmentSmartttId(department.id, answer.record.id, answer.record.code);
+      report.departments += 1;
+    } else if (answer.status === 'NAME_TAKEN') {
+      await repo.setDepartmentSmartttId(department.id, answer.id, null);
       report.departments += 1;
     } else {
       report.skipped.push(`Department "${department.name}": ${refusal(answer)}`);
@@ -189,81 +162,60 @@ function refusal(answer: { status: 'REFUSED'; message: string } | { status: 'UNA
 }
 
 function createFailed(answer: { status: 'REFUSED'; message: string } | { status: 'UNAVAILABLE'; reason: string } | { status: 'DISABLED' }): AppError {
-  if (answer.status === 'REFUSED') return AppError.badRequest(`SMARTTT refused it: ${answer.message}`);
-  return new AppError(503, ErrorCode.SMARTTT_UNAVAILABLE, `${refusal(answer)} The faculty or department was not created; try again in a minute.`);
+  if (answer.status === 'REFUSED') return AppError.conflict(`SMARTTT refused it: ${answer.message}`);
+  return new AppError(503, ErrorCode.SMARTTT_UNAVAILABLE, `${refusal(answer)} The department was not created; try again in a minute.`);
 }
 
-const nameTaken = (what: 'faculty' | 'department', name: string) =>
-  AppError.conflict(`A ${what} named "${name}" already exists.`, ErrorCode.CONFLICT, {
-    details: [{ field: 'name', message: `This ${what} name is already in use.` }],
+const nameTaken = (name: string) =>
+  AppError.conflict(`A department named "${name}" already exists.`, ErrorCode.CONFLICT, {
+    details: [{ field: 'name', message: 'This department name is already in use.' }],
   });
 
-/** A new faculty: in SMARTTT first, then here, linked. 409 when the name is taken in either. */
-export async function createFaculty(name: string): Promise<{ id: string; name: string }> {
+const codeTaken = (code: string, holder: string) =>
+  AppError.conflict(`The code ${code} is already used by ${holder}.`, ErrorCode.CONFLICT, {
+    details: [{ field: 'code', message: 'This department code is already in use.' }],
+  });
+
+/**
+ * A new department, by an administrator: in SMARTTT first, then here,
+ * linked. 409 when the name or code is taken in either.
+ */
+export async function createDepartment(name: string, code: string): Promise<{ id: string; name: string; code: string }> {
+  // "Department of Computer Science" next to "Computer Science" is the same
+  // department spelled twice; refuse it before the exact-name constraint would.
+  const existing = await repo.findForName(name);
+  if (existing) {
+    throw AppError.conflict(`"${name}" is the same department as "${existing.name}", which already exists.`, ErrorCode.CONFLICT, {
+      details: [{ field: 'name', message: `Already exists as "${existing.name}".` }],
+    });
+  }
+  const holder = await repo.findByCode(code);
+  if (holder) throw codeTaken(code, holder.name);
+
   if (!smartttDirectoryEnabled()) {
     try {
-      return { id: await repo.insertFaculty(undefined, name, null), name };
+      return { id: await repo.insertDepartment(undefined, name, code, null), name, code };
     } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken('faculty', name);
+      if (isUniqueViolation(error)) throw nameTaken(name);
       throw error;
     }
   }
 
-  const answer = await smartttDirectory.createFaculty(name);
+  const answer = await smartttDirectory.createDepartment(name, code);
   if (answer.status === 'NAME_TAKEN') {
     // SMARTTT has it already: bring it in, so it can be used, but don't pretend it was created now.
     await syncFromSmarttt({ force: true });
-    throw nameTaken('faculty', name);
-  }
-  if (answer.status !== 'CREATED') throw createFailed(answer);
-  const created = answer.record;
-  return transaction(async (tx) => {
-    const local = (await repo.listFaculties(tx)).find((f) => f.smartttId === null && sameName(f.name, created.name));
-    if (local) {
-      await repo.linkFaculty(tx, local.id, created.id, created.name);
-      return { id: local.id, name: created.name };
-    }
-    return { id: await repo.insertFaculty(tx, created.name, created.id), name: created.name };
-  });
-}
-
-/** A new department in a faculty: in SMARTTT first, then here, linked. */
-export async function createDepartment(facultyId: string, name: string): Promise<{ id: string; name: string }> {
-  if (!smartttDirectoryEnabled()) {
-    try {
-      return { id: await repo.insertDepartment(undefined, name, facultyId, null), name };
-    } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken('department', name);
-      throw error;
-    }
-  }
-
-  let faculty = await repo.findFaculty(facultyId);
-  if (faculty && faculty.smartttId === null) {
-    await syncFromSmarttt({ force: true });
-    faculty = await repo.findFaculty(facultyId);
-  }
-  if (!faculty) throw AppError.notFound('No such faculty.');
-  if (faculty.smartttId === null) {
-    throw AppError.conflict(
-      `${faculty.name} is not in SMARTTT yet, so its departments can't be added there. Ask an administrator to send it to SMARTTT (Faculties page).`,
-    );
-  }
-
-  const answer = await smartttDirectory.createDepartment(faculty.smartttId, name);
-  if (answer.status === 'NAME_TAKEN') {
-    await syncFromSmarttt({ force: true });
-    throw nameTaken('department', name);
+    throw nameTaken(name);
   }
   if (answer.status !== 'CREATED') throw createFailed(answer);
   const created = answer.record;
   return transaction(async (tx) => {
     const local = (await repo.listDepartments(tx)).find((d) => d.smartttId === null && sameName(d.name, created.name));
     if (local) {
-      await repo.linkDepartment(tx, local.id, created.id, created.name, facultyId);
-      return { id: local.id, name: created.name };
+      await repo.linkDepartment(tx, local.id, created.id, created.name, created.code);
+      return { id: local.id, name: created.name, code: created.code };
     }
-    return { id: await repo.insertDepartment(tx, created.name, facultyId, created.id), name: created.name };
+    return { id: await repo.insertDepartment(tx, created.name, created.code, created.id), name: created.name, code: created.code };
   });
 }
 
@@ -274,9 +226,9 @@ export function resetDirectorySyncState(): void {
 }
 
 /**
- * Every department, for the Timetable Generator, which takes its departments
- * from here: SMARTTT's are read in first (throttled), so one a faculty officer
- * or SMARTTT just added is included.
+ * Every department, for the Timetable Generator and Allocator, which take
+ * their departments from here: SMARTTT's are read in first (throttled), so
+ * one an administrator or SMARTTT just added is included.
  */
 export async function departmentsForTimetabling(): Promise<repo.DepartmentForTimetabling[]> {
   await syncFromSmarttt();

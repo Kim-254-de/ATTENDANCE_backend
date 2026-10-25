@@ -95,7 +95,7 @@ export async function refreshLinkedAccount(args: {
   email: string | null;
   number: string;
   student?: { programme: string | null; yearOfStudy: number | null; snapshot: unknown };
-  lecturer?: { title: string | null; department: string | null; faculty: string | null; snapshot: unknown };
+  lecturer?: { title: string | null; department: string | null; snapshot: unknown };
 }): Promise<void> {
   await query(
     `UPDATE users
@@ -123,13 +123,12 @@ export async function refreshLinkedAccount(args: {
     await query(
       `UPDATE lecturer_profiles
           SET staff_number = $2, title = COALESCE($3, title), department = COALESCE($4, department),
-              faculty = COALESCE($5, faculty), erp_verified_at = NOW(), erp_snapshot = $6, updated_at = NOW(),
+              erp_verified_at = NOW(), erp_snapshot = $5, updated_at = NOW(),
               -- Only fills an empty department: once a lecturer is placed, by
               -- name or by an officer moving them, sign-in never moves them back.
               department_id = COALESCE(department_id, ${DEPARTMENT_BY_NAME('COALESCE($4, department)')})
         WHERE user_id = $1`,
-      [args.userId, args.number, args.lecturer.title, args.lecturer.department, args.lecturer.faculty,
-        JSON.stringify(args.lecturer.snapshot ?? null)],
+      [args.userId, args.number, args.lecturer.title, args.lecturer.department, JSON.stringify(args.lecturer.snapshot ?? null)],
     );
   }
 }

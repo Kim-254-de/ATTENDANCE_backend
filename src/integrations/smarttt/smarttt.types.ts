@@ -78,7 +78,6 @@ export interface SmartttStaffRecord {
   /** Lower-cased. Null until they have a SMARTTT account. */
   email: string | null;
   department: string | null;
-  faculty: string | null;
   title: string | null;
   isActive: boolean;
   raw: unknown;

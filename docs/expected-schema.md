@@ -26,7 +26,7 @@ and account status have a single home.
 | `email` | `varchar(255)` | **UNIQUE** — the registration race depends on this |
 | `password_hash` | `varchar(255)` | Argon2id. Never plaintext |
 | `full_name` | `varchar(160)` | |
-| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` · `FACULTY` (`021_departments.sql` and `022_faculty_role.sql` widened `users_role_check`) |
+| `role` | enum/text | `LECTURER` · `STUDENT` · `ADMIN` · `DEPARTMENT` · `MANAGEMENT` · `QA` (`039_no_faculties.sql` renamed `FACULTY` to `MANAGEMENT`) |
 | `status` | enum/text | See below |
 | `email_verified_at` | `timestamptz` null | |
 | `failed_login_attempts` | `integer` | Defaults to 0; used by sign-in throttling |
@@ -54,12 +54,11 @@ is itself proof of verification.
 | `staff_number` | `varchar(64)` | **UNIQUE** — stored uppercased |
 | `title` | `varchar(32)` null | From the ERP |
 | `department` | `varchar(160)` null | From the ERP |
-| `faculty` | `varchar(160)` null | From the ERP |
 | `phone` | `varchar(32)` null | Not set at registration |
 | `erp_staff_id` | `varchar(128)` null | The ERP's own key, for reconciliation |
 | `erp_verified_at` | `timestamptz` | Set to `NOW()` on insert |
 | `erp_snapshot` | `jsonb` null | Verbatim ERP payload — evidence for disputes |
-| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The lecturer's home department: who counts as a department's staff. `department` above stays the ERP/SMARTTT free text and is still written by every sync. Registration and SMARTTT sign-in fill this column by matching that text against `departments.name`, ignoring case and spaces, and only while it is null. Null means unassigned: nothing matched, and a faculty officer or administrator places the lecturer by hand (`lecturer.placement.ts`) |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`021_departments.sql`). The lecturer's home department: who counts as a department's staff. `department` above stays the ERP/SMARTTT free text and is still written by every sync. Registration and SMARTTT sign-in fill this column by matching that text against `departments.name`, ignoring case and spaces, and only while it is null. Null means unassigned: nothing matched, and an administrator places the lecturer by hand (`lecturer.placement.ts`) |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `student_profiles`
@@ -179,7 +178,7 @@ codes never add rows anywhere.
 | `students_without_group` | `integer` null | For a group: students registered for the unit who haven't picked a group in SMARTTT, so are on no group's roster |
 | `timetable_synced_at` | `timestamptz` null | Last time SMARTTT confirmed this unit for its lecturer |
 | `offering_id` | `uuid` null | FK -> `course_offerings(id)` (`023_course_offerings.sql`). Set when a department allocated a lecturer to this unit rather than SMARTTT syncing or reproducing it; null for every other unit. `base_code`/`class_group` above are set the same way either path fills them |
-| `department_id` | `uuid` null | FK -> `departments(id)` (`033_unit_owning_department.sql`). The department that owns the unit's curriculum, whoever teaches it. Every department, faculty and QA figure is scoped by it. Set from the offering on allocation. Otherwise trigger `units_default_department` copies the lecturer's department on insert, and trigger `lecturer_department_claims_units` fills it in when an unassigned lecturer gets a department. Moving a lecturer does not change it |
+| `department_id` | `uuid` null | FK -> `departments(id)` (`033_unit_owning_department.sql`). The department that owns the unit's curriculum, whoever teaches it. Every department, management and QA figure is scoped by it. Set from the offering on allocation. Otherwise trigger `units_default_department` copies the lecturer's department on insert, and trigger `lecturer_department_claims_units` fills it in when an unassigned lecturer gets a department. Moving a lecturer does not change it |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `attendance_sessions`
@@ -412,24 +411,13 @@ Created by `db/migrations/021_departments.sql`. See
 for printing on a profile, but nothing can be *scoped* to a department that
 way, since two spellings of one department are two departments. Both tables are
 backfilled from the distinct values the ERP had already written, and the
-free-text `lecturer_profiles.department` / `.faculty` columns stay: the ERP sync
-still writes them on every registration and profile refresh.
+free-text `lecturer_profiles.department` column stays: the ERP sync
+still writes it on every registration and profile refresh.
 
 This migration gave `units` no `department_id`: a unit's department was its
 lecturer's. `033_unit_owning_department.sql` reverses that. A unit now belongs
 to the department that owns its curriculum (`units.department_id`), so service
 teaching and borrowed lecturers count under the owning department.
-
-### `faculties`
-
-The level above a department, and since `022_faculty_role.sql` a scope of its
-own — see `faculty_profiles` below.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | Primary key |
-| `name` | `varchar(160)` | **UNIQUE** — what the backfill keys on |
-| `created_at` / `updated_at` | `timestamptz` | |
 
 ### `departments`
 
@@ -437,7 +425,8 @@ own — see `faculty_profiles` below.
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `name` | `varchar(160)` | **UNIQUE**. Matched against `lecturer_profiles.department` by the backfill |
-| `faculty_id` | `uuid` null | FK -> `faculties(id)`. Null when the ERP named a department but no faculty |
+| `code` | `varchar(32)` null | Unique across the university, case-insensitive (`departments_code_key`). How the Timetable Allocator and Generator know the department. Set by the administrator who creates it, or from SMARTTT's by the directory sync. Null only for a department made before codes existed (`039_no_faculties.sql`) |
+| `smarttt_department_id` | `integer` null | SMARTTT's id (`037_smarttt_directory.sql`); null for one only here |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 ### `department_profiles`
@@ -460,42 +449,20 @@ request rather than trusting the session's cached account.
 | `created_at` / `updated_at` | `timestamptz` | |
 
 Indexes: `lecturer_profiles(department_id)` (a department's staff),
-`units(department_id)` (a department's teaching), `departments(faculty_id)` and
+`units(department_id)` (a department's teaching), `departments(upper(code))` and
 `department_profiles(department_id)`.
 
----
-
-## Tables the faculty module touches
-
-Created by `db/migrations/022_faculty_role.sql`. See
-[`src/modules/faculty/README.md`](../src/modules/faculty/README.md).
-
-### `faculty_profiles`
-
-One faculty officer — the person with read-only oversight of every
-department in one faculty. Mirrors `department_profiles` one level up, same
-reasoning throughout: no ERP record to verify an officer against, so
-provisioned directly (`scripts/dev-seed-faculty.mjs` locally), no
-self-registration.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | Primary key |
-| `user_id` | `uuid` | **UNIQUE**, FK -> `users(id)` (role `FACULTY`) ON DELETE CASCADE |
-| `faculty_id` | `uuid` | FK -> `faculties(id)`. The only scope this officer may read |
-| `title` | `varchar(32)` null | |
-| `phone` | `varchar(32)` null | |
-| `created_at` / `updated_at` | `timestamptz` | |
-
-Index: `faculty_profiles(faculty_id)`.
+Faculties played no part in timetabling or attendance, so `039_no_faculties.sql`
+dropped `faculties`, `faculty_profiles`, `departments.faculty_id` and
+`lecturer_profiles.faculty`.
 
 ---
 
 ## Tables the course-provisioning write endpoints touch
 
 Created by `db/migrations/023_course_offerings.sql`. How this university
-actually fills a class: faculty provides a course to a department (manually
-— no ERP check, faculty is the authority), the department decides how many
+actually fills a class: a course is provided to a department (manually
+— no ERP check), the department decides how many
 lecturer-taught sections it needs and allocates its own lecturers to them.
 Allocating is the moment a real `units` row appears — see `units.offering_id`
 above — reusing the same `base_code`/`class_group` split-unit mechanism
@@ -513,8 +480,8 @@ so this table is where the "not yet assigned" state actually lives.
 | `code` | `varchar(32)` | **UNIQUE**, same format as `units.code` — becomes one directly, or `units.base_code` once split |
 | `name` | `varchar(200)` null | |
 | `department_id` | `uuid` | FK -> `departments(id)`. Who is offering it |
-| `segments_planned` | `integer` | 1–26 (CHECK constraint), `GR A`..`GR Z`. The department's call, not the faculty's — defaults to 1 |
-| `created_by_user_id` | `uuid` null | The faculty officer who provided it. Traceability only; no query is scoped by it |
+| `segments_planned` | `integer` | 1–26 (CHECK constraint), `GR A`..`GR Z`. The department's call — defaults to 1 |
+| `created_by_user_id` | `uuid` null | Who provided it. Traceability only; no query is scoped by it |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 Index: `course_offerings(department_id)`.
@@ -523,11 +490,11 @@ Index: `course_offerings(department_id)`.
 
 ## Tables the invitation flow touches
 
-Administrators, faculty officers and department officers are invited, never
+Administrators, management, department and QA officers are invited, never
 self-registered (`src/modules/auth/auth.invitation.ts`). The invited `users`
 row is created at once with status `PENDING_VERIFICATION` and a password hash
-nothing matches (`'!'`), plus its `faculty_profiles` / `department_profiles`
-row; accepting the emailed link sets the password and makes it `ACTIVE`.
+nothing matches (`'!'`), plus its `department_profiles` / `qa_profiles`
+row (management needs none); accepting the emailed link sets the password and makes it `ACTIVE`.
 
 ### `account_invitations`
 
@@ -551,15 +518,15 @@ Index: `account_invitations(user_id, created_at DESC)`.
 Created by `db/migrations/027_qa_role.sql` through `032_qa_corrective_actions.sql`.
 See [`src/modules/quality-assurance/README.md`](../src/modules/quality-assurance/README.md).
 Internal Quality Assurance (IQA): a standards catalog, checklist-driven
-internal audits against a department or faculty, findings against each
+internal audits against a department, findings against each
 checklist item, and corrective action plans (CAPA) tracked to verified
 closure. External Quality Assurance (EQA) bodies get no account in this
 phase — they only ever see what IQA exports as PDF/CSV.
 
 ### `qa_profiles`
 
-One QA officer. Unlike `department_profiles`/`faculty_profiles` this has no
-department/faculty FK — a QA officer's remit is the whole institution, so
+One QA officer. Unlike `department_profiles` this has no
+department FK — a QA officer's remit is the whole institution, so
 every list endpoint in the module takes explicit filters instead of being
 auto-scoped. No ERP record to verify against, so provisioned directly
 (`scripts/dev-seed-qa.mjs` locally), no self-registration.
@@ -618,19 +585,17 @@ Indexes: `qa_checklist_items(template_id)`, `qa_checklist_items(standard_id)`.
 
 ### `qa_audits`
 
-One internal audit of a department or faculty, against one checklist
-template. `audit_type` is CHECK'd to `'INTERNAL'` only for now — the column
-exists so a later phase can add `'EQA'` without a schema change. Exactly one
-of `target_department_id`/`target_faculty_id` is set (`CHECK
-(num_nonnulls(...) = 1)`).
+One internal audit of a department, against one checklist template.
+`audit_type` is CHECK'd to `'INTERNAL'` only for now — the column exists so a
+later phase can add `'EQA'` without a schema change. Audits of a faculty were
+deleted with the faculties (`039_no_faculties.sql`).
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `uuid` | Primary key |
 | `title` | `varchar(200)` | |
 | `audit_type` | `varchar(16)` | CHECK: `INTERNAL` (only value so far) |
-| `target_department_id` | `uuid` null | FK -> `departments(id)`. Exactly one of this/`target_faculty_id` is set |
-| `target_faculty_id` | `uuid` null | FK -> `faculties(id)` |
+| `target_department_id` | `uuid` | FK -> `departments(id)` |
 | `checklist_template_id` | `uuid` | FK -> `qa_checklist_templates(id)` |
 | `lead_auditor_user_id` | `uuid` | FK -> `users(id)` |
 | `scheduled_date` | `date` | |
@@ -640,7 +605,7 @@ of `target_department_id`/`target_faculty_id` is set (`CHECK
 | `created_by_user_id` | `uuid` null | FK -> `users(id)` ON DELETE SET NULL |
 | `created_at` / `updated_at` | `timestamptz` | |
 
-Indexes: `qa_audits(target_department_id)`, `qa_audits(target_faculty_id)`,
+Indexes: `qa_audits(target_department_id)`,
 `qa_audits(lead_auditor_user_id)`, `qa_audits(status)`, `qa_audits(scheduled_date)`.
 
 ### `qa_audit_findings`
@@ -677,7 +642,7 @@ officer, never from the request body.
 | `id` | `uuid` | Primary key |
 | `finding_id` | `uuid` | FK -> `qa_audit_findings(id)` ON DELETE CASCADE |
 | `description` | `text` | |
-| `owner_user_id` | `uuid` | FK -> `users(id)`. Typically the audited department/faculty officer |
+| `owner_user_id` | `uuid` | FK -> `users(id)`. Typically the audited department's officer |
 | `due_date` | `date` | |
 | `status` | `varchar(16)` | CHECK: `OPEN`, `IN_PROGRESS`, `VERIFIED`, `CLOSED`. Forward-only transitions |
 | `verified_by_user_id` | `uuid` null | FK -> `users(id)`. Set iff `status IN ('VERIFIED','CLOSED')` |

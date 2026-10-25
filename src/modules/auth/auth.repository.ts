@@ -48,7 +48,6 @@ export interface CreateLecturerArgs {
   erpSnapshot: unknown;
   title: string | null;
   department: string | null;
-  faculty: string | null;
 }
 
 export interface CreatedLecturer {
@@ -75,8 +74,8 @@ export interface CreatedLecturer {
  * (`db/migrations/036_department_spelling.sql`) matches on a canonical form
  * of the name ("Dept. of Comp. Sci" = "Computer Science"), then on spellings
  * learned from earlier placements and merges. NULL when nothing matches: the
- * lecturer stays unassigned (and is listed as such for a faculty officer or
- * administrator to place), rather than a department being invented from
+ * lecturer stays unassigned (and is listed as such for an administrator
+ * to place), rather than a department being invented from
  * whatever spelling SMARTTT used. Cast to varchar because the same parameter
  * is also written to the varchar `department` column, and Postgres refuses
  * two types for one parameter.
@@ -110,14 +109,13 @@ export async function createLecturerAccount(
 
     await query(
       `INSERT INTO lecturer_profiles
-         (user_id, staff_number, title, department, faculty, erp_staff_id, erp_verified_at, erp_snapshot, department_id)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, ${DEPARTMENT_BY_NAME('$4')})`,
+         (user_id, staff_number, title, department, erp_staff_id, erp_verified_at, erp_snapshot, department_id)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, ${DEPARTMENT_BY_NAME('$4')})`,
       [
         user.id,
         args.staffNumber,
         args.title,
         args.department,
-        args.faculty,
         args.erpStaffId,
         // jsonb column: pg serialises an object, so the payload is stored as
         // JSON rather than as the string "[object Object]".

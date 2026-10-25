@@ -92,7 +92,7 @@ try {
       `INSERT INTO qa_checklist_templates (name, description, created_by_user_id)
        VALUES ($1, $2, $3)
        RETURNING id`,
-      [DEFAULT_TEMPLATE_NAME, 'One checklist item per standard, for a routine department/faculty audit.', officer.id],
+      [DEFAULT_TEMPLATE_NAME, 'One checklist item per standard, for a routine department audit.', officer.id],
     ));
   }
 

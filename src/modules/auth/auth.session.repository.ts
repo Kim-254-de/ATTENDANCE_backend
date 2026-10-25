@@ -43,18 +43,16 @@ export interface DepartmentOfficerPublic {
   status: AccountStatus;
 }
 
-/** What the portal shows about a signed-in faculty officer — the same idea as a department officer, one level up. */
-export interface FacultyOfficerPublic {
+/** A signed-in member of management: attendance across the whole university, read-only. No scope of its own. */
+export interface ManagementPublic {
   id: string;
-  role: 'faculty';
+  role: 'management';
   fullName: string;
   email: string;
-  facultyId: string;
-  facultyName: string;
   status: AccountStatus;
 }
 
-/** A signed-in administrator: invites faculty officers and other administrators (src/modules/admin). No scope of its own. */
+/** A signed-in administrator: invites officers and creates departments (src/modules/admin). No scope of its own. */
 export interface AdminPublic {
   id: string;
   role: 'admin';
@@ -64,7 +62,7 @@ export interface AdminPublic {
 }
 
 /**
- * What the portal shows about a signed-in QA officer. No department/faculty
+ * What the portal shows about a signed-in QA officer. No department
  * id — a QA officer's remit is the whole institution, so unlike the other
  * officer roles there is nothing org-unit-scoped to resolve here.
  */
@@ -82,7 +80,7 @@ export type AccountPublic =
   | LecturerPublic
   | StudentPublic
   | DepartmentOfficerPublic
-  | FacultyOfficerPublic
+  | ManagementPublic
   | AdminPublic
   | QaOfficerPublic;
 
@@ -102,7 +100,7 @@ export const toStudentPublic = (c: {
 
 export interface LoginCandidate {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN' | 'QA';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA';
   email: string;
   fullName: string;
   passwordHash: string;
@@ -115,7 +113,7 @@ export interface LoginCandidate {
 
 interface LoginRow {
   id: string;
-  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY' | 'ADMIN' | 'QA';
+  role: 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT' | 'ADMIN' | 'QA';
   email: string;
   full_name: string;
   password_hash: string;
@@ -130,8 +128,6 @@ interface LoginRow {
   year_of_study: number | null;
   department_id: string | null;
   department_name: string | null;
-  faculty_id: string | null;
-  faculty_name: string | null;
   has_qa_profile: boolean;
   qa_title: string | null;
 }
@@ -142,8 +138,7 @@ function accountFrom(row: {
   staff_number: string | null; title: string | null; department: string | null;
   registration_number: string | null; programme: string | null; year_of_study: number | null;
   department_id: string | null; department_name: string | null;
-  faculty_id: string | null; faculty_name: string | null;
-  has_qa_profile: boolean; qa_title: string | null;
+    has_qa_profile: boolean; qa_title: string | null;
 }): AccountPublic | null {
   if (row.role === 'LECTURER' && row.staff_number) {
     return toLecturerPublic({
@@ -163,11 +158,8 @@ function accountFrom(row: {
       departmentId: row.department_id, departmentName: row.department_name, status: row.status,
     });
   }
-  if (row.role === 'FACULTY' && row.faculty_id) {
-    return toFacultyOfficerPublic({
-      id: row.id, fullName: row.full_name, email: row.email,
-      facultyId: row.faculty_id, facultyName: row.faculty_name, status: row.status,
-    });
+  if (row.role === 'MANAGEMENT') {
+    return { id: row.id, role: 'management', fullName: row.full_name, email: row.email, status: row.status };
   }
   if (row.role === 'ADMIN') {
     return { id: row.id, role: 'admin', fullName: row.full_name, email: row.email, status: row.status };
@@ -207,19 +199,6 @@ export const toDepartmentOfficerPublic = (c: {
   status: c.status,
 });
 
-export const toFacultyOfficerPublic = (c: {
-  id: string; fullName: string; email: string; facultyId: string; facultyName: string | null;
-  status: AccountStatus;
-}): FacultyOfficerPublic => ({
-  id: c.id,
-  role: 'faculty',
-  fullName: c.fullName,
-  email: c.email,
-  facultyId: c.facultyId,
-  facultyName: c.facultyName ?? '',
-  status: c.status,
-});
-
 export const toQaOfficerPublic = (c: {
   id: string; fullName: string; email: string; title: string | null; status: AccountStatus;
 }): QaOfficerPublic => ({
@@ -253,17 +232,14 @@ async function findLoginCandidate(where: string, value: string): Promise<LoginCa
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
             dp.department_id, d.name AS department_name,
-            fp.faculty_id, fac.name AS faculty_name,
             (qp.user_id IS NOT NULL) AS has_qa_profile, qp.title AS qa_title
        FROM users u
   LEFT JOIN lecturer_profiles   p   ON p.user_id = u.id
   LEFT JOIN student_profiles    sp  ON sp.user_id = u.id
   LEFT JOIN department_profiles dp  ON dp.user_id = u.id
   LEFT JOIN departments         d   ON d.id = dp.department_id
-  LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
-  LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
   LEFT JOIN qa_profiles         qp  ON qp.user_id = u.id
-      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'FACULTY', 'ADMIN', 'QA')
+      WHERE u.role IN ('LECTURER', 'STUDENT', 'DEPARTMENT', 'MANAGEMENT', 'ADMIN', 'QA')
         AND u.deleted_at IS NULL
         AND ${where}
       ORDER BY u.role
@@ -352,7 +328,7 @@ export interface LiveSession {
   lecturer: LecturerPublic | null;
   student: StudentPublic | null;
   department: DepartmentOfficerPublic | null;
-  faculty: FacultyOfficerPublic | null;
+  management: ManagementPublic | null;
   admin: AdminPublic | null;
   qa: QaOfficerPublic | null;
 }
@@ -365,15 +341,13 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
     email: string; full_name: string; staff_number: string | null; title: string | null; department: string | null;
     registration_number: string | null; programme: string | null; year_of_study: number | null;
     department_id: string | null; department_name: string | null;
-    faculty_id: string | null; faculty_name: string | null;
-    has_qa_profile: boolean; qa_title: string | null;
+        has_qa_profile: boolean; qa_title: string | null;
   }>(
     `SELECT s.id, s.user_id, s.refresh_token_hash, s.expires_at, s.revoked_at,
             u.role, u.status, u.deleted_at, u.email, u.full_name,
             p.staff_number, p.title, p.department,
             sp.registration_number, sp.programme, sp.year_of_study,
             dp.department_id, d.name AS department_name,
-            fp.faculty_id, fac.name AS faculty_name,
             (qp.user_id IS NOT NULL) AS has_qa_profile, qp.title AS qa_title
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
@@ -381,8 +355,6 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
   LEFT JOIN student_profiles    sp  ON sp.user_id = u.id
   LEFT JOIN department_profiles dp  ON dp.user_id = u.id
   LEFT JOIN departments         d   ON d.id = dp.department_id
-  LEFT JOIN faculty_profiles    fp  ON fp.user_id = u.id
-  LEFT JOIN faculties           fac ON fac.id = fp.faculty_id
   LEFT JOIN qa_profiles         qp  ON qp.user_id = u.id
       WHERE s.id = $1`,
     [sessionId],
@@ -402,7 +374,7 @@ export async function findSession(sessionId: string): Promise<LiveSession | null
         lecturer: account?.role === 'lecturer' ? account : null,
         student: account?.role === 'student' ? account : null,
         department: account?.role === 'department' ? account : null,
-        faculty: account?.role === 'faculty' ? account : null,
+        management: account?.role === 'management' ? account : null,
         admin: account?.role === 'admin' ? account : null,
         qa: account?.role === 'qa' ? account : null,
       };

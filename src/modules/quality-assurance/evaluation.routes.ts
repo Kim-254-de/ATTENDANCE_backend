@@ -18,8 +18,8 @@ import {
 
 /**
  * Student course evaluation rounds, QA's side. Every route is gated to the QA
- * role. Students answer through /students/me/evaluations; department and
- * faculty officers read their own results under /departments and /faculties.
+ * role. Students answer through /students/me/evaluations; department
+ * officers read their own results under /departments.
  *
  * GET    /                list rounds
  * POST   /                create a round with its questions
@@ -27,7 +27,7 @@ import {
  * PATCH  /:id             change details; questions only until someone answers (409)
  * POST   /:id/close       end it now
  * DELETE /:id             only before anyone answers (409)
- * GET    /:id/results     `?departmentId=&facultyId=`
+ * GET    /:id/results     `?departmentId=`
  */
 export const evaluationRouter: Router = Router();
 
@@ -90,7 +90,7 @@ evaluationRouter.get(
   asyncHandler(requireAuth('QA')),
   validate({ params: roundIdParamSchema, query: resultsQuerySchema }),
   asyncHandler(async (req: Request, res: Response) => {
-    const { departmentId, facultyId } = req.query as unknown as ResultsQuery;
-    sendSuccess(res, await evaluationService.getResults(roundId(req), { departmentId, facultyId }, { allowUnstarted: true }));
+    const { departmentId } = req.query as unknown as ResultsQuery;
+    sendSuccess(res, await evaluationService.getResults(roundId(req), { departmentId }, { allowUnstarted: true }));
   }),
 );

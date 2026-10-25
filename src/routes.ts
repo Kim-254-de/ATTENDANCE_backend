@@ -7,7 +7,7 @@ import { attendanceRouter } from './modules/attendance/index.js';
 import { reportingRouter } from './modules/reporting/index.js';
 import { studentRouter } from './modules/student/index.js';
 import { departmentRouter } from './modules/department/index.js';
-import { facultyRouter } from './modules/faculty/index.js';
+import { managementRouter } from './modules/management/index.js';
 import { integrationRouter } from './modules/integration/index.js';
 import { verificationRouter } from './modules/verification/index.js';
 import { adminRouter } from './modules/admin/index.js';
@@ -23,8 +23,8 @@ import { attendancePolicyRouter } from './modules/eligibility/index.js';
  *   /lecturers   - profile management          (lecturer module)
  *   /reports     - summaries and exports       (reporting module)
  *   /departments - department-wide oversight   (department module)
- *   /faculties   - faculty-wide oversight      (faculty module)
- *   /admin       - faculties and invitations   (admin module)
+ *   /management  - university-wide attendance  (management module)
+ *   /admin       - departments and invitations (admin module)
  *   /quality-assurance - standards, audits, CAPA (quality-assurance module)
  *   /attendance-policy - minimum attendance to sit exams (eligibility module)
  */
@@ -43,7 +43,7 @@ apiRouter.use('/departments/terminals', departmentTerminalRouter);
 apiRouter.use('/departments/enrolment', departmentEnrolmentRouter);
 apiRouter.use('/departments', departmentRouter);
 apiRouter.use('/terminals', terminalRouter);
-apiRouter.use('/faculties', facultyRouter);
+apiRouter.use('/management', managementRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/quality-assurance', qaRouter);
 apiRouter.use('/attendance-policy', attendancePolicyRouter);

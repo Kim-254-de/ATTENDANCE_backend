@@ -11,8 +11,8 @@ const fake = (...parts: string[]) => parts.join('');
 
 /**
  * Account deletion (auth.deletion.ts) against a real Postgres database: a
- * student or lecturer deleting their own account, and department and faculty
- * officers deleting accounts in their scope. Deleting anonymises; these tests
+ * student or lecturer deleting their own account, and department officers
+ * deleting accounts in their department. Deleting anonymises; these tests
  * check both what goes and what has to stay for the attendance figures.
  */
 const TEST_DB = 'attendance_account_deletion_test';
@@ -27,7 +27,7 @@ let passwordHash: string;
 
 const uniq = (() => { let n = 0; return () => ++n; })();
 
-type Role = 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'FACULTY';
+type Role = 'LECTURER' | 'STUDENT' | 'DEPARTMENT' | 'MANAGEMENT';
 
 /** A signed-in user with a real password, as a bearer token. */
 async function makeUser(role: Role, fullName: string) {
@@ -44,9 +44,9 @@ async function makeUser(role: Role, fullName: string) {
   return { id: u!.id, auth: `Bearer ${await signAccessToken({ userId: u!.id, sessionId, role })}` };
 }
 
-async function makeDepartment(name: string, facultyId: string): Promise<string> {
+async function makeDepartment(name: string): Promise<string> {
   const { rows: [d] } = await pool.query<{ id: string }>(
-    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id`, [name, facultyId]);
+    `INSERT INTO departments (name) VALUES ($1) RETURNING id`, [name]);
   return d!.id;
 }
 
@@ -100,10 +100,8 @@ const api = (auth: string) => ({
   delete: (path: string, data?: object) => request(app).delete(`/api/v1${path}`).set('Authorization', auth).send(data),
 });
 
-let facultyId: string;
 let deptA: string;
 let deptB: string;
-let otherFacultyDept: string;
 
 beforeAll(async () => {
   const admin = new pg.Client({ connectionString: adminUrl.toString() });
@@ -122,12 +120,8 @@ beforeAll(async () => {
   app = (await import('../../src/app.js')).createApp();
   passwordHash = await (await import('../../src/common/utils/password.js')).hashPassword(PASSWORD);
 
-  const { rows: [f1] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Science') RETURNING id`);
-  const { rows: [f2] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ('Arts') RETURNING id`);
-  facultyId = f1!.id;
-  deptA = await makeDepartment('Computing', facultyId);
-  deptB = await makeDepartment('Mathematics', facultyId);
-  otherFacultyDept = await makeDepartment('History', f2!.id);
+  deptA = await makeDepartment('Computing');
+  deptB = await makeDepartment('Mathematics');
 }, 60_000);
 
 afterAll(async () => {
@@ -142,12 +136,6 @@ afterAll(async () => {
 async function departmentOfficer(departmentId: string) {
   const officer = await makeUser('DEPARTMENT', 'Dept Officer');
   await pool.query(`INSERT INTO department_profiles (user_id, department_id) VALUES ($1, $2)`, [officer.id, departmentId]);
-  return officer;
-}
-
-async function facultyOfficer(id: string) {
-  const officer = await makeUser('FACULTY', 'Faculty Officer');
-  await pool.query(`INSERT INTO faculty_profiles (user_id, faculty_id) VALUES ($1, $2)`, [officer.id, id]);
   return officer;
 }
 
@@ -291,20 +279,12 @@ describe('DELETE /departments/…', () => {
   });
 });
 
-describe('DELETE /faculties/…', () => {
-  it('deletes lecturers and students across its departments, and nobody outside it', async () => {
-    const officer = await facultyOfficer(facultyId);
+describe('management', () => {
+  it('cannot delete anyone: the faculty routes are gone and management is read-only', async () => {
+    const officer = await makeUser('MANAGEMENT', 'Management');
     const lecturer = await makeLecturer(deptB);
-    const student = await makeStudent(lecturer.unitId, lecturer.id);
-    const outsider = await makeLecturer(otherFacultyDept);
-    const outsideStudent = await makeStudent(outsider.unitId, outsider.id);
-
-    expect((await api(officer.auth).delete(`/faculties/students/${student.id}`)).status).toBe(204);
-    expect((await api(officer.auth).delete(`/faculties/lecturers/${lecturer.id}`)).status).toBe(204);
-    expect((await userRow(student.id)).deleted_at).not.toBeNull();
-    expect((await userRow(lecturer.id)).deleted_at).not.toBeNull();
-
-    expect((await api(officer.auth).delete(`/faculties/lecturers/${outsider.id}`)).status).toBe(404);
-    expect((await api(officer.auth).delete(`/faculties/students/${outsideStudent.id}`)).status).toBe(404);
+    expect((await api(officer.auth).delete(`/faculties/lecturers/${lecturer.id}`)).status).toBe(404);
+    expect((await api(officer.auth).delete(`/departments/lecturers/${lecturer.id}`)).status).toBe(403);
+    expect((await userRow(lecturer.id)).deleted_at).toBeNull();
   });
 });

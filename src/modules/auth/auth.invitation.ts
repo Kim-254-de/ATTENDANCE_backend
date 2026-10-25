@@ -12,21 +12,17 @@ import type { RegistrationContext } from './auth.service.js';
 import { smartttAccountsEnabled } from './auth.smarttt.js';
 
 /**
- * Accounts nobody registers themselves: administrators, faculty officers and
- * department officers. There is nothing to verify such a person against (no
- * ERP staff record, no SMARTTT account), so whoever manages them vouches for
- * them by inviting them:
- *
- *   administrator    invites administrators and faculty officers  (src/modules/admin)
- *   faculty officer  invites department officers in its faculty   (src/modules/faculty)
+ * Accounts nobody registers themselves: administrators, management,
+ * department officers and QA officers. There is nothing to verify such a
+ * person against (no ERP staff record, no SMARTTT account), so an
+ * administrator vouches for them by inviting them (src/modules/admin).
  *
  * The invitation creates the account at once, scoped and PENDING_VERIFICATION
  * with no usable password, and emails a single-use link. Following it, the
  * invitee chooses their own password and the account becomes ACTIVE. No
  * password is ever chosen, seen or sent by anyone else.
  *
- * Callers check scope (may this person invite into that faculty?) before
- * calling in; nothing here knows who may manage whom.
+ * Callers check who may invite whom before calling in.
  */
 
 export interface Inviter {
@@ -42,7 +38,7 @@ export interface InvitationResult {
 
 const ROLE_LABEL: Record<InvitedRole, string> = {
   ADMIN: 'an administrator',
-  FACULTY: 'faculty officer',
+  MANAGEMENT: 'a member of management',
   DEPARTMENT: 'department officer',
   QA: 'quality assurance officer',
 };
@@ -68,7 +64,7 @@ const ADMINS_IN_SMARTTT =
 /**
  * With SMARTTT accounts on, administrators are SMARTTT's administrators
  * (auth.smarttt.ts signInAdministrator): none is invited, re-invited or set
- * up with a password here. Faculty and department officers still are.
+ * up with a password here. Management, department and QA officers still are.
  */
 function assertInvitable(role: string): void {
   if (role === 'ADMIN' && smartttAccountsEnabled()) {
@@ -151,7 +147,7 @@ export async function resend(officer: OfficerRow, inviter: Inviter, context: Reg
     fullName: officer.fullName,
     token: token.token,
     role: officer.role,
-    scopeName: officer.departmentName ?? officer.facultyName,
+    scopeName: officer.departmentName,
     inviter,
   });
   return { userId: officer.userId, emailSent };
@@ -272,8 +268,6 @@ export const officerDto = (r: OfficerRow) => ({
   fullName: r.fullName,
   email: r.email,
   status: r.status,
-  facultyId: r.facultyId,
-  facultyName: r.facultyName,
   departmentId: r.departmentId,
   departmentName: r.departmentName,
   invitedAt: r.invitedAt?.toISOString() ?? null,

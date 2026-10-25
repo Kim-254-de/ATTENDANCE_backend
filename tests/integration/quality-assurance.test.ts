@@ -45,14 +45,9 @@ async function makeQaOfficer(fullName: string) {
   return user;
 }
 
-async function makeFaculty(name: string): Promise<string> {
-  const { rows: [f] } = await pool.query<{ id: string }>(`INSERT INTO faculties (name) VALUES ($1) RETURNING id`, [name]);
-  return f!.id;
-}
-
-async function makeDepartment(name: string, facultyId: string | null): Promise<string> {
+async function makeDepartment(name: string, code: string | null = null): Promise<string> {
   const { rows: [d] } = await pool.query<{ id: string }>(
-    `INSERT INTO departments (name, faculty_id) VALUES ($1, $2) RETURNING id`, [name, facultyId]);
+    `INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [name, code]);
   return d!.id;
 }
 
@@ -122,9 +117,8 @@ let fx: Fixture;
 async function seed(): Promise<Fixture> {
   const qa = await makeQaOfficer('QA Officer');
 
-  const facultyId = await makeFaculty('Faculty of Science and Technology');
   const departmentName = 'Department of Computer Science';
-  const departmentId = await makeDepartment(departmentName, facultyId);
+  const departmentId = await makeDepartment(departmentName, 'DCS');
   const lecturer = await makeLecturer('Dr. Reviewed', departmentId);
 
   const unit = await makeUnit('CSC 101', lecturer.id);
@@ -267,7 +261,7 @@ describe('checklist templates and items', () => {
 });
 
 describe('audits and findings', () => {
-  it('requires exactly one of targetDepartmentId/targetFacultyId', async () => {
+  it('requires the department to audit, and refuses a faculty', async () => {
     const neither = await api(fx.qa.auth).post('/quality-assurance/audits', {
       title: 'Bad audit',
       checklistTemplateId: fx.templateId,
@@ -275,6 +269,15 @@ describe('audits and findings', () => {
       scheduledDate: '2026-01-01',
     });
     expect(neither.status).toBe(400);
+    const faculty = await api(fx.qa.auth).post('/quality-assurance/audits', {
+      title: 'Faculty audit',
+      targetFacultyId: fx.departmentId,
+      checklistTemplateId: fx.templateId,
+      leadAuditorUserId: fx.qa.id,
+      scheduledDate: '2026-01-01',
+    });
+    expect(faculty.status).toBe(400);
+    expect((await api(fx.qa.auth).get('/quality-assurance/faculties')).status).toBe(404);
   });
 
   it('runs a full audit lifecycle: create, fill checklist, complete, gated by missing findings', async () => {

@@ -28,7 +28,7 @@ import type { RegistrationContext } from './auth.service.js';
  * created or linked on first sign-in. Steps 2 and 4 still apply to it, and a
  * wrong password still counts towards the lock. So do administrators, who
  * are SMARTTT's administrators (the one admin console for the platform).
- * Department and faculty officers, who are not in SMARTTT, keep the password
+ * Department officers and management, who are not in SMARTTT, keep the password
  * check below.
  */
 
@@ -182,7 +182,7 @@ export async function refreshSession(refreshToken: string | null, context: Regis
   const session = await repo.findSession(claims.sessionId);
   if (!session || session.userId !== claims.userId || session.revokedAt || session.expiresAt <= new Date()) throw denied;
   // Every role that signs in must be able to stay signed in past the access token's lifetime.
-  const account = session.lecturer ?? session.student ?? session.department ?? session.faculty ?? session.admin;
+  const account = session.lecturer ?? session.student ?? session.department ?? session.management ?? session.admin;
   if (session.status !== 'ACTIVE' || !account) throw denied;
 
   const presentedHash = sessions.hashRefreshToken(refreshToken);

@@ -42,7 +42,7 @@ function stubFetch() {
       if (!entry) return Promise.resolve(new Response('{}', { status: 404 }));
       return Promise.resolve(Response.json({
         staff_number: number, full_name: entry.full_name, email: null, department: entry.department ?? null,
-        faculty: null, title: null, has_account: false, is_active: true,
+        title: null, has_account: false, is_active: true,
       }));
     }
     const staffNumber = decodeURIComponent(url.pathname.split('/staff/')[1] ?? '');

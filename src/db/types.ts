@@ -13,8 +13,8 @@ export const UserRole = {
   ADMIN: 'ADMIN',
   /** A department officer: read-only oversight of one department's teaching (db/migrations/021_departments.sql). */
   DEPARTMENT: 'DEPARTMENT',
-  /** A faculty officer: read-only oversight of every department in one faculty (db/migrations/022_faculty_role.sql). */
-  FACULTY: 'FACULTY',
+  /** Management: read-only attendance across every department in the university (db/migrations/039_no_faculties.sql). */
+  MANAGEMENT: 'MANAGEMENT',
   /** A quality-assurance officer: institution-wide audits, findings and corrective actions (db/migrations/027_qa_role.sql). */
   QA: 'QA',
 } as const;
@@ -137,7 +137,7 @@ export const AuditAction = {
   ACCOUNT_STATUS_CHANGED: 'ACCOUNT_STATUS_CHANGED',
   /** A student or lecturer account was anonymised and closed (auth.deletion.ts), by its owner or an officer. */
   ACCOUNT_DELETED: 'ACCOUNT_DELETED',
-  /** An administrator, faculty officer or department officer was invited (auth.invitation.ts). */
+  /** An administrator, member of management, department or QA officer was invited (auth.invitation.ts). */
   OFFICER_INVITED: 'OFFICER_INVITED',
   /** The invitation email was sent again, with a new link. */
   OFFICER_INVITATION_RESENT: 'OFFICER_INVITATION_RESENT',
@@ -145,8 +145,9 @@ export const AuditAction = {
   OFFICER_INVITATION_ACCEPTED: 'OFFICER_INVITATION_ACCEPTED',
   /** An officer's access was removed by whoever manages them. */
   OFFICER_DEACTIVATED: 'OFFICER_DEACTIVATED',
-  FACULTY_CREATED: 'FACULTY_CREATED',
-  /** A faculty officer or administrator placed a lecturer in a department, or moved them (lecturer.placement.ts). */
+  /** An administrator created a department (in SMARTTT, then here). */
+  DEPARTMENT_CREATED: 'DEPARTMENT_CREATED',
+  /** An administrator placed a lecturer in a department, or moved them (lecturer.placement.ts). */
   LECTURER_DEPARTMENT_CHANGED: 'LECTURER_DEPARTMENT_CHANGED',
   /** An administrator folded a duplicate department into another; its name became an alias. */
   DEPARTMENTS_MERGED: 'DEPARTMENTS_MERGED',
@@ -211,7 +212,7 @@ export const AuditAction = {
   ATTENDANCE_FACE_NOT_MATCHED: 'ATTENDANCE_FACE_NOT_MATCHED',
   /** An administrator used one of SMARTTT's admin functions from the admin console (method, path, SMARTTT's answer). */
   SMARTTT_ADMIN_ACTION: 'SMARTTT_ADMIN_ACTION',
-  /** Faculties and departments were brought in line with SMARTTT, which owns them. */
+  /** Departments were brought in line with SMARTTT, which owns them. */
   DIRECTORY_SYNCED: 'DIRECTORY_SYNCED',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
@@ -282,7 +283,6 @@ export interface LecturerProfileRow {
   staff_number: string;
   title: string | null;
   department: string | null;
-  faculty: string | null;
   phone: string | null;
   erp_staff_id: string | null;
   erp_verified_at: Date;
@@ -296,19 +296,13 @@ export interface LecturerProfileRow {
   updated_at: Date;
 }
 
-/** A row of `faculties`. The level above a department. */
-export interface FacultyRow {
-  id: string;
-  name: string;
-  created_at: Date;
-  updated_at: Date;
-}
-
-/** A row of `departments`. `faculty_id` is null for a department the ERP named no faculty for. */
+/** A row of `departments`. Faculties play no part (039_no_faculties.sql). */
 export interface DepartmentRow {
   id: string;
   name: string;
-  faculty_id: string | null;
+  /** Unique across the university; how the Timetable Allocator and Generator know it. */
+  code: string | null;
+  smarttt_department_id: number | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -328,20 +322,9 @@ export interface DepartmentProfileRow {
   updated_at: Date;
 }
 
-/** A row of `faculty_profiles` — one faculty officer. Mirrors `DepartmentProfileRow` one level up. */
-export interface FacultyProfileRow {
-  id: string;
-  user_id: string;
-  faculty_id: string;
-  title: string | null;
-  phone: string | null;
-  created_at: Date;
-  updated_at: Date;
-}
-
 /**
  * A row of `qa_profiles` — one quality-assurance officer. Unlike
- * `DepartmentProfileRow`/`FacultyProfileRow` there is no org-unit FK: a QA
+ * `DepartmentProfileRow` there is no department FK: a QA
  * officer's remit is the whole institution (db/migrations/027_qa_role.sql).
  */
 export interface QaProfileRow {
@@ -354,8 +337,7 @@ export interface QaProfileRow {
 }
 
 /**
- * A row of `course_offerings` — a course a faculty has provided to a
- * department, before any lecturer is attached (db/migrations/023_course_offerings.sql).
+ * A row of `course_offerings` — a course provided to a department, before any lecturer is attached (db/migrations/023_course_offerings.sql).
  * Becomes one or more `units` rows as the department allocates lecturers to it.
  */
 export interface CourseOfferingRow {

@@ -97,7 +97,6 @@ export interface LecturerProfile {
   staffNumber: string;
   title: string;
   department: string;
-  faculty: string;
   phone: string;
   registeredAt: Date;
 }
@@ -109,7 +108,6 @@ interface LecturerProfileRow {
   staff_number: string;
   title: string | null;
   department: string | null;
-  faculty: string | null;
   phone: string | null;
   created_at: Date;
 }
@@ -118,7 +116,7 @@ interface LecturerProfileRow {
 export async function findActiveLecturerProfile(userId: string): Promise<LecturerProfile | null> {
   const row = await queryOne<LecturerProfileRow>(
     `SELECT u.id, u.full_name, u.email, p.staff_number, p.title, p.department,
-            p.faculty, p.phone, u.created_at
+            p.phone, u.created_at
        FROM users u
        JOIN lecturer_profiles p ON p.user_id = u.id
       WHERE u.id = $1
@@ -138,7 +136,6 @@ export async function findActiveLecturerProfile(userId: string): Promise<Lecture
     staffNumber: row.staff_number,
     title: row.title ?? '',
     department: row.department ?? '',
-    faculty: row.faculty ?? '',
     phone: row.phone ?? '',
     registeredAt: row.created_at,
   };

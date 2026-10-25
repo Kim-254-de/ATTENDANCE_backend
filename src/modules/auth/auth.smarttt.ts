@@ -31,7 +31,7 @@ import type { RegistrationContext } from './auth.service.js';
  * platform has one admin console, attendance's admin portal, and one admin
  * account per person, their SMARTTT account.
  *
- * Department and faculty officers are not in SMARTTT and keep attendance's
+ * Department officers and management are not in SMARTTT and keep attendance's
  * own passwords (auth.login.service.ts).
  */
 
@@ -209,7 +209,7 @@ async function linkExisting(
       ? { programme: account.student.programme, yearOfStudy: account.student.yearOfStudy, snapshot: account.student.raw }
       : undefined,
     lecturer: account.staff
-      ? { title: account.staff.title, department: account.staff.department, faculty: account.staff.faculty, snapshot: account.staff.raw }
+      ? { title: account.staff.title, department: account.staff.department, snapshot: account.staff.raw }
       : undefined,
   });
 
@@ -295,7 +295,6 @@ async function createFor(account: SmartttAccount, role: LinkedRole, number: stri
         erpSnapshot: staff.raw,
         title: staff.title,
         department: staff.department,
-        faculty: staff.faculty,
       },
       onCreated,
     );

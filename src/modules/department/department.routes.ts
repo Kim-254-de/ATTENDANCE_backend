@@ -14,7 +14,7 @@ import { allocateLecturerSchema, lecturerSearchQuerySchema, lecturerUserIdParamS
  */
 export const departmentRouter: Router = Router();
 
-/** The signed-in officer's department, and the faculty it sits under. */
+/** The signed-in officer's department, with its code. */
 departmentRouter.get(
   '/me',
   asyncHandler(requireAuth('DEPARTMENT')),
@@ -65,7 +65,7 @@ departmentRouter.get(
   asyncHandler(departmentController.timekeeping),
 );
 
-/** Courses faculty has provided to the department, with how many of their planned segments are filled. */
+/** Courses provided to the department, with how many of their planned segments are filled. */
 departmentRouter.get(
   '/courses',
   asyncHandler(requireAuth('DEPARTMENT')),

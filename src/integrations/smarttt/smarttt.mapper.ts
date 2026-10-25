@@ -129,7 +129,6 @@ const staffRecordSchema = z.object({
   full_name: z.string().nullable().optional(),
   email: z.string().nullable().optional(),
   department: z.string().nullable().optional(),
-  faculty: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
   is_active: z.boolean(),
 });
@@ -144,7 +143,6 @@ export function toStaffRecord(body: unknown): SmartttStaffRecord | null {
     fullName: v.full_name?.trim() || null,
     email: v.email?.trim().toLowerCase() || null,
     department: v.department?.trim() || null,
-    faculty: v.faculty?.trim() || null,
     title: v.title?.trim() || null,
     isActive: v.is_active,
     raw: body,
