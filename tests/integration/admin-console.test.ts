@@ -119,7 +119,6 @@ beforeAll(async () => {
   process.env.SMARTTT_BASE_URL = SMARTTT;
   process.env.SMARTTT_API_KEY = KEY;
   process.env.GENERATOR_API_KEY = 'generator-key';
-  process.env.ALLOCATOR_API_KEY = 'allocator-key';
 
   pool = new pg.Pool({ connectionString: testUrl.toString() });
   for (const f of fs.readdirSync(new URL('../../db/migrations/', import.meta.url)).sort()) {
@@ -365,7 +364,7 @@ describe('the Timetable Generator reads the departments', () => {
   it('needs its own key', async () => {
     expect((await read()).status).toBe(401);
     expect((await read(KEY)).status).toBe(401); // SMARTTT's key is not the Generator's
-    expect((await read('allocator-key')).status).toBe(401);
+    expect((await read('some-other-key')).status).toBe(401);
   });
 
   it("lists every department with its code, SMARTTT id and active lecturers, SMARTTT's first", async () => {
@@ -382,28 +381,5 @@ describe('the Timetable Generator reads the departments', () => {
     });
     expect(departments.find((d) => d['id'] === local!.id)).toMatchObject({ code: null, smartttDepartmentId: null, lecturerCount: 1 });
     expect(departments[0]).not.toHaveProperty('facultyName');
-  });
-});
-
-describe('the Timetable Allocator reads the departments', () => {
-  const read = (key?: string) => {
-    const req = request(app).get('/api/v1/integrations/allocator/departments');
-    return key ? req.set('X-API-Key', key) : req;
-  };
-
-  it('needs its own key', async () => {
-    expect((await read()).status).toBe(401);
-    expect((await read('generator-key')).status).toBe(401);
-  });
-
-  it('lists every department it can address, by code and name', async () => {
-    smartttDepartments = [{ id: 61, name: 'Department of Statistics', code: 'DSTAT', status: 'active' }];
-    await pool.query(`INSERT INTO departments (name) VALUES ('Department of Codeless ${uniq()}')`);
-    const res = await read('allocator-key');
-    expect(res.status).toBe(200);
-    const departments = (body(res).data as { departments: { code: string; name: string }[] }).departments;
-    expect(departments).toContainEqual({ code: 'DSTAT', name: 'Department of Statistics' });
-    expect(departments.every((d) => typeof d.code === 'string' && d.code.length > 0)).toBe(true);
-    expect(departments.some((d) => d.name.startsWith('Department of Codeless'))).toBe(false);
   });
 });

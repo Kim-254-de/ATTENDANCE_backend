@@ -3,7 +3,7 @@
 Oversight of one department's teaching: who teaches what, how well attended
 it is, whether classes start on time, which students are at risk of missing
 exams, and what students said in course evaluations — read-only except for
-course provisioning and account deletion (see below).
+the department's teaching and account deletion (see below).
 
 ## Scoping
 
@@ -71,31 +71,18 @@ not `0`, when no session is measurable, so "nothing measured" cannot read as
 | `GET` | `/api/v1/departments/students` | Department | One row per (student, unit) across the department, with the owning lecturer |
 | `GET` | `/api/v1/departments/units` | Department | Units with aggregate attendance rate and lecturer name |
 | `GET` | `/api/v1/departments/timekeeping` | Department | `?lecturerUserId=&unitId=&limit=` — session-level punctuality log, newest first |
-| `GET` | `/api/v1/departments/courses` | Department | Courses provided to the department, with segments planned/filled |
-| `PATCH` | `/api/v1/departments/courses/:offeringId` | Department (own) | Sets how many lecturer-taught sections a course needs |
-| `GET` | `/api/v1/departments/lecturer-directory` | Department | `?q=` — lecturers anywhere in the institution, own staff first, for the allocation picker (25 at most) |
-| `POST` | `/api/v1/departments/courses/:offeringId/segments` | Department (own) | Allocates a lecturer, own or borrowed, to the next open section — immediate, creates a real `units` row owned by this department |
 | `GET` | `/api/v1/departments/eligibility` | Department | `?all=true` — exam eligibility on the department's units (see Exam eligibility) |
 | `GET` | `/api/v1/departments/evaluations` | Department | Student course evaluation rounds that have opened |
 | `GET` | `/api/v1/departments/evaluations/:id` | Department | One round's results for the department's units (see `quality-assurance/README.md`) |
 | `DELETE` | `/api/v1/departments/lecturers/:lecturerUserId` | Department (own staff) | Deletes the lecturer's account (anonymised; see Account deletion) |
 | `DELETE` | `/api/v1/departments/students/:studentUserId` | Department (on a dept roster) | Deletes the student's account (anonymised; see Account deletion) |
 
-## Course provisioning (writes)
+## Teaching (writes)
 
-The only mutations this module has besides account deletion: a department can
-allocate lecturers to courses provided to it (`course_offerings`),
-and decide how many sections a course needs. See
-`db/migrations/023_course_offerings.sql` and
-[`docs/expected-schema.md`](../../../docs/expected-schema.md)'s
-"course-provisioning write endpoints" section for the full mechanism —
-allocating reuses `units.base_code`/`class_group`, so the resulting unit
-needs no special handling anywhere else in this codebase. Any active lecturer
-may be allocated, including one from another department; the unit is created
-with the offering's department as its owner, and the lecturer's own
-department is unchanged. Allocating someone who is not an active lecturer is
-a 400. An offering outside the caller's department 404s rather than
-confirming it exists.
+What the department teaches each term (courses, units, groups with
+lecturers, published to the Timetable Generator's Director) is its own
+module: [`../teaching/README.md`](../teaching/README.md). It replaced the
+course-provisioning endpoints (`/departments/courses`, `course_offerings`).
 
 ## Exam eligibility
 
@@ -116,8 +103,8 @@ invites them from the admin console (`auth.invitation.ts`), and they sign in
 at the unlisted `/oversight` page. `npm run dev:seed-department` still seeds
 one for local work.
 
-What a department officer can change: course offerings and their lecturer
-segments (`/departments/courses/...`), account deletion (below), and the
+What a department officer can change: the department's teaching
+(`/departments/teaching/...`, see above), account deletion (below), and the
 department's portable terminals and fingerprint enrolment
 (`/departments/terminals`, `/departments/enrolment`, `src/modules/terminal`,
 `docs/terminals.md`). They cannot approve units (an administrator does, in the

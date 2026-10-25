@@ -9,15 +9,16 @@ import { env } from '../../config/env.js';
 import { normaliseUnitCode } from '../../integrations/smarttt/index.js';
 import { validate } from '../../middleware/validate.js';
 import { directoryService } from '../directory/index.js';
+import { teachingService } from '../teaching/index.js';
 import { unitService } from '../unit/index.js';
 
 /**
  * Calls other systems make to us:
  *  - SMARTTT, the other way round from src/integrations/smarttt, with the same
  *    shared key both ways (SMARTTT_API_KEY here = ATTENDANCE_API_KEY there);
- *  - the Timetable Generator and Allocator, reading the departments
- *    administrators create here, each with its own key (GENERATOR_API_KEY /
- *    ALLOCATOR_API_KEY here = ATTENDANCE_API_KEY there).
+ *  - the Timetable Generator, reading the departments administrators create
+ *    here and the teaching departments publish, with its key
+ *    (GENERATOR_API_KEY here = ATTENDANCE_API_KEY there).
  */
 export const integrationRouter: Router = Router();
 
@@ -63,7 +64,7 @@ integrationRouter.post(
 );
 
 /** X-API-Key must equal the key in `name`. Fails closed when the key is unset. */
-const requireKey = (name: 'GENERATOR_API_KEY' | 'ALLOCATOR_API_KEY') => (req: Request, _res: Response, next: NextFunction): void => {
+const requireKey = (name: 'GENERATOR_API_KEY') => (req: Request, _res: Response, next: NextFunction): void => {
   const expected = env[name];
   const presented = req.get('X-API-Key');
   if (!expected || !presented || !tokenHashesMatch(presented, expected)) {
@@ -89,18 +90,17 @@ integrationRouter.get(
 );
 
 /**
- * The departments, for the Timetable Allocator, which knows a department by
- * its code: `{ departments: [{ code, name }] }`. A department without a code
- * (made before codes existed) can't be addressed there, so it is left out
- * until an administrator gives it one.
+ * What departments have published in their Teaching page for a term of the
+ * Generator, for the Director's "Import published departments": each
+ * published department's courses, units and groups (lecturer by staff
+ * number), and the departments that haven't published. The shape is the one
+ * the Timetable Allocator used to serve (teaching.service.ts `submissions`).
  */
 integrationRouter.get(
-  '/allocator/departments',
-  requireKey('ALLOCATOR_API_KEY'),
-  asyncHandler(async (_req: Request, res: Response) => {
-    const departments = await directoryService.departmentsForTimetabling();
-    sendSuccess(res, {
-      departments: departments.filter((d) => d.code).map((d) => ({ code: d.code!, name: d.name })),
-    });
+  '/generator/terms/:termId/submissions',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
+  asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await teachingService.submissions((req.params as { termId: string }).termId));
   }),
 );

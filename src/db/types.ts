@@ -214,6 +214,11 @@ export const AuditAction = {
   SMARTTT_ADMIN_ACTION: 'SMARTTT_ADMIN_ACTION',
   /** Departments were brought in line with SMARTTT, which owns them. */
   DIRECTORY_SYNCED: 'DIRECTORY_SYNCED',
+  /** A department officer changed the department's teaching (metadata: what, id, before, after). */
+  TEACHING_CHANGED: 'TEACHING_CHANGED',
+  /** A department officer published the department's teaching to the Director, or reopened it. */
+  TEACHING_PUBLISHED: 'TEACHING_PUBLISHED',
+  TEACHING_REOPENED: 'TEACHING_REOPENED',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

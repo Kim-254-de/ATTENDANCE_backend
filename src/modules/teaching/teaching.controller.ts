@@ -1,0 +1,125 @@
+import type { Request, Response } from 'express';
+import { AppError, ErrorCode } from '../../common/errors/index.js';
+import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import * as bulk from './teaching.import.js';
+import { BUILDERS, layout, MEDIA, readWorkbook, WorkbookError } from './teaching.export.js';
+import * as teaching from './teaching.service.js';
+import type { BulkInput, FormatParam, IdParam, SpreadsheetInput, TermQuery } from './teaching.schema.js';
+import type { CourseInput, GroupInput, GroupPatch, LecturerInput, UnitInput } from './teaching.service.js';
+
+/**
+ * HTTP in and out only. The department is never read from the request: the
+ * service resolves it from the signed-in officer, as everywhere in the
+ * department portal. `?term=` picks the Generator's term (default: the newest).
+ */
+function userId(req: Request): string {
+  const id = req.auth?.userId;
+  if (!id) throw AppError.unauthenticated('Please sign in.');
+  return id;
+}
+
+const ctx = (req: Request) => teaching.context(userId(req), (req.query as TermQuery).term);
+const param = (req: Request) => (req.params as unknown as IdParam).id;
+const rows = (req: Request) => (req.body as BulkInput).rows;
+
+/** GET /departments/teaching/terms */
+export async function terms(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.terms());
+}
+
+/** GET /departments/teaching */
+export async function board(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.board(await ctx(req)));
+}
+
+export async function createCourse(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await teaching.createCourse(await ctx(req), req.body as CourseInput));
+}
+export async function updateCourse(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.updateCourse(await ctx(req), param(req), req.body as CourseInput));
+}
+export async function deleteCourse(req: Request, res: Response): Promise<void> {
+  await teaching.deleteCourse(await ctx(req), param(req));
+  sendSuccess(res, null);
+}
+export async function bulkCourses(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkCourses(await ctx(req), rows(req)));
+}
+
+export async function createUnit(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await teaching.createUnit(await ctx(req), req.body as UnitInput));
+}
+export async function updateUnit(req: Request, res: Response): Promise<void> {
+  await teaching.updateUnit(await ctx(req), param(req), req.body as UnitInput);
+  sendSuccess(res, null);
+}
+export async function deleteUnit(req: Request, res: Response): Promise<void> {
+  await teaching.deleteUnit(await ctx(req), param(req));
+  sendSuccess(res, null);
+}
+export async function bulkUnits(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkUnits(await ctx(req), rows(req)));
+}
+
+export async function setGroups(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.setGroups(await ctx(req), param(req), (req.body as { groups: GroupInput[] }).groups));
+}
+export async function updateGroup(req: Request, res: Response): Promise<void> {
+  await teaching.updateGroup(await ctx(req), param(req), req.body as GroupPatch);
+  sendSuccess(res, null);
+}
+export async function bulkGroups(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkGroups(await ctx(req), rows(req)));
+}
+
+export async function publish(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.publish(await ctx(req)));
+}
+export async function reopen(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.reopen(await ctx(req)));
+}
+
+/** GET /departments/teaching/export/:format — the allocation form. */
+export async function exportForm(req: Request, res: Response): Promise<void> {
+  const context = await ctx(req);
+  const { format } = req.params as unknown as FormatParam;
+  const data = await teaching.board(context);
+  const content = await BUILDERS[format](layout(data, data.publication?.publishedBy ?? context.actor));
+  const term = data.term.name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'term';
+  res
+    .status(200)
+    .type(MEDIA[format])
+    .setHeader('Content-Disposition', `attachment; filename="allocation-${context.department.code}-${term}.${format}"`)
+    .send(content);
+}
+
+export async function listLecturers(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.listLecturers(userId(req)));
+}
+export async function createLecturer(req: Request, res: Response): Promise<void> {
+  sendCreated(res, await teaching.createLecturer(await ctx(req), req.body as LecturerInput));
+}
+export async function updateLecturer(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await teaching.updateLecturer(await ctx(req), param(req), req.body as LecturerInput));
+}
+export async function deleteLecturer(req: Request, res: Response): Promise<void> {
+  await teaching.deleteLecturer(await ctx(req), param(req));
+  sendSuccess(res, null);
+}
+export async function bulkLecturers(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await bulk.bulkLecturers(await ctx(req), rows(req)));
+}
+
+/** POST /departments/teaching/spreadsheet — a .xlsx read back as cells, for the paste dialog. Nothing is stored. */
+export async function spreadsheet(req: Request, res: Response): Promise<void> {
+  const content = Buffer.from((req.body as SpreadsheetInput).file, 'base64');
+  if (content.length > 5 * 1024 * 1024) {
+    throw new AppError(413, ErrorCode.VALIDATION_FAILED, 'The workbook is larger than 5 MB. Keep only the sheet you need.');
+  }
+  try {
+    sendSuccess(res, { sheets: await readWorkbook(content) });
+  } catch (error) {
+    if (error instanceof WorkbookError) throw new AppError(422, ErrorCode.VALIDATION_FAILED, error.message);
+    throw error;
+  }
+}

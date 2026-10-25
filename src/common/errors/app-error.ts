@@ -66,6 +66,19 @@ export const ErrorCode = {
 
   // SMARTTT pushing a timetable change
   INVALID_API_KEY: 'INVALID_API_KEY',
+
+  // A department's teaching (src/modules/teaching)
+  /** The Timetable Generator, whose terms the teaching is entered against, could not be asked. */
+  GENERATOR_UNAVAILABLE: 'GENERATOR_UNAVAILABLE',
+  /** The department's list is published, so it is locked until an officer reopens it. */
+  TEACHING_PUBLISHED: 'TEACHING_PUBLISHED',
+  TEACHING_NOT_PUBLISHED: 'TEACHING_NOT_PUBLISHED',
+  /** Something must be fixed before the list can be published (details.problems). */
+  TEACHING_NOT_READY: 'TEACHING_NOT_READY',
+  /** That course or unit code is already entered this term (maybe by another department). */
+  TEACHING_TAKEN: 'TEACHING_TAKEN',
+  /** A course, unit or lecturer still in use can't be deleted. */
+  TEACHING_IN_USE: 'TEACHING_IN_USE',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

@@ -25,31 +25,3 @@ export const timekeepingQuerySchema = z
   .strict();
 export type TimekeepingQuery = z.infer<typeof timekeepingQuerySchema>;
 
-export const offeringIdParamSchema = z
-  .object({ offeringId: z.string().uuid('Not a valid identifier.') })
-  .strict();
-export type OfferingIdParam = z.infer<typeof offeringIdParamSchema>;
-
-/** PATCH /departments/courses/:offeringId — the GR A..Z cap matches course_offerings.segments_planned's CHECK constraint. */
-export const setSegmentCountSchema = z
-  .object({
-    segmentsPlanned: z.coerce.number().int().min(1).max(26),
-  })
-  .strict();
-export type SetSegmentCountInput = z.infer<typeof setSegmentCountSchema>;
-
-/** POST /departments/courses/:offeringId/segments */
-export const allocateLecturerSchema = z
-  .object({
-    lecturerUserId: z.string().uuid('Not a valid identifier.'),
-  })
-  .strict();
-export type AllocateLecturerInput = z.infer<typeof allocateLecturerSchema>;
-
-/** GET /departments/lecturer-directory */
-export const lecturerSearchQuerySchema = z
-  .object({
-    q: z.string().trim().max(100).optional(),
-  })
-  .strict();
-export type LecturerSearchQuery = z.infer<typeof lecturerSearchQuerySchema>;

@@ -57,6 +57,10 @@ export function createApp(): Express {
   // terminal, three for an enrollment.
   app.use('/api/v1/sessions/:sessionId/face/identify', express.json({ limit: '450kb' }));
   app.use('/api/v1/units/:unitId/students/:studentUserId/face', express.json({ limit: '1300kb' }));
+  // A department's teaching: a .xlsx for the paste dialog (base64, up to 5 MB),
+  // and pasted workbook tabs of up to 2000 rows.
+  app.use('/api/v1/departments/teaching/spreadsheet', express.json({ limit: '7mb' }));
+  app.use('/api/v1/departments/teaching', express.json({ limit: '1mb' }));
 
   // A registration payload is a few hundred bytes; a generous cap here would
   // only widen the memory-exhaustion surface.

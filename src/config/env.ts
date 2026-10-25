@@ -177,14 +177,18 @@ const envSchema = z
     SMARTTT_DEPARTMENTS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/departments/'),
 
     // --- Timetable Generator ---
-    // The Generator reads the departments administrators create here
-    // (GET /integrations/generator/departments, X-API-Key). Must equal
-    // ATTENDANCE_API_KEY in the Generator. Unset = the Generator can't connect.
+    // One shared key both ways, equal to ATTENDANCE_API_KEY in the Generator.
+    // The Generator reads the departments administrators create here and what
+    // departments publish in their Teaching page (GET /integrations/generator/...,
+    // X-API-Key). Unset = the Generator can't connect.
     GENERATOR_API_KEY: emptyAsUnset(z.string().optional()),
-    // --- Timetable Allocator ---
-    // The Allocator reads them too (GET /integrations/allocator/departments).
-    // Must equal ATTENDANCE_API_KEY in the Allocator. Unset = it can't connect.
-    ALLOCATOR_API_KEY: emptyAsUnset(z.string().optional()),
+    // Departments enter their teaching against the Generator's terms and see
+    // each class's day, time and room once the Director publishes, read from
+    // here with GENERATOR_API_KEY. Unset = the Teaching page can't open a term.
+    GENERATOR_BASE_URL: emptyAsUnset(z.string().url().optional()),
+    GENERATOR_TERMS_PATH: z.string().min(1).default('/api/integrations/attendance/terms'),
+    // Generous: the Generator on Render's free tier can take a while to wake.
+    GENERATOR_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(15_000),
 
     // --- WebAuthn / phone biometrics ---
     WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),
