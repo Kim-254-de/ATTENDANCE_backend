@@ -187,7 +187,24 @@ const ROOM_TYPE_WORDS: Record<string, RoomType> = {
 };
 
 function courseIds(labels: string[], byLabel: Map<string, CourseRow>): string[] {
-  return labels.map((label) => byLabel.get(compact(label))?.id ?? fail(`no course '${label}' this term; add it on the Courses tab first`));
+  return labels.map((label) => byLabel.get(compact(label))?.id ?? fail(noCourse(label, [...byLabel.values()])));
+}
+
+/**
+ * Why a course label matched nothing, naming the term's nearest courses: the
+ * same programme (another year, semester or sub-class), else a programme
+ * whose name contains it or is contained in it ("BED.SCI" and "BED SCIENCE").
+ */
+function noCourse(label: string, courses: CourseRow[]): string {
+  const wanted = compact(LABEL.exec(label)?.groups?.['programme'] ?? label);
+  const same = courses.filter((c) => compact(c.programme) === wanted);
+  const like = same.length
+    ? same
+    : courses.filter((c) => wanted.length >= 3 && (compact(c.programme).includes(wanted) || wanted.includes(compact(c.programme))));
+  const near = like.map(courseLabel).sort().slice(0, 6);
+  if (near.length) return `no course '${label}' this term; did you mean ${near.map((l) => `'${l}'`).join(', ')}?`;
+  if (courses.length === 0) return `no course '${label}' this term; there are no courses yet: add them on the Courses tab first`;
+  return `no course '${label}' this term; add it on the Courses tab first (write it as the Courses tab shows it, e.g. '${courseLabel(courses[0]!)}')`;
 }
 
 async function coursesByLabel(client: PoolClient, ctx: Ctx): Promise<Map<string, CourseRow>> {
