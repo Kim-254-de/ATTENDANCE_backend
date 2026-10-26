@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import * as examList from './exam-list.service.js';
 import * as exams from './exams.service.js';
 import type { PaperInput, PracticalInput } from './exams.service.js';
 import * as invigilation from './invigilation.service.js';
@@ -8,7 +9,9 @@ import { LETTER_BUILDERS, LETTER_MEDIA, type LetterFormat } from './moderation-l
 import * as bulk from './teaching.import.js';
 import { BUILDERS, layout, MEDIA, readWorkbook, WorkbookError } from './teaching.export.js';
 import * as teaching from './teaching.service.js';
-import type { BulkInput, FormatParam, IdParam, LetterQuery, SpreadsheetInput, TermQuery } from './teaching.schema.js';
+import type {
+  BulkInput, ExamListFileInput, ExamListSaveInput, FormatParam, IdParam, LetterQuery, PaperRowsInput, SpreadsheetInput, TermQuery,
+} from './teaching.schema.js';
 import type { CourseInput, GroupInput, GroupPatch, LecturerInput, UnitInput } from './teaching.service.js';
 
 /**
@@ -133,6 +136,29 @@ export async function spreadsheet(req: Request, res: Response): Promise<void> {
 export async function examBoard(req: Request, res: Response): Promise<void> {
   sendSuccess(res, await exams.board(await ctx(req)));
 }
+
+/** POST /departments/teaching/exam-list/read: the uploaded .docx read and checked against SMARTTT. Nothing is stored. */
+export async function readExamList(req: Request, res: Response): Promise<void> {
+  const file = Buffer.from((req.body as ExamListFileInput).file, 'base64');
+  sendSuccess(res, await examList.review(await ctx(req), file));
+}
+
+/** POST /departments/teaching/exam-list: the reviewed papers saved, sized from SMARTTT. */
+export async function saveExamList(req: Request, res: Response): Promise<void> {
+  const c = await ctx(req);
+  const result = await examList.save(c, (req.body as ExamListSaveInput).papers);
+  sendSuccess(res, { ...result, board: await exams.board(c) });
+}
+
+/** PUT /departments/teaching/exam-papers/:id/rows: the department's numbers for a listed paper. */
+export async function setPaperRows(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await examList.setRows(await ctx(req), param(req), (req.body as PaperRowsInput).rows));
+}
+
+/** POST /departments/teaching/exam-papers/recount: listed papers' numbers read from SMARTTT again. */
+export async function recountPapers(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await examList.recount(await ctx(req)));
+}
 export async function createPaper(req: Request, res: Response): Promise<void> {
   sendCreated(res, await exams.createPaper(await ctx(req), req.body as PaperInput));
 }
@@ -199,7 +225,8 @@ export async function invigilatorBoard(req: Request, res: Response): Promise<voi
   sendSuccess(res, await invigilation.board(await ctx(req)));
 }
 export async function setInvigilator(req: Request, res: Response): Promise<void> {
-  await invigilation.setInvigilator(await ctx(req), param(req), (req.body as { lecturerId: string | null }).lecturerId);
+  const { lecturerId, room } = req.body as { lecturerId: string | null; room: string };
+  await invigilation.setInvigilator(await ctx(req), param(req), lecturerId, room);
   sendSuccess(res, null);
 }
 export async function publishInvigilators(req: Request, res: Response): Promise<void> {

@@ -24,6 +24,9 @@ import {
   termQuerySchema,
   unitPatchSchema,
   unitSchema,
+  examListFileSchema,
+  examListSaveSchema,
+  paperRowsSchema,
 } from './teaching.schema.js';
 
 /**
@@ -78,6 +81,11 @@ teachingRouter.post('/exam-papers', officer, term, validate({ body: paperSchema 
 /** A paper per unit not on one yet, titled as the unit. */
 teachingRouter.post('/exam-papers/from-units', officer, term, asyncHandler(c.papersFromUnits));
 teachingRouter.post('/exam-papers/bulk', officer, term, validate({ body: bulkSchema }), asyncHandler(c.bulkPapers));
+// The department's exam list uploaded as its Word document, sized by who synced the units in SMARTTT.
+teachingRouter.post('/exam-list/read', officer, term, validate({ body: examListFileSchema }), asyncHandler(c.readExamList));
+teachingRouter.post('/exam-list', officer, term, validate({ body: examListSaveSchema }), asyncHandler(c.saveExamList));
+teachingRouter.post('/exam-papers/recount', officer, term, asyncHandler(c.recountPapers));
+teachingRouter.put('/exam-papers/:id/rows', officer, term, byId, validate({ body: paperRowsSchema }), asyncHandler(c.setPaperRows));
 teachingRouter.patch('/exam-papers/:id', officer, term, byId, validate({ body: paperPatchSchema }), asyncHandler(c.updatePaper));
 teachingRouter.delete('/exam-papers/:id', officer, term, byId, asyncHandler(c.deletePaper));
 teachingRouter.put('/units/:id/no-written-exam', officer, term, byId, validate({ body: noWrittenExamSchema }), asyncHandler(c.noWrittenExam));

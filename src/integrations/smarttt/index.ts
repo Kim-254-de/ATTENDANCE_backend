@@ -1,5 +1,5 @@
 export { smartttClient, SmartttHttpClient } from './smarttt.client.js';
-export { normaliseUnitCode, toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
+export { normaliseUnitCode, toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits, toUnitEnrolment } from './smarttt.mapper.js';
 export type {
   SmartttAccount,
   SmartttAuthenticateResult,
@@ -14,4 +14,6 @@ export type {
   SmartttStudentUnitsResult,
   SmartttTerm,
   SmartttUnit,
+  SmartttUnitEnrolment,
+  SmartttUnitEnrolmentResult,
 } from './smarttt.types.js';

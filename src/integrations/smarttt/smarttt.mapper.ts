@@ -8,6 +8,7 @@ import type {
   SmartttStudentUnit,
   SmartttTerm,
   SmartttUnit,
+  SmartttUnitEnrolment,
 } from './smarttt.types.js';
 
 /** SMARTTT's response, exactly as its view serialises it (snake_case). */
@@ -231,4 +232,54 @@ export function toStudentUnits(body: unknown): { term: SmartttTerm | null; units
     });
   }
   return { term: toTerm(parsed.data.term), units: [...byCode.values()] };
+}
+
+const unitEnrolmentSchema = z.object({
+  term: z.object({ academic_year: z.string(), semester: z.number().int() }).passthrough().nullable(),
+  units: z.record(
+    z.string(),
+    z.object({
+      code: z.string(),
+      name: z.string().optional().default(''),
+      students: z.number().int().nonnegative(),
+      rows: z.array(
+        z.object({
+          program: z.string(),
+          program_name: z.string().optional().default(''),
+          year_of_study: z.number().int(),
+          study_semester: z.number().int().nullable(),
+          stream: z.string().optional().default(''),
+          sitting: z.enum(['regular', 'odel']),
+          students: z.number().int().nonnegative(),
+        }),
+      ),
+      lecturers: z.array(z.object({ staff_number: z.string().optional().default(''), name: z.string().optional().default('') })).optional().default([]),
+    }),
+  ),
+  unknown: z.array(z.string()).optional().default([]),
+});
+
+/** Translates SMARTTT's unit-enrolment payload; null when it cannot be understood. */
+export function toUnitEnrolment(body: unknown): { term: SmartttTerm | null; units: Map<string, SmartttUnitEnrolment>; unknown: string[] } | null {
+  const parsed = unitEnrolmentSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const units = new Map<string, SmartttUnitEnrolment>();
+  for (const [asked, u] of Object.entries(parsed.data.units)) {
+    units.set(asked, {
+      code: u.code,
+      name: u.name,
+      students: u.students,
+      rows: u.rows.map((r) => ({
+        programme: r.program.trim(),
+        programmeName: r.program_name,
+        year: r.year_of_study,
+        semester: r.study_semester,
+        stream: r.stream.trim(),
+        sitting: r.sitting,
+        students: r.students,
+      })),
+      lecturers: u.lecturers.map((l) => ({ staffNumber: l.staff_number.trim().toUpperCase(), name: l.name.trim() })),
+    });
+  }
+  return { term: toTerm(parsed.data.term), units, unknown: parsed.data.unknown };
 }

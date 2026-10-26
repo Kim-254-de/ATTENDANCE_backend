@@ -22,7 +22,26 @@ export interface PaperRow {
   notes: string;
   publishedSignature: string | null;
   unitIds: string[];
+  /** A listed paper's codes as uploaded ("BITE 131", "COSC 130"); empty for one built from units. */
+  codes: string[];
+  /** A listed paper's class rows and students (from SMARTTT, or set by the department). */
+  rows: ListedRow[];
 }
+
+export interface ListedRow {
+  id: string;
+  programme: string;
+  year: number;
+  semester: number;
+  stream: string;
+  students: number;
+  /** SMARTTT's count when last read; null for a row the department added. */
+  smartttStudents: number | null;
+  /** The department set the number (or added the row): a fresh SMARTTT count leaves it. */
+  edited: boolean;
+}
+
+export type ListedRowValues = Omit<ListedRow, 'id'>;
 
 export interface PracticalRow {
   id: string;
@@ -53,15 +72,35 @@ export interface ExamData {
 export async function loadExams(termId: string, client: Queryable = pool): Promise<ExamData> {
   const papers = await query<{
     id: string; department_id: string; department_code: string | null; title: string; sitting: Sitting; examiner_id: string | null;
-    notes: string; published_signature: string | null; unit_ids: string[] | null;
+    notes: string; published_signature: string | null; unit_ids: string[] | null; codes: string[] | null;
   }>(
     `SELECT p.id, p.department_id, d.code AS department_code, p.title, p.sitting, p.examiner_id, p.notes, p.published_signature,
-            ARRAY(SELECT pu.unit_id::text FROM teaching_exam_paper_units pu WHERE pu.paper_id = p.id) AS unit_ids
+            ARRAY(SELECT pu.unit_id::text FROM teaching_exam_paper_units pu WHERE pu.paper_id = p.id) AS unit_ids, p.codes
        FROM teaching_exam_papers p JOIN departments d ON d.id = p.department_id
       WHERE p.generator_term_id = $1`,
     [termId],
     client,
   );
+  const listed = await query<{
+    id: string; paper_id: string; programme: string; year: number; semester: number; stream: string; students: number;
+    smarttt_students: number | null; edited: boolean;
+  }>(
+    `SELECT r.id, r.paper_id, r.programme, r.year, r.semester, r.stream, r.students, r.smarttt_students, r.edited
+       FROM teaching_exam_paper_rows r JOIN teaching_exam_papers p ON p.id = r.paper_id
+      WHERE p.generator_term_id = $1
+      ORDER BY r.programme, r.year, r.semester, r.stream`,
+    [termId],
+    client,
+  );
+  const rowsOf = new Map<string, ListedRow[]>();
+  for (const r of listed.rows) {
+    const list = rowsOf.get(r.paper_id) ?? [];
+    list.push({
+      id: r.id, programme: r.programme, year: r.year, semester: r.semester, stream: r.stream, students: r.students,
+      smartttStudents: r.smarttt_students, edited: r.edited,
+    });
+    rowsOf.set(r.paper_id, list);
+  }
   const marked = await query<{ unit_id: string }>(
     `SELECT n.unit_id FROM teaching_no_written_exams n JOIN teaching_units u ON u.id = n.unit_id WHERE u.generator_term_id = $1`,
     [termId],
@@ -92,6 +131,8 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
       notes: p.notes,
       publishedSignature: p.published_signature,
       unitIds: p.unit_ids ?? [],
+      codes: p.codes ?? [],
+      rows: rowsOf.get(p.id) ?? [],
     })),
     noWrittenExam: new Set(marked.rows.map((r) => r.unit_id)),
     practicals: practicals.rows.map((r) => ({
@@ -137,6 +178,52 @@ async function setPaperUnits(client: PoolClient, paperId: string, unitIds: strin
     `INSERT INTO teaching_exam_paper_units (paper_id, unit_id, sitting) SELECT $1, u, $3 FROM unnest($2::uuid[]) AS u
      ON CONFLICT (paper_id, unit_id) DO NOTHING`,
     [paperId, unitIds, sitting],
+  );
+}
+
+// -- listed papers (uploaded as the department's exam list) ---------------------------------------
+
+export interface ListedPaperValues {
+  codes: string[];
+  title: string;
+  sitting: Sitting;
+  examinerId: string | null;
+  notes: string;
+}
+
+export async function insertListedPaper(client: PoolClient, termId: string, departmentId: string, v: ListedPaperValues): Promise<string> {
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, sitting, examiner_id, notes, codes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [termId, departmentId, v.title, v.sitting, v.examinerId, v.notes, v.codes],
+  );
+  return rows[0]!.id;
+}
+
+export async function updateListedPaper(client: PoolClient, paperId: string, v: ListedPaperValues): Promise<void> {
+  await client.query(
+    `UPDATE teaching_exam_papers SET codes = $2, title = $3, sitting = $4, examiner_id = $5, notes = $6 WHERE id = $1`,
+    [paperId, v.codes, v.title, v.sitting, v.examinerId, v.notes],
+  );
+}
+
+/** The listed paper's class rows, all at once: rows not given are removed. */
+export async function setListedRows(client: PoolClient, paperId: string, rows: ListedRowValues[]): Promise<void> {
+  await client.query(`DELETE FROM teaching_exam_paper_rows WHERE paper_id = $1`, [paperId]);
+  if (rows.length === 0) return;
+  await client.query(
+    `INSERT INTO teaching_exam_paper_rows (paper_id, programme, year, semester, stream, students, smarttt_students, edited)
+     SELECT $1, * FROM unnest($2::text[], $3::smallint[], $4::smallint[], $5::text[], $6::int[], $7::int[], $8::bool[])`,
+    [
+      paperId,
+      rows.map((r) => r.programme),
+      rows.map((r) => r.year),
+      rows.map((r) => r.semester),
+      rows.map((r) => r.stream),
+      rows.map((r) => r.students),
+      rows.map((r) => r.smartttStudents),
+      rows.map((r) => r.edited),
+    ],
   );
 }
 

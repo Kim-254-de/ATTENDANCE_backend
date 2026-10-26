@@ -9,28 +9,38 @@ import { type LecturerRow } from './teaching.repository.js';
 import { audit, displayName, invalid, person, publicationDto, writeTeaching, type Ctx, type PublicationDto } from './teaching.service.js';
 
 /**
- * Invigilators, named by departments on the exam draft the Director shared
- * in the Generator (it used to be the Timetable Allocator's).
+ * Invigilators, named by departments for their exam papers.
  *
- * Each of a department's papers gets one invigilator, who administers it,
- * collects the scripts and takes them away. Anyone on any department's list
- * can be named; one person (one staff number) is never in two places in one
- * session, and never over their duty limit when one is set. An officer
- * publishes the invigilators; the Director can publish the exam timetable
- * only when every paper has one.
+ * Each paper has a main invigilator, who administers it in its main room (the
+ * one with most of its students) and collects every room's scripts; each extra
+ * room of a paper split over rooms has an invigilator of its own. The main
+ * invigilator can be named any time, before the Director generates the exam
+ * timetable too (the Generator then keeps their papers apart); the extra
+ * rooms are known once the Director shares an exam draft. Anyone on any
+ * department's list can be named; one person (one staff number) is never in
+ * two places in one session, and never over their duty limit when one is
+ * set. An officer publishes the invigilators once the draft is shared; the
+ * Director can publish the exam timetable only when every paper has its main
+ * invigilator and every extra room its own.
  *
- * An invigilation's `room` is '' for the whole paper. (Naming one per extra
- * room of a multi-room paper is still to be confirmed.)
+ * An invigilation's `room` is '' for the main invigilator, else the extra room.
  */
 
 const KIND = 'invigilators' as const;
-const WHOLE_PAPER = '';
+const MAIN = '';
 
 const when = (p: SharedPaper) => `${p.date} ${p.startTime}-${p.endTime}`;
+const slotOf = (p: SharedPaper | undefined) => (p?.date && p.session !== null ? `${p.date}|${p.session}` : null);
 
 async function shared(ctx: Ctx): Promise<{ draft: SharedExamDraft['draft']; papers: Map<string, SharedPaper> }> {
   const data = await sharedExamDraft(ctx.term.id);
   return { draft: data.draft, papers: new Map(data.papers.map((p) => [p.paperRef, p])) };
+}
+
+interface Named {
+  invigilatorId: string | null;
+  invigilator: string | null;
+  invigilatorDepartment: string | null;
 }
 
 export interface InvigilatorBoardDto {
@@ -40,13 +50,25 @@ export interface InvigilatorBoardDto {
   canEdit: boolean;
   published: boolean;
   publication: PublicationDto | null;
-  papers: Array<{
-    paperId: string; codes: string; title: string;
-    date: string | null; session: number | null; startTime: string | null; endTime: string | null; rooms: string[];
-    invigilatorId: string | null; invigilator: string | null; invigilatorDepartment: string | null;
-  }>;
+  papers: Array<
+    Named & {
+      paperId: string; codes: string; title: string;
+      date: string | null; session: number | null; startTime: string | null; endTime: string | null; rooms: string[];
+      /** In the shared draft: placed in a session. */
+      placed: boolean;
+      mainRoom: string | null;
+      /** Each extra room and its invigilator. */
+      extras: Array<Named & { room: string }>;
+    }
+  >;
   lecturers: Array<{ id: string; display: string; departmentCode: string; staffNumber: string | null; duties: number; maxExamDuties: number | null; own: boolean }>;
   problems: Array<{ code: string; message: string }>;
+}
+
+/** The smallest duty limit set for this person on any department's list. */
+function limitOf(everyone: LecturerRow[], l: LecturerRow): number | null {
+  const limits = everyone.filter((x) => person(x) === person(l) && x.maxExamDuties).map((x) => x.maxExamDuties!);
+  return limits.length ? Math.min(...limits) : null;
 }
 
 export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
@@ -59,7 +81,11 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
   ]);
   const units = new Map(term.units.map((u) => [u.id, u]));
   const lecturers = new Map(everyone.map((l) => [l.id, l]));
-  const byPaper = new Map(exams.invigilations.filter((i) => i.room === WHOLE_PAPER).map((i) => [i.paperId, i]));
+  const at = new Map(exams.invigilations.map((i) => [`${i.paperId}|${i.room}`, i]));
+  const named = (paperId: string, room: string): Named => {
+    const l = at.has(`${paperId}|${room}`) ? lecturers.get(at.get(`${paperId}|${room}`)!.lecturerId) : undefined;
+    return { invigilatorId: l?.id ?? null, invigilator: l ? displayName(l) : null, invigilatorDepartment: l?.departmentCode ?? null };
+  };
   const duties = new Map<string, number>();
   for (const i of exams.invigilations) {
     const l = lecturers.get(i.lecturerId);
@@ -70,8 +96,6 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
   const papers = own
     .map((p) => {
       const where = draft.papers.get(p.id);
-      const inv = byPaper.get(p.id);
-      const l = inv ? lecturers.get(inv.lecturerId) : undefined;
       return {
         paperId: p.id,
         codes: paperLabel(p, units),
@@ -81,17 +105,55 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
         startTime: where?.startTime ?? null,
         endTime: where?.endTime ?? null,
         rooms: where?.rooms ?? [],
-        invigilatorId: inv?.lecturerId ?? null,
-        invigilator: l ? displayName(l) : null,
-        invigilatorDepartment: l?.departmentCode ?? null,
+        placed: !!where,
+        mainRoom: where?.mainRoom ?? null,
+        ...named(p.id, MAIN),
+        extras: (where?.extraRooms ?? []).map((room) => ({ room, ...named(p.id, room) })),
       };
     })
     .sort((a, b) => a.codes.localeCompare(b.codes));
+
+  const problems: InvigilatorBoardDto['problems'] = [];
+  for (const p of papers) {
+    // A paper nobody is known to sit has no room yet; it waits for its students' numbers, not an invigilator.
+    if (!p.placed || p.rooms.length === 0) continue;
+    if (!p.invigilatorId) problems.push({ code: 'no_invigilator', message: `Name the main invigilator for ${p.codes}.` });
+    for (const x of p.extras) {
+      if (!x.invigilatorId) problems.push({ code: 'no_invigilator', message: `Name an invigilator for ${p.codes} in ${x.room}.` });
+    }
+  }
+  // Clashes, now that sessions are known: one person in two places at once (any department's papers).
+  const titles = new Map(exams.papers.map((p) => [p.id, paperLabel(p, units)]));
+  const ownIds = new Set(own.map((p) => p.id));
+  const bySlot = new Map<string, Array<{ paperId: string; who: LecturerRow }>>();
+  for (const i of exams.invigilations) {
+    const l = lecturers.get(i.lecturerId);
+    const slot = slotOf(draft.papers.get(i.paperId));
+    if (!l || !slot) continue;
+    const key = `${person(l)}|${slot}`;
+    bySlot.set(key, [...(bySlot.get(key) ?? []), { paperId: i.paperId, who: l }]);
+  }
+  for (const list of bySlot.values()) {
+    const distinct = [...new Set(list.map((x) => x.paperId))];
+    if (distinct.length < 2 && list.length < 2) continue;
+    if (!list.some((x) => ownIds.has(x.paperId))) continue;
+    const where = draft.papers.get(list[0]!.paperId)!;
+    problems.push({
+      code: 'invigilator_clash',
+      message: `${list[0]!.who.fullName} is named for ${distinct.map((id) => titles.get(id)).join(' and ')}${distinct.length < 2 ? ' twice' : ''} at the same time (${when(where)}).`,
+    });
+  }
+  for (const l of everyone.filter((x) => x.departmentId === ctx.department.id && x.staffNumber)) {
+    const limit = limitOf(everyone, l);
+    const n = duties.get(person(l)) ?? 0;
+    if (limit !== null && n > limit) problems.push({ code: 'over_limit', message: `${l.fullName} has ${n} duties; the limit is ${limit}.` });
+  }
+
   return {
     term: ctx.term,
     department: ctx.department,
     draft: draft.draft,
-    canEdit: standing === null && draft.draft !== null,
+    canEdit: standing === null,
     published: standing !== null,
     publication: publicationDto(latest),
     papers,
@@ -106,14 +168,16 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
         maxExamDuties: l.maxExamDuties,
         own: l.departmentId === ctx.department.id,
       })),
-    problems: own
-      .filter((p) => draft.papers.has(p.id) && !byPaper.has(p.id))
-      .map((p) => ({ code: 'no_invigilator', message: `Name an invigilator for ${p.title}.` })),
+    problems,
   };
 }
 
-/** Names (or clears) a paper's invigilator: never someone busy then, or at their duty limit. */
-export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: string | null): Promise<void> {
+/**
+ * Names (or clears) a paper's main invigilator (`room` '') or an extra room's.
+ * Never someone already in another room of the paper, busy in another paper
+ * in that session, or at their duty limit.
+ */
+export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: string | null, room = MAIN): Promise<void> {
   const draft = await shared(ctx);
   await writeTeaching(
     ctx,
@@ -122,9 +186,11 @@ export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: stri
       const paper = exams.papers.find((p) => p.id === paperId);
       if (!paper || paper.departmentId !== ctx.department.id) throw AppError.notFound('No such paper in your department.');
       const where = draft.papers.get(paper.id);
-      if (!where) throw new AppError(409, ErrorCode.CONFLICT, "The Director's shared exam draft doesn't have this paper yet.");
+      if (room !== MAIN && !where?.extraRooms.includes(room)) {
+        throw new AppError(409, ErrorCode.CONFLICT, `${room} is not an extra room of this paper in the Director's shared exam draft.`);
+      }
       if (lecturerId === null) {
-        await examsRepo.clearInvigilation(client, paper.id, WHOLE_PAPER);
+        await examsRepo.clearInvigilation(client, paper.id, room);
         return;
       }
       const everyone = await repo.listAllLecturers(client);
@@ -133,35 +199,37 @@ export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: stri
       if (!lecturer.active || !lecturer.staffNumber) throw invalid(`${lecturer.fullName} needs to be active, with a staff number.`);
       const who = person(lecturer);
       const byId = new Map(everyone.map((l) => [l.id, l]));
+      const slot = slotOf(where);
       let duties = 0;
       for (const other of exams.invigilations) {
         const l: LecturerRow | undefined = byId.get(other.lecturerId);
-        if (other.paperId === paper.id || !l || person(l) !== who) continue;
+        if (!l || person(l) !== who || (other.paperId === paper.id && other.room === room)) continue;
         duties++;
-        const there = draft.papers.get(other.paperId);
-        if (there && there.date === where.date && there.session === where.session) {
+        if (other.paperId === paper.id) {
+          throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} is already named for ${other.room || 'the main room'} of this paper.`);
+        }
+        if (slot && slot === slotOf(draft.papers.get(other.paperId))) {
           const otherPaper = exams.papers.find((p) => p.id === other.paperId);
-          throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already invigilates ${otherPaper?.title ?? 'a paper'} on ${when(where)}.`);
+          throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already invigilates ${otherPaper?.title ?? 'a paper'} on ${when(where!)}.`);
         }
       }
       // The same person on every department's list: the smallest limit set applies.
-      const limits = everyone.filter((l) => l.staffNumber === lecturer.staffNumber && l.maxExamDuties).map((l) => l.maxExamDuties!);
-      const limit = limits.length ? Math.min(...limits) : null;
+      const limit = limitOf(everyone, lecturer);
       if (limit !== null && duties + 1 > limit) {
         throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already has ${duties} duties; the limit is ${limit}.`);
       }
-      await examsRepo.setInvigilation(client, paper.id, WHOLE_PAPER, lecturer.id, ctx.actor);
+      await examsRepo.setInvigilation(client, paper.id, room, lecturer.id, ctx.actor);
     },
     { kind: KIND },
   );
-  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: lecturerId ? 'invigilation.set' : 'invigilation.clear', id: paperId, after: { lecturerId } });
+  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: lecturerId ? 'invigilation.set' : 'invigilation.clear', id: paperId, after: { lecturerId, room } });
 }
 
 export async function publish(ctx: Ctx): Promise<InvigilatorBoardDto> {
   const current = await board(ctx);
   if (!current.draft) throw new AppError(409, ErrorCode.TEACHING_NOT_READY, "The Director hasn't shared an exam draft yet.");
   if (current.problems.length) {
-    throw new AppError(409, ErrorCode.TEACHING_NOT_READY, `${current.problems.length} papers have no invigilator yet.`, {
+    throw new AppError(409, ErrorCode.TEACHING_NOT_READY, `${current.problems.length} things to fix first: ${current.problems[0]!.message}`, {
       details: { problems: current.problems },
     });
   }

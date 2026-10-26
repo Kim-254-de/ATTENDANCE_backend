@@ -85,3 +85,49 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Done when:** the lecturer portal has the exam rooms and the scanner handles exam codes.
   Already built on ATTENDANCE_fronted branch `exam-sessions` (df634d2): `/exams`,
   `/exam-room/:id`, and the scan page; review it rather than starting over.
+
+### F-2 · High · The department uploads its exam list; numbers come from SMARTTT
+- **Raised:** 2026-10-27, backend   **Status:** done (ATTENDANCE_fronted 0d92647)
+- **What changed:** a department can upload the Word letter it sends for moderation instead of
+  building papers from its units. Each paper's students are those who synced its units in SMARTTT,
+  by class row; the department corrects any number. All under `/api/v1/departments/teaching`, DEPARTMENT role, `?term=`:
+  - `POST /exam-list/read` `{ file: "<.docx as base64>" }` (body up to ~5 MB) → nothing stored, a review:
+    `{ entries: [{ line, codes: ["COSC 0170","COSC 172"], title, section, sitting: "regular"|"odel", students: 110 | null,
+    classRows: [{ label: "BSC.CS Y1S1", students: 100 }], unknownCodes: ["COSC 0170"], duplicateOf: 1 | null,
+    otherDepartments: ["DCOMP"], existingPaperId: "<uuid>" | null,
+    examiner: { lecturerId: "<uuid>" | null, staffNumber, name } | null }],
+    smarttt: { available, reason }, summary: { papers, newPapers, duplicates, unknown, noStudents } }`.
+    `students` null = SMARTTT couldn't be read (`smarttt.reason` says why). 422 for a file that isn't a .docx
+    or has no unit codes.
+  - `POST /exam-list` `{ papers: [{ codes: ["MATH 241"], title, sitting, examinerId?: uuid | null }] }` (max 1500)
+    → `{ created, updated, smarttt, board }`. Same codes + sitting updates the existing paper (title), never duplicates.
+    Omit `examinerId` to take SMARTTT's lecturer when they're on the department's list. 409 `TEACHING_TAKEN` when a
+    code is already on one of the department's unit-built papers.
+  - `PUT /exam-papers/:id/rows` `{ rows: [{ programme, year, semester, stream, students }] }` → the exam board.
+    A number changed from SMARTTT's (or a row added) is kept when SMARTTT is read again; a SMARTTT row left out stays at 0.
+  - `POST /exam-papers/recount` → the board, numbers re-read from SMARTTT (503 `SMARTTT_UNAVAILABLE` when it can't be).
+  - Exam board papers have two new fields: `listed: boolean` and `rows: [{ id, programme, year, semester, stream,
+    students, smartttStudents: number | null, edited }]` (empty for unit-built papers).
+  - Publishing: a listed paper needs no examiner; it needs students (`no_students`: "Nobody has synced MATH 100 in
+    SMARTTT yet; enter how many students sit it."). `no_units` now only when the department has neither units nor papers.
+- **Why it matters:** departments stop entering units and courses for exams; this is the main exams flow now.
+- **Done when:** the Exams tab has an "Upload exam list" button with the review (flags for duplicates, unknown codes,
+  other departments, no students, SMARTTT unavailable), and a listed paper's rows are editable with SMARTTT's count shown.
+
+### F-3 · High · Invigilators before the draft, one per extra room; papers with no students don't block
+- **Raised:** 2026-10-27, backend   **Status:** done (ATTENDANCE_fronted 680f1d0)
+- **What changed** (`/api/v1/departments/teaching`):
+  - `GET /invigilators`: `canEdit` is now true before the Director shares a draft (the main invigilator can be
+    named any time). Each paper has new fields `placed` (in the shared draft), `mainRoom` (string | null) and
+    `extras: [{ room, invigilatorId, invigilator, invigilatorDepartment }]`; the paper's own `invigilator*` fields are
+    the main invigilator. New problem codes `invigilator_clash` ("Jane Otieno is named for MATH 241 and COSC 130 at the
+    same time (2026-12-01 08:30-10:30).") and `over_limit`; `no_invigilator` now says "Name the main invigilator for
+    MATH 241." or "Name an invigilator for MATH 241 in LH2.".
+  - `PUT /invigilators/:paperId` takes `{ lecturerId, room?: "" | "LH2" }`: `""` (default) is the main invigilator;
+    an extra room only once it is in the shared draft (else 409). 409 when the person is already named for another
+    room of the paper. Publishing still needs the shared draft.
+  - `GET /exams` (exam board) has `warnings: [{ code: "no_students", message }]`: a listed paper nobody synced no
+    longer blocks publishing (`problems` no longer has `no_students`); show it as a warning.
+- **Why it matters:** departments name invigilators early; papers split over rooms could not be published before.
+- **Done when:** the Invigilators tab works before the draft (main only) and shows extra rooms after; the Exams tab
+  shows warnings without disabling Publish.

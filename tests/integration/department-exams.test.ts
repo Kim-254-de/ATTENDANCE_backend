@@ -220,10 +220,18 @@ describe('exam papers', () => {
 });
 
 describe('invigilators', () => {
-  it('waits for the Director to share an exam draft', async () => {
-    const b = body<{ draft: unknown; canEdit: boolean }>(await cs.get('/invigilators')).data;
-    expect([b.draft, b.canEdit]).toEqual([null, false]);
+  it('lets the main invigilator be named before the draft, but publishes only once the draft is shared', async () => {
+    const b = body<{ draft: unknown; canEdit: boolean; papers: Array<{ placed: boolean; extras: unknown[] }> }>(await cs.get('/invigilators')).data;
+    expect([b.draft, b.canEdit, b.papers[0]!.placed]).toEqual([null, true, false]);
+    expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: ids.peter })).status).toBe(200);
+    // An extra room isn't known yet.
+    expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: ids.jane, room: 'LH2' })).status).toBe(409);
     expect(body(await cs.post('/invigilators/publish')).error!.code).toBe('TEACHING_NOT_READY');
+    // The Generator sees who is named, to keep their papers in different sessions.
+    const res = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+    const papers = body<{ published: Array<{ papers: Array<{ id: string; invigilator: { staff_number: string } | null }> }> }>(res).data.published.flatMap((d) => d.papers);
+    expect(papers.find((p) => p.id === ids.paper)!.invigilator).toMatchObject({ staff_number: 'STF/0001' });
+    expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: null })).status).toBe(200);
   });
 
   it('names one per paper, never someone over their duty limit, and serves them to the Generator once published', async () => {
@@ -250,6 +258,29 @@ describe('invigilators', () => {
     });
     b = body<typeof b>(await cs.get('/invigilators')).data;
     expect(b.problems).toEqual([]);
+  });
+
+  it('needs an invigilator in each extra room, never the main one twice', async () => {
+    const draftBefore = structuredClone(generator.draft);
+    generator.draft.papers[0] = { ...generator.draft.papers[0]!, main_room: 'LH1', extra_rooms: ['LH2'] };
+    type Inv = { papers: Array<{ paperId: string; mainRoom: string; extras: Array<{ room: string; invigilatorId: string | null }> }>; problems: Array<{ message: string }> };
+    expect((await cs.post('/invigilators/reopen')).status).toBe(200);
+    let b = body<Inv>(await cs.get('/invigilators')).data;
+    expect(b.papers.find((p) => p.paperId === ids.paper)!.extras).toEqual([expect.objectContaining({ room: 'LH2', invigilatorId: null })]);
+    expect(b.problems.map((p) => p.message)).toEqual(['Name an invigilator for BITE 131/COSC 130 in LH2.']);
+    const twice = await cs.put(`/invigilators/${ids.paper}`, { lecturerId: ids.jane, room: 'LH2' });
+    expect([twice.status, body(twice).error!.message]).toEqual([409, 'Jane Otieno is already named for the main room of this paper.']);
+    expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: ids.peter, room: 'LH2' })).status).toBe(200);
+    b = body<Inv>(await cs.get('/invigilators')).data;
+    expect(b.problems).toEqual([]);
+    expect((await cs.post('/invigilators/publish')).status).toBe(200);
+    const res = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/invigilators`).set('X-API-Key', 'generator-key');
+    expect(body<Record<string, Record<string, { staff_number: string }>>>(res).data[ids.paper!]!['LH2']!.staff_number).toBe('STF/0001');
+    // Back as it was for the next test: Peter's one duty free again.
+    expect((await cs.post('/invigilators/reopen')).status).toBe(200);
+    expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: null, room: 'LH2' })).status).toBe(200);
+    generator.draft = draftBefore;
+    expect((await cs.post('/invigilators/publish')).status).toBe(200);
   });
 
   it('never puts one person in two rooms at once, nor over their duty limit, whichever list names them', async () => {

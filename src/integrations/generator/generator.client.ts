@@ -133,6 +133,10 @@ export interface SharedPaper {
   startTime: string | null;
   endTime: string | null;
   rooms: string[];
+  /** The room with most of its students: the main invigilator's, who collects every room's scripts. */
+  mainRoom: string | null;
+  /** Every other room of the paper; each needs an invigilator of its own. */
+  extraRooms: string[];
 }
 
 export interface SharedExamDraft {
@@ -155,6 +159,8 @@ const sharedDraftSchema = z.object({
         start_time: z.string().nullish(),
         end_time: z.string().nullish(),
         rooms: z.array(z.string()).default([]),
+        main_room: z.string().nullish(),
+        extra_rooms: z.array(z.string()).default([]),
       }),
     )
     .default([]),
@@ -177,6 +183,8 @@ export async function sharedExamDraft(termId: string): Promise<SharedExamDraft> 
         startTime: p.start_time ?? null,
         endTime: p.end_time ?? null,
         rooms: p.rooms,
+        mainRoom: p.main_room ?? null,
+        extraRooms: p.extra_rooms,
       })),
   };
 }

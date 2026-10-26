@@ -42,16 +42,38 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
   department's too ("BITE 131/COSC 130"); a unit is on one paper at most.
   Each has an examiner (default: the unit's lecturer). A unit can be marked
   "no written exam". "A paper for each unit" starts the list.
+- **Uploaded exam list** (`exam-list.read.ts`, `exam-list.service.ts`): instead of
+  building papers from units, the department uploads the Word letter it sends
+  for moderation. Each table row with a unit code is a paper (title from the
+  next cell; "COSC 0172/0170" is two codes; rows under an ODEL/part-time
+  heading, or "Math 241 odel", are ODEL papers). A review flags duplicates,
+  codes SMARTTT doesn't know, codes another department listed and papers
+  nobody synced, before anything is saved. A listed paper's class rows and
+  numbers are the students who synced its units in SMARTTT
+  (`unit-enrolment/` there); the department corrects any number, and a
+  corrected row keeps it. SMARTTT is read again when the Generator imports
+  the papers. A listed paper's examiner is optional (SMARTTT's lecturer when
+  on the list). Its class rows reach the Generator with ids like
+  `listed:BSCCS|1|1|`, so a class sitting several papers is one class row.
 - **Practicals**, on weekdays the department sets; the Generator only shows them.
 - **Moderation letter** (Word or PDF) to the external moderator, from the papers.
 - Publishing the papers needs every unit on a paper or marked, and every
   paper an examiner; it locks only the paper list.
-- **Invigilators**: once the Director shares an exam draft (read from the
-  Generator's `/terms/:id/exam-draft`), each paper gets one, from any
-  department's list. One person (staff number) is never in two rooms in one
-  session, nor over their `maxExamDuties` (the smallest set on any of their
-  lists). Published on their own; the Director can publish the exam
-  timetable only when every paper has one.
+- **Invigilators**: each paper's main invigilator (in its main room, the one
+  with most of its students; collects every room's scripts) can be named any
+  time, before the timetable is generated too: the Generator gets them with
+  the papers and keeps one person's papers in different sessions. Once the
+  Director shares an exam draft (read from the Generator's
+  `/terms/:id/exam-draft`, with each paper's `main_room` and `extra_rooms`),
+  each extra room gets an invigilator of its own (`room` on the
+  invigilation; '' is the main one). Anyone on any department's list; one
+  person (staff number) is never in two rooms in one session, nor over their
+  `maxExamDuties` (the smallest set on any of their lists). Published on
+  their own, once the draft is shared; the Director can publish the exam
+  timetable only when every paper and extra room has one. A paper with no
+  students known (nobody synced it) isn't held up: it still goes to the
+  Director and gets a date; it gets a room, and needs invigilators, once it
+  has a number.
 
 Courses also carry a study `mode` (ODEL students sit exams in a room of
 their own), and lecturers `maxExamDuties`.
@@ -77,6 +99,10 @@ Generator's term (default: the newest).
 | `POST` | `/courses/bulk`, `/units/bulk`, `/groups/bulk`, `/lecturers/bulk` | Paste from Excel: rows keyed by column heading; good rows kept, bad ones reported by line |
 | `POST` | `/spreadsheet` | A .xlsx (base64) read back as cells for the paste dialog; nothing stored |
 | `POST` | `/publish`, `/reopen` | Lock and send to the Director; unlock |
+| `POST` | `/exam-list/read` | The uploaded .docx exam list read and checked against SMARTTT; nothing stored |
+| `POST` | `/exam-list` | The reviewed papers saved, sized from SMARTTT |
+| `PUT` | `/exam-papers/:id/rows` | A listed paper's class rows and numbers, as the department corrects them |
+| `POST` | `/exam-papers/recount` | Listed papers' numbers read from SMARTTT again |
 | `GET` | `/export/:format` | The allocation form as `pdf`, `docx` or `xlsx` (phone numbers, and times once published) |
 | `GET` | `/exams` | Exam papers, units (on a paper or not), other departments' units, practicals, problems |
 | `POST` / `PATCH` / `DELETE` | `/exam-papers`, `/exam-papers/:id` | A paper |

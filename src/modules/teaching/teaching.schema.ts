@@ -115,7 +115,8 @@ export const practicalSchema = z
   .strict();
 
 /** Who invigilates the paper (any department's lecturer, by id); null clears it. */
-export const invigilatorSchema = z.object({ lecturerId: id.nullable() }).strict();
+/** `room`: '' for the paper's main invigilator (any time), else one of its extra rooms (once the draft is shared). */
+export const invigilatorSchema = z.object({ lecturerId: id.nullable(), room: z.string().trim().max(30).default('') }).strict();
 
 export const letterParamSchema = z.object({ format: z.enum(['pdf', 'docx']) }).strict();
 /** `moderator`: name and address, a line each. */
@@ -123,3 +124,48 @@ export const letterQuerySchema = z
   .object({ term: z.string().trim().min(1).max(64).optional(), moderator: z.string().max(1000).default(''), date: z.string().trim().max(40).default('') })
   .strict();
 export type LetterQuery = z.infer<typeof letterQuerySchema>;
+
+// -- the uploaded exam list (exam-list.service.ts) -------------------------------------------------
+
+/** The department's exam list as a .docx, base64 (the JSON body limit on this path allows ~5 MB). */
+export const examListFileSchema = z.object({ file: z.string().min(1).max(7_000_000) }).strict();
+export type ExamListFileInput = z.infer<typeof examListFileSchema>;
+
+const unitCode = z.string().trim().min(2).max(30);
+export const examListSaveSchema = z
+  .object({
+    papers: z
+      .array(
+        z
+          .object({
+            codes: z.array(unitCode).min(1).max(6),
+            title: z.string().trim().min(1).max(255),
+            sitting: z.enum(['regular', 'odel']),
+            examinerId: z.string().uuid().nullable().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1500),
+  })
+  .strict();
+export type ExamListSaveInput = z.infer<typeof examListSaveSchema>;
+
+export const paperRowsSchema = z
+  .object({
+    rows: z
+      .array(
+        z
+          .object({
+            programme: z.string().trim().min(1).max(64),
+            year: z.number().int().min(1).max(10),
+            semester: z.number().int().min(1).max(3),
+            stream: z.string().trim().max(40).default(''),
+            students: z.number().int().min(0).max(5000),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+export type PaperRowsInput = z.infer<typeof paperRowsSchema>;

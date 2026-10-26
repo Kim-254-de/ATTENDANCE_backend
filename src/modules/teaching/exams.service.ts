@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { AuditAction } from '../../db/types.js';
 import * as examsRepo from './exams.repository.js';
-import type { ExamData, PaperRow, PracticalRow, Sitting } from './exams.repository.js';
+import type { ExamData, ListedRow, PaperRow, PracticalRow, Sitting } from './exams.repository.js';
 import * as repo from './teaching.repository.js';
 import { compact, type CourseMode, type CourseRow, type LecturerRow, type TermData, type UnitRow } from './teaching.repository.js';
 import { audit, courseLabel, displayName, invalid, publicationDto, writeTeaching, type Ctx, type PublicationDto } from './teaching.service.js';
@@ -53,8 +53,34 @@ async function load(termId: string, client?: PoolClient, departmentIds: string[]
   return { term, exams: examData, units: new Map(term.units.map((u) => [u.id, u])), courses: new Map(term.courses.map((c) => [c.id, c])) };
 }
 
+/** A paper built from units has their codes; a listed one (uploaded) the codes it was listed with. */
 export const paperCodes = (p: PaperRow, units: Map<string, UnitRow>): string[] =>
-  p.unitIds.map((id) => units.get(id)?.code).filter((c): c is string => !!c).sort();
+  p.unitIds.length ? p.unitIds.map((id) => units.get(id)?.code).filter((c): c is string => !!c).sort() : [...p.codes].sort();
+
+/** An uploaded paper, sized from SMARTTT rather than from the department's units and courses. */
+export const isListed = (p: PaperRow): boolean => p.unitIds.length === 0 && p.codes.length > 0;
+
+/**
+ * A listed paper's class rows as courses, so everything downstream (the
+ * board, the Generator's import) treats them alike. The id is the class
+ * itself (programme, year, semester, stream): one class sitting several
+ * papers is one class row in the Generator, so its papers never clash.
+ */
+export function listedCourses(p: PaperRow): CourseRow[] {
+  return p.rows
+    .filter((r) => r.students > 0)
+    .map((r) => ({
+      id: `listed:${compact(r.programme)}|${r.year}|${r.semester}|${compact(r.stream)}`,
+      departmentId: p.departmentId,
+      departmentCode: p.departmentCode,
+      programme: r.programme,
+      year: r.year,
+      semester: r.semester,
+      subClass: r.stream,
+      students: r.students,
+      mode: p.sitting === 'odel' ? 'odel' : 'regular',
+    }));
+}
 
 /** 'MATH 241', or 'MATH 241 (ODEL)' for the ODEL paper: how a paper is named to people. */
 export const paperLabel = (p: PaperRow, units: Map<string, UnitRow>): string =>
@@ -67,6 +93,7 @@ const SITTING_NAME: Record<Sitting, string> = { regular: 'regular', odel: 'ODEL'
 
 /** The cohorts that sit the paper: every course of its sitting taking any of its units, once. */
 function paperCourses(p: PaperRow, d: Loaded): CourseRow[] {
+  if (isListed(p)) return listedCourses(p).sort((a, b) => courseLabel(a).localeCompare(courseLabel(b)));
   const ids = new Set(p.unitIds.flatMap((id) => d.units.get(id)?.courseIds ?? []));
   return [...ids]
     .map((id) => d.courses.get(id))
@@ -103,7 +130,10 @@ function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
   const found: ExamProblem[] = [];
   const own = d.term.units.filter((u) => u.departmentId === ctx.department.id).sort((a, b) => a.codeKey.localeCompare(b.codeKey));
   const onPaper = new Set(d.exams.papers.flatMap((p) => p.unitIds.map((id) => `${id}|${p.sitting}`)));
-  if (own.length === 0) found.push({ code: 'no_units', message: 'Enter your units (Units & groups) first.' });
+  const ownPapers = d.exams.papers.filter((p) => p.departmentId === ctx.department.id);
+  if (own.length === 0 && ownPapers.length === 0) {
+    found.push({ code: 'no_units', message: 'Upload your exam list, or enter your units (Units & groups) first.' });
+  }
   for (const u of own) {
     if (d.exams.noWrittenExam.has(u.id)) continue;
     for (const sitting of sittingsOf(u, d)) {
@@ -115,13 +145,29 @@ function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
       );
     }
   }
-  for (const p of d.exams.papers.filter((p) => p.departmentId === ctx.department.id)) {
+  for (const p of ownPapers) {
+    // A listed paper's examiner is optional, and it goes to the Director even with no students known (warnings()).
+    if (isListed(p)) continue;
     if (!p.examinerId) found.push({ code: 'no_examiner', message: `Give ${p.title} an examiner.` });
     if (paperCourses(p, d).length === 0) {
       found.push({ code: 'no_students', message: `No ${SITTING_NAME[p.sitting]} class takes ${paperLabel(p, d.units)}; check its sitting.` });
     }
   }
   return found;
+}
+
+/**
+ * What doesn't stop publishing but needs a look: a listed paper nobody has
+ * synced (part-time students may never sync) still goes to the Director and
+ * gets its date and session; its room waits for a number.
+ */
+function warnings(ctx: Ctx, d: Loaded): ExamProblem[] {
+  return d.exams.papers
+    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).length === 0)
+    .map((p) => ({
+      code: 'no_students',
+      message: `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.`,
+    }));
 }
 
 export interface PaperDto {
@@ -136,6 +182,9 @@ export interface PaperDto {
   classRows: string[];
   students: number;
   changedSincePublished: boolean;
+  /** Uploaded with the exam list: its class rows and numbers are `rows`, from SMARTTT or edited here. */
+  listed: boolean;
+  rows: ListedRow[];
 }
 
 function paperDto(p: PaperRow, d: Loaded, everPublished: boolean): PaperDto {
@@ -157,6 +206,8 @@ function paperDto(p: PaperRow, d: Loaded, everPublished: boolean): PaperDto {
     classRows: sitting.map(courseLabel),
     students: sitting.reduce((n, c) => n + c.students, 0),
     changedSincePublished: everPublished && p.publishedSignature !== signature(p, d),
+    listed: isListed(p),
+    rows: isListed(p) ? p.rows : [],
   };
 }
 
@@ -198,6 +249,8 @@ export interface ExamBoardDto {
   practicals: PracticalDto[];
   lecturers: Array<{ id: string; display: string; staffNumber: string | null; active: boolean }>;
   problems: ExamProblem[];
+  /** Not in the way of publishing: papers with no students known yet. */
+  warnings: ExamProblem[];
   summary: { papers: number; students: number; changed: number; problems: number };
 }
 
@@ -244,6 +297,7 @@ export async function board(ctx: Ctx): Promise<ExamBoardDto> {
       .filter((l) => l.departmentId === ctx.department.id)
       .map((l) => ({ id: l.id, display: displayName(l), staffNumber: l.staffNumber, active: l.active })),
     problems: found,
+    warnings: warnings(ctx, d),
     summary: {
       papers: papers.length,
       students: papers.reduce((n, p) => n + p.students, 0),
@@ -315,6 +369,16 @@ export async function updatePaperIn(client: PoolClient, ctx: Ctx, paperId: strin
   const d = await load(ctx.term.id, client, [ctx.department.id]);
   const paper = ownPaper(ctx, d, paperId);
   const sitting = input.sitting ?? paper.sitting;
+  if (isListed(paper) && !input.unitIds?.length) {
+    await examsRepo.updateListedPaper(client, paper.id, {
+      codes: paper.codes,
+      title: input.title?.trim() || paper.title,
+      sitting,
+      examinerId: input.examinerId !== undefined ? (input.examinerId ? examinerFor(ctx, d, input.examinerId) : null) : paper.examinerId,
+      notes: input.notes !== undefined ? input.notes.trim() : paper.notes,
+    });
+    return;
+  }
   const changesSitting = sitting !== paper.sitting;
   await examsRepo.updatePaper(client, paper.id, {
     unitIds: input.unitIds?.length || changesSitting ? checkUnits(ctx, d, input.unitIds?.length ? input.unitIds : paper.unitIds, paper, sitting) : paper.unitIds,
@@ -479,6 +543,8 @@ export async function submissions(termId: string): Promise<Record<string, unknow
   const published: Array<Record<string, unknown>> = [];
   const waiting: Array<Record<string, unknown>> = [];
   const needed = new Set<string>();
+  // Listed papers' class rows: one per class however many papers it sits, with its biggest number.
+  const listed = new Map<string, CourseRow>();
   for (const dept of departments.filter((x) => compact(x.code))) {
     const code = compact(dept.code);
     const pub = latest.get(dept.id);
@@ -491,14 +557,21 @@ export async function submissions(termId: string): Promise<Record<string, unknow
       .sort((a, b) => paperLabel(a, d.units).localeCompare(paperLabel(b, d.units)))
       .map((p) => {
         const sitting = paperCourses(p, d);
-        for (const c of sitting) needed.add(c.id);
+        for (const c of sitting) {
+          if (!c.id.startsWith('listed:')) needed.add(c.id);
+          else if ((listed.get(c.id)?.students ?? -1) < c.students) listed.set(c.id, c);
+        }
         const examiner: LecturerRow | undefined = p.examinerId ? d.term.lecturers.get(p.examinerId) : undefined;
+        // Named before the timetable is generated: the Generator keeps this person's papers in different sessions.
+        const mainId = d.exams.invigilations.find((i) => i.paperId === p.id && i.room === '')?.lecturerId;
+        const main: LecturerRow | undefined = mainId ? d.term.lecturers.get(mainId) : undefined;
         return {
           id: p.id,
           codes: paperCodes(p, d.units),
           title: p.title,
           sitting: p.sitting,
           examiner: examiner ? { staff_number: examiner.staffNumber, name: displayName(examiner) } : null,
+          invigilator: main?.staffNumber ? { staff_number: main.staffNumber, name: displayName(main) } : null,
           notes: p.notes,
           rows: sitting.map((c) => ({ course_id: c.id, students: c.students, mode: c.mode })),
           students: sitting.reduce((n, c) => n + c.students, 0),
@@ -524,8 +597,7 @@ export async function submissions(termId: string): Promise<Record<string, unknow
   }
   return {
     term_id: termId,
-    courses: [...needed]
-      .map((id) => d.courses.get(id)!)
+    courses: [...[...needed].map((id) => d.courses.get(id)!), ...listed.values()]
       .sort((a, b) => courseLabel(a).localeCompare(courseLabel(b)))
       .map((c) => ({
         id: c.id, department_code: c.departmentCode, programme: c.programme, year: c.year, semester: c.semester,
@@ -535,3 +607,5 @@ export async function submissions(termId: string): Promise<Record<string, unknow
     not_published: waiting,
   };
 }
+
+export { load as loadExamTerm, KIND as EXAMS_KIND };
