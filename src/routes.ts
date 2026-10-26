@@ -15,6 +15,7 @@ import { adminRouter } from './modules/admin/index.js';
 import { departmentEnrolmentRouter, departmentTerminalRouter, sessionTerminalRouter, terminalRouter } from './modules/terminal/index.js';
 import { qaRouter } from './modules/quality-assurance/index.js';
 import { attendancePolicyRouter } from './modules/eligibility/index.js';
+import { examRouter } from './modules/exam/index.js';
 
 /**
  * API surface, versioned from the first commit so the mobile app can keep
@@ -49,6 +50,7 @@ apiRouter.use('/management', managementRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/quality-assurance', qaRouter);
 apiRouter.use('/attendance-policy', attendancePolicyRouter);
+apiRouter.use('/exams', examRouter);
 /** Face check-in: /students/me/face*, /units/:id/students/:id/face, /sessions/:id/face/*. */
 apiRouter.use(verificationRouter);
 /** Calls from SMARTTT (API key, not a user session). */

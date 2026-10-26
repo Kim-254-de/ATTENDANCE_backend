@@ -223,6 +223,8 @@ export const AuditAction = {
   /** A department officer published the department's teaching to the Director, or reopened it. */
   TEACHING_PUBLISHED: 'TEACHING_PUBLISHED',
   TEACHING_REOPENED: 'TEACHING_REOPENED',
+  /** An invigilator opened an exam room (metadata: exam session, paper, room, fence). */
+  EXAM_SESSION_OPENED: 'EXAM_SESSION_OPENED',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

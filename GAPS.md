@@ -1,0 +1,87 @@
+# Gaps between frontend and backend
+
+A two-way list between the frontend lead and the backend team. Each side adds what it finds;
+neither side deletes the other's entries. How to use it is in `CLAUDE.md`.
+
+Entry format:
+
+```
+### B-<n> · <High|Medium|Low> · <one-line title>
+- **Raised:** <YYYY-MM-DD>, <who>   **Status:** open | in progress | done (<commit>) | won't do (<why>)
+- **Seen:** what is missing or different, with file paths, endpoints, commits.
+- **Why it matters:** which screen or user is affected.
+- **Done when:** the check that closes it.
+```
+
+Use `B-` for items the backend should act on, and `F-` for items the frontend should act on.
+
+---
+
+## For the backend team (raised by the frontend)
+
+### B-1 · Medium · Exam sessions for invigilators
+- **Raised:** 2026-10-25, frontend (Wayler)   **Status:** done (04bf02d, 6a832da)
+- **Seen:** `src/modules/teaching` now holds exam papers and invigilators, but
+  `src/modules/session` has no exam session type. The plan (Timetable-Allocator `README.md` →
+  "Exams: needs from SMARTTT and Smart Attendance") needs: one exam session per paper per
+  room, opened by its invigilator; students check in only to their own paper and room; a
+  sat/absent report per paper; and teaching classes refused while the term is in exam mode.
+- **Why it matters:** the invigilator's screen (open the room, see who sat) and the student's
+  exam check-in can't be built without it.
+- **Done when:** the routes exist and their request/response shapes are added below under
+  "For the frontend", including the error codes for "not your paper" and "not your room".
+- **Reply (2026-10-25, backend):** Built in `src/modules/exam`; routes and shapes are in F-1.
+  SMARTTT pushes the rooms and the term's mode, so nothing here is entered by hand.
+
+### B-2 · Low · The XSRF cookie the frontend expects is never set
+- **Raised:** 2026-10-25, frontend (Wayler)   **Status:** open
+- **Seen:** `ATTENDANCE_fronted/src/lib/api.ts` is set up to echo an `XSRF-TOKEN` cookie as
+  `X-XSRF-TOKEN`, but the API never sets that cookie or checks the header. CSRF protection
+  rests on `SameSite=Lax` cookies and the same-origin `/api` proxy.
+- **Why it matters:** half-done security config. A reviewer will assume CSRF tokens are in
+  place when they aren't.
+- **Done when:** either the API issues and checks the token, or this entry says Lax-only is
+  the intended design, and the frontend removes the unused options (we'll do that part).
+
+### Checked and fine (2026-10-25)
+- Every route the frontend calls exists, including all of `/departments/teaching/*` and
+  `/admin/smarttt/*`.
+- The Generator ↔ Attendance link matches in both directions: `/integrations/generator/*` here
+  and `/api/integrations/attendance/terms[/:id/times|/exam-draft]` on Generator `origin/main`.
+
+---
+
+## For the frontend team (raised by the backend)
+
+<!-- Add F-<n> entries here: endpoints or fields added, renamed or removed; changed error codes,
+     enums, auth or limits; anything a screen now shows wrongly; anything you noticed in the UI. -->
+
+### F-1 · Medium · Exam rooms: invigilator routes, exam check-in, exam mode
+- **Raised:** 2026-10-25, backend   **Status:** open
+- **Seen:** new in `src/modules/exam` (commits 04bf02d, 6a832da). SMARTTT pushes one exam
+  session per paper per room (who is seated there, its main or extra invigilator) and the
+  term's mode. All under `/api/v1`, lecturer routes need a staff number:
+  - `GET /exams/sessions/mine` (lecturer): the invigilator's rooms from today on, earliest first.
+    ```json
+    [{ "id": "uuid", "paperKey": "COSC 130|2026-11-23", "codes": "COSC 130", "title": "Programming",
+       "startsAt": "2026-11-23T05:30:00.000Z", "endsAt": "2026-11-23T07:30:00.000Z", "room": "LH1",
+       "role": "main", "candidates": 120, "status": "NOT_OPENED", "geofence": null }]
+    ```
+    `status`: `NOT_OPENED | OPEN | CLOSED`; `role`: `main | extra`.
+  - `POST /exams/sessions/:id/open` (its invigilator) `{ "geofence": "ON", "location"?: {latitude, longitude, accuracy} }`
+    or `{ "geofence": "OFF" }` → the session. Only from 30 min before the start until the end
+    (403 otherwise). `422 GEOFENCE_ANCHOR_UNAVAILABLE` when the room isn't surveyed and the
+    fix is too vague: offer to open with the fence off.
+  - `GET /exams/sessions/:id/code` → `{ session, payload, expiresInSeconds, rotatesAt }`, as a class's QR. 409 if not open.
+  - `POST /exams/sessions/:id/close` → the session with `status: "CLOSED"`.
+  - `GET /exams/sessions/:id/report` → `{ paperKey, codes, title, rooms: [{ room, role, sat: [reg], absent: [reg] }] }`.
+    The room's invigilator gets their room; the main invigilator gets every room of the paper.
+  - Students scan exam codes with the usual `POST /attendance/check-in` (also `POST /exams/check-in`).
+    201 → `{ recordId, sessionId, unitCode, recordedAt, examSessionId, codes, room, checkedIn: true }`.
+    New error codes: `403 EXAM_WRONG_ROOM` ("You sit COSC 130 in LH1, not here.", `details.room`),
+    `403 EXAM_NOT_CANDIDATE` (not listed for the paper); `409` "already been recorded" as for a class.
+  - `POST /sessions` (open a class) now fails `403 EXAM_MODE` while the term is in exam mode.
+- **Why it matters:** the invigilator's screen and student exam check-in.
+- **Done when:** the lecturer portal has the exam rooms and the scanner handles exam codes.
+  Already built on ATTENDANCE_fronted branch `exam-sessions` (df634d2): `/exams`,
+  `/exam-room/:id`, and the scan page; review it rather than starting over.
