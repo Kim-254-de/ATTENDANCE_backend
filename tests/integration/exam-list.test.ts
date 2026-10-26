@@ -126,6 +126,7 @@ interface Board {
     rows: Array<{ programme: string; year: number; semester: number; stream: string; students: number; smartttStudents: number | null; edited: boolean }>;
   }>;
   problems: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
   published: boolean;
 }
 
@@ -231,8 +232,9 @@ describe('the uploaded exam list', () => {
     expect(papers['MATH 241|regular']).toMatchObject({ listed: true, students: 122, examinerId: ids.ruth });
     expect(papers['MATH 241|odel']).toMatchObject({ students: 9, classRows: ['BSC.MATH Y2S1 (ODEL)'] });
     expect(papers['MATH 446|regular']!.examinerId).toBeNull(); // nobody on the list teaches it: optional
-    // Only the paper nobody synced stops publishing, until its number is entered.
-    expect(data.board.problems.map((p) => p.code)).toEqual(['no_students']);
+    // The paper nobody synced doesn't stop publishing (part-time students may never sync): it is a warning.
+    expect(data.board.problems).toEqual([]);
+    expect(data.board.warnings.map((p) => p.code)).toEqual(['no_students']);
     ids.m241 = papers['MATH 241|regular']!.id;
     ids.m100 = papers['MATH 100|regular']!.id;
   });
@@ -275,6 +277,15 @@ describe('the uploaded exam list', () => {
     await math.put(`/exam-papers/${ids.m100}/rows`, { rows: [{ programme: 'BSC.MATH', year: 1, semester: 1, stream: '', students: 60 }] });
   });
 
+  it('sends a paper nobody has synced to the Director anyway, with no class rows', async () => {
+    const saved = body<{ board: Board }>(await math.post('/exam-list', { papers: [{ codes: ['MATH 100'], title: 'Nobody synced it', sitting: 'odel' }] })).data;
+    const nobody = saved.board.papers.find((p) => p.codes === 'MATH 100' && p.sitting === 'odel')!;
+    expect([nobody.students, nobody.rows]).toEqual([0, []]);
+    expect(saved.board.warnings.map((w) => w.message)).toEqual([
+      'Nobody has synced MATH 100 (ODEL) in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.',
+    ]);
+  });
+
   it('says so when SMARTTT is down, and keeps the last numbers', async () => {
     smarttt.down = true;
     expect((await math.post('/exam-papers/recount')).status).toBe(503);
@@ -306,6 +317,8 @@ describe('the uploaded exam list', () => {
     const mathPapers = data.published.find((d) => d.code === 'DBSC')!.papers;
     const stats = mathPapers.find((p) => p.codes.join() === 'MATH 446')!;
     expect(stats.students).toBe(44); // re-read when the Generator imported
+    const nobody = mathPapers.find((p) => p.codes.join() === 'MATH 100' && p.sitting === 'odel')!;
+    expect([nobody.students, nobody.rows]).toEqual([0, []]);
     const cosc = data.published.find((d) => d.code === 'DCOMP')!.papers[0]!;
     expect(cosc.codes).toEqual(['COSC 170', 'COSC 172']);
     expect(cosc.rows.map((r) => [r.course_id, r.students])).toEqual([['listed:BSCCS|1|1|', 100], ['listed:BSCMATH|1|1|', 20]]);

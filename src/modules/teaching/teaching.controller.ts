@@ -225,7 +225,8 @@ export async function invigilatorBoard(req: Request, res: Response): Promise<voi
   sendSuccess(res, await invigilation.board(await ctx(req)));
 }
 export async function setInvigilator(req: Request, res: Response): Promise<void> {
-  await invigilation.setInvigilator(await ctx(req), param(req), (req.body as { lecturerId: string | null }).lecturerId);
+  const { lecturerId, room } = req.body as { lecturerId: string | null; room: string };
+  await invigilation.setInvigilator(await ctx(req), param(req), lecturerId, room);
   sendSuccess(res, null);
 }
 export async function publishInvigilators(req: Request, res: Response): Promise<void> {

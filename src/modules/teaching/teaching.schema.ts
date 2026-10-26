@@ -115,7 +115,8 @@ export const practicalSchema = z
   .strict();
 
 /** Who invigilates the paper (any department's lecturer, by id); null clears it. */
-export const invigilatorSchema = z.object({ lecturerId: id.nullable() }).strict();
+/** `room`: '' for the paper's main invigilator (any time), else one of its extra rooms (once the draft is shared). */
+export const invigilatorSchema = z.object({ lecturerId: id.nullable(), room: z.string().trim().max(30).default('') }).strict();
 
 export const letterParamSchema = z.object({ format: z.enum(['pdf', 'docx']) }).strict();
 /** `moderator`: name and address, a line each. */

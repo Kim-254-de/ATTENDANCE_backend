@@ -146,22 +146,28 @@ function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
     }
   }
   for (const p of ownPapers) {
-    if (isListed(p)) {
-      // A listed paper's examiner is optional; its students come from SMARTTT or the department.
-      if (paperCourses(p, d).length === 0) {
-        found.push({
-          code: 'no_students',
-          message: `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT yet; enter how many students sit it.`,
-        });
-      }
-      continue;
-    }
+    // A listed paper's examiner is optional, and it goes to the Director even with no students known (warnings()).
+    if (isListed(p)) continue;
     if (!p.examinerId) found.push({ code: 'no_examiner', message: `Give ${p.title} an examiner.` });
     if (paperCourses(p, d).length === 0) {
       found.push({ code: 'no_students', message: `No ${SITTING_NAME[p.sitting]} class takes ${paperLabel(p, d.units)}; check its sitting.` });
     }
   }
   return found;
+}
+
+/**
+ * What doesn't stop publishing but needs a look: a listed paper nobody has
+ * synced (part-time students may never sync) still goes to the Director and
+ * gets its date and session; its room waits for a number.
+ */
+function warnings(ctx: Ctx, d: Loaded): ExamProblem[] {
+  return d.exams.papers
+    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).length === 0)
+    .map((p) => ({
+      code: 'no_students',
+      message: `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.`,
+    }));
 }
 
 export interface PaperDto {
@@ -243,6 +249,8 @@ export interface ExamBoardDto {
   practicals: PracticalDto[];
   lecturers: Array<{ id: string; display: string; staffNumber: string | null; active: boolean }>;
   problems: ExamProblem[];
+  /** Not in the way of publishing: papers with no students known yet. */
+  warnings: ExamProblem[];
   summary: { papers: number; students: number; changed: number; problems: number };
 }
 
@@ -289,6 +297,7 @@ export async function board(ctx: Ctx): Promise<ExamBoardDto> {
       .filter((l) => l.departmentId === ctx.department.id)
       .map((l) => ({ id: l.id, display: displayName(l), staffNumber: l.staffNumber, active: l.active })),
     problems: found,
+    warnings: warnings(ctx, d),
     summary: {
       papers: papers.length,
       students: papers.reduce((n, p) => n + p.students, 0),
@@ -553,12 +562,16 @@ export async function submissions(termId: string): Promise<Record<string, unknow
           else if ((listed.get(c.id)?.students ?? -1) < c.students) listed.set(c.id, c);
         }
         const examiner: LecturerRow | undefined = p.examinerId ? d.term.lecturers.get(p.examinerId) : undefined;
+        // Named before the timetable is generated: the Generator keeps this person's papers in different sessions.
+        const mainId = d.exams.invigilations.find((i) => i.paperId === p.id && i.room === '')?.lecturerId;
+        const main: LecturerRow | undefined = mainId ? d.term.lecturers.get(mainId) : undefined;
         return {
           id: p.id,
           codes: paperCodes(p, d.units),
           title: p.title,
           sitting: p.sitting,
           examiner: examiner ? { staff_number: examiner.staffNumber, name: displayName(examiner) } : null,
+          invigilator: main?.staffNumber ? { staff_number: main.staffNumber, name: displayName(main) } : null,
           notes: p.notes,
           rows: sitting.map((c) => ({ course_id: c.id, students: c.students, mode: c.mode })),
           students: sitting.reduce((n, c) => n + c.students, 0),

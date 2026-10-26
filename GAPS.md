@@ -113,3 +113,21 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Why it matters:** departments stop entering units and courses for exams; this is the main exams flow now.
 - **Done when:** the Exams tab has an "Upload exam list" button with the review (flags for duplicates, unknown codes,
   other departments, no students, SMARTTT unavailable), and a listed paper's rows are editable with SMARTTT's count shown.
+
+### F-3 · High · Invigilators before the draft, one per extra room; papers with no students don't block
+- **Raised:** 2026-10-27, backend   **Status:** open
+- **What changed** (`/api/v1/departments/teaching`):
+  - `GET /invigilators`: `canEdit` is now true before the Director shares a draft (the main invigilator can be
+    named any time). Each paper has new fields `placed` (in the shared draft), `mainRoom` (string | null) and
+    `extras: [{ room, invigilatorId, invigilator, invigilatorDepartment }]`; the paper's own `invigilator*` fields are
+    the main invigilator. New problem codes `invigilator_clash` ("Jane Otieno is named for MATH 241 and COSC 130 at the
+    same time (2026-12-01 08:30-10:30).") and `over_limit`; `no_invigilator` now says "Name the main invigilator for
+    MATH 241." or "Name an invigilator for MATH 241 in LH2.".
+  - `PUT /invigilators/:paperId` takes `{ lecturerId, room?: "" | "LH2" }`: `""` (default) is the main invigilator;
+    an extra room only once it is in the shared draft (else 409). 409 when the person is already named for another
+    room of the paper. Publishing still needs the shared draft.
+  - `GET /exams` (exam board) has `warnings: [{ code: "no_students", message }]`: a listed paper nobody synced no
+    longer blocks publishing (`problems` no longer has `no_students`); show it as a warning.
+- **Why it matters:** departments name invigilators early; papers split over rooms could not be published before.
+- **Done when:** the Invigilators tab works before the draft (main only) and shows extra rooms after; the Exams tab
+  shows warnings without disabling Publish.

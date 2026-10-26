@@ -59,12 +59,21 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
 - **Moderation letter** (Word or PDF) to the external moderator, from the papers.
 - Publishing the papers needs every unit on a paper or marked, and every
   paper an examiner; it locks only the paper list.
-- **Invigilators**: once the Director shares an exam draft (read from the
-  Generator's `/terms/:id/exam-draft`), each paper gets one, from any
-  department's list. One person (staff number) is never in two rooms in one
-  session, nor over their `maxExamDuties` (the smallest set on any of their
-  lists). Published on their own; the Director can publish the exam
-  timetable only when every paper has one.
+- **Invigilators**: each paper's main invigilator (in its main room, the one
+  with most of its students; collects every room's scripts) can be named any
+  time, before the timetable is generated too: the Generator gets them with
+  the papers and keeps one person's papers in different sessions. Once the
+  Director shares an exam draft (read from the Generator's
+  `/terms/:id/exam-draft`, with each paper's `main_room` and `extra_rooms`),
+  each extra room gets an invigilator of its own (`room` on the
+  invigilation; '' is the main one). Anyone on any department's list; one
+  person (staff number) is never in two rooms in one session, nor over their
+  `maxExamDuties` (the smallest set on any of their lists). Published on
+  their own, once the draft is shared; the Director can publish the exam
+  timetable only when every paper and extra room has one. A paper with no
+  students known (nobody synced it) isn't held up: it still goes to the
+  Director and gets a date; it gets a room, and needs invigilators, once it
+  has a number.
 
 Courses also carry a study `mode` (ODEL students sit exams in a room of
 their own), and lecturers `maxExamDuties`.
