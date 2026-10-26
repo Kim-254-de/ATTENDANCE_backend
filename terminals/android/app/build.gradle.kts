@@ -16,7 +16,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         // The API the terminal talks to until someone changes it on the setup screen.
-        buildConfigField("String", "DEFAULT_API_URL", "\"https://attendance-backend-kx0n.onrender.com/api/v1\"")
+        buildConfigField("String", "DEFAULT_API_URL", "\"https://attendance.nextup.co.ke/api/v1\"")
     }
 
     buildTypes {

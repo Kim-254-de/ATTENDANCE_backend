@@ -11,7 +11,7 @@
 #define OLED_ADDRESS 0x3C
 
 // Behaviour.
-#define DEFAULT_API_URL "https://attendance-backend-kx0n.onrender.com/api/v1"
+#define DEFAULT_API_URL "https://attendance.nextup.co.ke/api/v1"
 #define HEARTBEAT_MS 60000UL
 #define FINGER_CAPACITY 200 // R503 template slots
 #define FIRMWARE_VERSION "esp32-1.0.0"

@@ -54,8 +54,9 @@ pio device monitor
 
 ## HTTPS
 
-Certificates are checked against the roots in `include/root_ca.h` (ISRG Root X1,
-GTS Root R1/R4, GlobalSign Root CA), which cover Render and Let's Encrypt hosts.
+Certificates are checked against the roots in `include/root_ca.h` (ISRG Root X1
+and YR, GTS Root R1/R4, GlobalSign Root CA), which cover Railway, Render,
+Cloudflare and other Let's Encrypt or Google Trust Services hosts.
 Add the root of any other host you point a box at.
 
 ## Not built
