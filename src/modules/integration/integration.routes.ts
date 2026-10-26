@@ -18,7 +18,7 @@ import {
   type ExamSessionsPush,
   type TermModePush,
 } from '../exam/index.js';
-import { examsService, invigilationService, teachingService } from '../teaching/index.js';
+import { examListService, examsService, invigilationService, teachingService } from '../teaching/index.js';
 import { unitService } from '../unit/index.js';
 
 /**
@@ -158,7 +158,10 @@ integrationRouter.get(
   requireKey('GENERATOR_API_KEY'),
   validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
   asyncHandler(async (req: Request, res: Response) => {
-    sendSuccess(res, await examsService.submissions((req.params as { termId: string }).termId));
+    const { termId } = req.params as { termId: string };
+    // Uploaded exam lists are sized by who synced their units in SMARTTT: read it again now.
+    await examListService.refreshTerm(termId);
+    sendSuccess(res, await examsService.submissions(termId));
   }),
 );
 

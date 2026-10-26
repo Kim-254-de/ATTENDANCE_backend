@@ -85,3 +85,31 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Done when:** the lecturer portal has the exam rooms and the scanner handles exam codes.
   Already built on ATTENDANCE_fronted branch `exam-sessions` (df634d2): `/exams`,
   `/exam-room/:id`, and the scan page; review it rather than starting over.
+
+### F-2 · High · The department uploads its exam list; numbers come from SMARTTT
+- **Raised:** 2026-10-27, backend   **Status:** open
+- **What changed:** a department can upload the Word letter it sends for moderation instead of
+  building papers from its units. Each paper's students are those who synced its units in SMARTTT,
+  by class row; the department corrects any number. All under `/api/v1/departments/teaching`, DEPARTMENT role, `?term=`:
+  - `POST /exam-list/read` `{ file: "<.docx as base64>" }` (body up to ~5 MB) → nothing stored, a review:
+    `{ entries: [{ line, codes: ["COSC 0170","COSC 172"], title, section, sitting: "regular"|"odel", students: 110 | null,
+    classRows: [{ label: "BSC.CS Y1S1", students: 100 }], unknownCodes: ["COSC 0170"], duplicateOf: 1 | null,
+    otherDepartments: ["DCOMP"], existingPaperId: "<uuid>" | null,
+    examiner: { lecturerId: "<uuid>" | null, staffNumber, name } | null }],
+    smarttt: { available, reason }, summary: { papers, newPapers, duplicates, unknown, noStudents } }`.
+    `students` null = SMARTTT couldn't be read (`smarttt.reason` says why). 422 for a file that isn't a .docx
+    or has no unit codes.
+  - `POST /exam-list` `{ papers: [{ codes: ["MATH 241"], title, sitting, examinerId?: uuid | null }] }` (max 1500)
+    → `{ created, updated, smarttt, board }`. Same codes + sitting updates the existing paper (title), never duplicates.
+    Omit `examinerId` to take SMARTTT's lecturer when they're on the department's list. 409 `TEACHING_TAKEN` when a
+    code is already on one of the department's unit-built papers.
+  - `PUT /exam-papers/:id/rows` `{ rows: [{ programme, year, semester, stream, students }] }` → the exam board.
+    A number changed from SMARTTT's (or a row added) is kept when SMARTTT is read again; a SMARTTT row left out stays at 0.
+  - `POST /exam-papers/recount` → the board, numbers re-read from SMARTTT (503 `SMARTTT_UNAVAILABLE` when it can't be).
+  - Exam board papers have two new fields: `listed: boolean` and `rows: [{ id, programme, year, semester, stream,
+    students, smartttStudents: number | null, edited }]` (empty for unit-built papers).
+  - Publishing: a listed paper needs no examiner; it needs students (`no_students`: "Nobody has synced MATH 100 in
+    SMARTTT yet; enter how many students sit it."). `no_units` now only when the department has neither units nor papers.
+- **Why it matters:** departments stop entering units and courses for exams; this is the main exams flow now.
+- **Done when:** the Exams tab has an "Upload exam list" button with the review (flags for duplicates, unknown codes,
+  other departments, no students, SMARTTT unavailable), and a listed paper's rows are editable with SMARTTT's count shown.

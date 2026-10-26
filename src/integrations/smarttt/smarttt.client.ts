@@ -1,12 +1,13 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
-import { toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits } from './smarttt.mapper.js';
+import { toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits, toUnitEnrolment } from './smarttt.mapper.js';
 import type {
   SmartttAuthenticateResult,
   SmartttLecturerUnitsResult,
   SmartttStaffLookupResult,
   SmartttStudentLookupResult,
   SmartttStudentUnitsResult,
+  SmartttUnitEnrolmentResult,
 } from './smarttt.types.js';
 
 /**
@@ -100,6 +101,30 @@ export class SmartttHttpClient {
     const mapped = toStudentUnits(result.body);
     if (!mapped) {
       logger.error({ registrationNumber: normalised, body: result.body }, 'smarttt: student units could not be mapped');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
+    }
+    return { status: 'FOUND', ...mapped };
+  }
+
+  /**
+   * How many students synced each unit this term, by class row, and who
+   * teaches it: what a department's uploaded exam papers are sized with.
+   */
+  async unitEnrolment(codes: string[]): Promise<SmartttUnitEnrolmentResult> {
+    if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };
+    const result = await this.send(
+      this.url(env.SMARTTT_UNIT_ENROLMENT_PATH),
+      { method: 'POST', body: JSON.stringify({ codes }) },
+      { codes: String(codes.length) },
+    );
+    if (result.status === 'NOT_FOUND') {
+      logger.error('smarttt: no unit-enrolment endpoint - deploy SMARTTT with apps/integrations attendance/unit-enrolment/');
+      return { status: 'UNAVAILABLE', reason: 'The timetable system cannot count unit registrations yet.' };
+    }
+    if (result.status !== 'OK') return result;
+    const mapped = toUnitEnrolment(result.body);
+    if (!mapped) {
+      logger.error('smarttt: unit enrolment could not be mapped');
       return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
     }
     return { status: 'FOUND', ...mapped };

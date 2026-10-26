@@ -151,6 +151,33 @@ export interface SmartttStudentUnit {
   slots: SmartttSlot[];
 }
 
+/** A class row's students who synced a unit this term (unit-enrolment/). */
+export interface SmartttEnrolmentRow {
+  programme: string;
+  programmeName: string;
+  year: number;
+  semester: number | null;
+  stream: string;
+  /** Part-time and distance-learning students sit the ODEL paper. */
+  sitting: 'regular' | 'odel';
+  students: number;
+}
+
+export interface SmartttUnitEnrolment {
+  code: string;
+  name: string;
+  students: number;
+  rows: SmartttEnrolmentRow[];
+  /** Who teaches it on the term's timetable. */
+  lecturers: Array<{ staffNumber: string; name: string }>;
+}
+
+export type SmartttUnitEnrolmentResult =
+  /** `units` keyed by the code as asked; `unknown`: codes SMARTTT has no unit for. */
+  | { status: 'FOUND'; term: SmartttTerm | null; units: Map<string, SmartttUnitEnrolment>; unknown: string[] }
+  | { status: 'UNAVAILABLE'; reason: string }
+  | { status: 'DISABLED' };
+
 export type SmartttStudentUnitsResult =
   | { status: 'FOUND'; term: SmartttTerm | null; units: SmartttStudentUnit[] }
   | { status: 'NOT_FOUND' }

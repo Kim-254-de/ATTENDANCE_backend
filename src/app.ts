@@ -60,6 +60,8 @@ export function createApp(): Express {
   // A department's teaching: a .xlsx for the paste dialog (base64, up to 5 MB),
   // and pasted workbook tabs of up to 2000 rows.
   app.use('/api/v1/departments/teaching/spreadsheet', express.json({ limit: '7mb' }));
+  // The department's exam list as its Word document (base64, up to 5 MB).
+  app.use('/api/v1/departments/teaching/exam-list/read', express.json({ limit: '7mb' }));
   app.use('/api/v1/departments/teaching', express.json({ limit: '1mb' }));
 
   // A registration payload is a few hundred bytes; a generous cap here would

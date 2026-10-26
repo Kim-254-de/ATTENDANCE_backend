@@ -42,6 +42,19 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
   department's too ("BITE 131/COSC 130"); a unit is on one paper at most.
   Each has an examiner (default: the unit's lecturer). A unit can be marked
   "no written exam". "A paper for each unit" starts the list.
+- **Uploaded exam list** (`exam-list.read.ts`, `exam-list.service.ts`): instead of
+  building papers from units, the department uploads the Word letter it sends
+  for moderation. Each table row with a unit code is a paper (title from the
+  next cell; "COSC 0172/0170" is two codes; rows under an ODEL/part-time
+  heading, or "Math 241 odel", are ODEL papers). A review flags duplicates,
+  codes SMARTTT doesn't know, codes another department listed and papers
+  nobody synced, before anything is saved. A listed paper's class rows and
+  numbers are the students who synced its units in SMARTTT
+  (`unit-enrolment/` there); the department corrects any number, and a
+  corrected row keeps it. SMARTTT is read again when the Generator imports
+  the papers. A listed paper's examiner is optional (SMARTTT's lecturer when
+  on the list). Its class rows reach the Generator with ids like
+  `listed:BSCCS|1|1|`, so a class sitting several papers is one class row.
 - **Practicals**, on weekdays the department sets; the Generator only shows them.
 - **Moderation letter** (Word or PDF) to the external moderator, from the papers.
 - Publishing the papers needs every unit on a paper or marked, and every
@@ -77,6 +90,10 @@ Generator's term (default: the newest).
 | `POST` | `/courses/bulk`, `/units/bulk`, `/groups/bulk`, `/lecturers/bulk` | Paste from Excel: rows keyed by column heading; good rows kept, bad ones reported by line |
 | `POST` | `/spreadsheet` | A .xlsx (base64) read back as cells for the paste dialog; nothing stored |
 | `POST` | `/publish`, `/reopen` | Lock and send to the Director; unlock |
+| `POST` | `/exam-list/read` | The uploaded .docx exam list read and checked against SMARTTT; nothing stored |
+| `POST` | `/exam-list` | The reviewed papers saved, sized from SMARTTT |
+| `PUT` | `/exam-papers/:id/rows` | A listed paper's class rows and numbers, as the department corrects them |
+| `POST` | `/exam-papers/recount` | Listed papers' numbers read from SMARTTT again |
 | `GET` | `/export/:format` | The allocation form as `pdf`, `docx` or `xlsx` (phone numbers, and times once published) |
 | `GET` | `/exams` | Exam papers, units (on a paper or not), other departments' units, practicals, problems |
 | `POST` / `PATCH` / `DELETE` | `/exam-papers`, `/exam-papers/:id` | A paper |
