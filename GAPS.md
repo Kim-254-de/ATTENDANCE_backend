@@ -115,7 +115,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   other departments, no students, SMARTTT unavailable), and a listed paper's rows are editable with SMARTTT's count shown.
 
 ### F-3 · High · Invigilators before the draft, one per extra room; papers with no students don't block
-- **Raised:** 2026-10-27, backend   **Status:** open
+- **Raised:** 2026-10-27, backend   **Status:** done (ATTENDANCE_fronted 680f1d0)
 - **What changed** (`/api/v1/departments/teaching`):
   - `GET /invigilators`: `canEdit` is now true before the Director shares a draft (the main invigilator can be
     named any time). Each paper has new fields `placed` (in the shared draft), `mainRoom` (string | null) and
