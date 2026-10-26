@@ -87,7 +87,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   `/exam-room/:id`, and the scan page; review it rather than starting over.
 
 ### F-2 · High · The department uploads its exam list; numbers come from SMARTTT
-- **Raised:** 2026-10-27, backend   **Status:** open
+- **Raised:** 2026-10-27, backend   **Status:** done (ATTENDANCE_fronted 0d92647)
 - **What changed:** a department can upload the Word letter it sends for moderation instead of
   building papers from its units. Each paper's students are those who synced its units in SMARTTT,
   by class row; the department corrects any number. All under `/api/v1/departments/teaching`, DEPARTMENT role, `?term=`:
