@@ -8,12 +8,16 @@ import { compact } from './teaching.repository.js';
  * Like teaching, a term's exam data is read whole and worked out in memory.
  */
 
+/** Who sits a paper: the unit's regular classes, or its ODEL and part-time ones. */
+export type Sitting = 'regular' | 'odel';
+
 export interface PaperRow {
   id: string;
   departmentId: string;
   /** compact(departments.code). */
   departmentCode: string;
   title: string;
+  sitting: Sitting;
   examinerId: string | null;
   notes: string;
   publishedSignature: string | null;
@@ -48,10 +52,10 @@ export interface ExamData {
 
 export async function loadExams(termId: string, client: Queryable = pool): Promise<ExamData> {
   const papers = await query<{
-    id: string; department_id: string; department_code: string | null; title: string; examiner_id: string | null;
+    id: string; department_id: string; department_code: string | null; title: string; sitting: Sitting; examiner_id: string | null;
     notes: string; published_signature: string | null; unit_ids: string[] | null;
   }>(
-    `SELECT p.id, p.department_id, d.code AS department_code, p.title, p.examiner_id, p.notes, p.published_signature,
+    `SELECT p.id, p.department_id, d.code AS department_code, p.title, p.sitting, p.examiner_id, p.notes, p.published_signature,
             ARRAY(SELECT pu.unit_id::text FROM teaching_exam_paper_units pu WHERE pu.paper_id = p.id) AS unit_ids
        FROM teaching_exam_papers p JOIN departments d ON d.id = p.department_id
       WHERE p.generator_term_id = $1`,
@@ -83,6 +87,7 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
       departmentId: p.department_id,
       departmentCode: compact(p.department_code),
       title: p.title,
+      sitting: p.sitting,
       examinerId: p.examiner_id,
       notes: p.notes,
       publishedSignature: p.published_signature,
@@ -100,6 +105,7 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
 
 export interface PaperValues {
   title: string;
+  sitting: Sitting;
   examinerId: string | null;
   notes: string;
   unitIds: string[];
@@ -107,25 +113,30 @@ export interface PaperValues {
 
 export async function insertPaper(client: PoolClient, termId: string, departmentId: string, v: PaperValues): Promise<string> {
   const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, examiner_id, notes)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [termId, departmentId, v.title, v.examinerId, v.notes],
+    `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, sitting, examiner_id, notes)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [termId, departmentId, v.title, v.sitting, v.examinerId, v.notes],
   );
   const id = rows[0]!.id;
-  await setPaperUnits(client, id, v.unitIds);
+  await setPaperUnits(client, id, v.unitIds, v.sitting);
   return id;
 }
 
 export async function updatePaper(client: PoolClient, paperId: string, v: PaperValues): Promise<void> {
-  await client.query(`UPDATE teaching_exam_papers SET title = $2, examiner_id = $3, notes = $4 WHERE id = $1`, [paperId, v.title, v.examinerId, v.notes]);
-  await setPaperUnits(client, paperId, v.unitIds);
+  await client.query(
+    `UPDATE teaching_exam_papers SET title = $2, sitting = $3, examiner_id = $4, notes = $5 WHERE id = $1`,
+    [paperId, v.title, v.sitting, v.examinerId, v.notes],
+  );
+  await setPaperUnits(client, paperId, v.unitIds, v.sitting);
 }
 
-async function setPaperUnits(client: PoolClient, paperId: string, unitIds: string[]): Promise<void> {
+async function setPaperUnits(client: PoolClient, paperId: string, unitIds: string[], sitting: Sitting): Promise<void> {
   await client.query(`DELETE FROM teaching_exam_paper_units WHERE paper_id = $1 AND NOT (unit_id = ANY($2::uuid[]))`, [paperId, unitIds]);
+  await client.query(`UPDATE teaching_exam_paper_units SET sitting = $2 WHERE paper_id = $1`, [paperId, sitting]);
   await client.query(
-    `INSERT INTO teaching_exam_paper_units (paper_id, unit_id) SELECT $1, u FROM unnest($2::uuid[]) AS u ON CONFLICT DO NOTHING`,
-    [paperId, unitIds],
+    `INSERT INTO teaching_exam_paper_units (paper_id, unit_id, sitting) SELECT $1, u, $3 FROM unnest($2::uuid[]) AS u
+     ON CONFLICT (paper_id, unit_id) DO NOTHING`,
+    [paperId, unitIds, sitting],
   );
 }
 

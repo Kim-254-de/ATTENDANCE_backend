@@ -75,7 +75,7 @@ const ids: Record<string, string> = {};
 interface ExamBoard {
   canEdit: boolean;
   published: boolean;
-  papers: Array<{ id: string; codes: string; title: string; examiner: string | null; classRows: string[]; students: number; changedSincePublished: boolean }>;
+  papers: Array<{ id: string; codes: string; sitting: string; title: string; examiner: string | null; classRows: string[]; students: number; changedSincePublished: boolean }>;
   units: Array<{ id: string; code: string; noWrittenExam: boolean; paperId: string | null }>;
   otherUnits: Array<{ id: string; code: string }>;
   practicals: Array<{ unitCode: string; date: string; startTime: string }>;
@@ -129,6 +129,7 @@ describe('exam papers', () => {
     const b = body<ExamBoard>(await cs.get('/exams')).data;
     expect(b.problems.map((p) => p.message)).toEqual([
       "COSC 130 is on no paper; add it to one, or mark it 'no written exam'.",
+      'COSC 130 has ODEL or part-time classes but no ODEL paper; add one.',
       "COSC 499 is on no paper; add it to one, or mark it 'no written exam'.",
     ]);
     expect(b.otherUnits.map((u) => u.code)).toEqual(['BITE 131']);
@@ -139,12 +140,35 @@ describe('exam papers', () => {
     expect(res.status).toBe(201);
     ids.paper = body<{ id: string }>(res).data.id;
     const b = body<ExamBoard>(await cs.get('/exams')).data;
+    // The regular paper: the ODEL class (D) sits a paper of its own.
     expect(b.papers).toEqual([expect.objectContaining({
-      codes: 'BITE 131/COSC 130', title: 'Programming', examiner: 'Dr. Peter Kamami (FT)',
-      classRows: ['BED.SCI Y1S1', 'BSC.COMP SCI Y1S1', 'BSC.COMP SCI Y1S1 (D)'], students: 170,
+      codes: 'BITE 131/COSC 130', sitting: 'regular', title: 'Programming', examiner: 'Dr. Peter Kamami (FT)',
+      classRows: ['BED.SCI Y1S1', 'BSC.COMP SCI Y1S1'], students: 150,
     })]);
-    // A unit is on one paper only.
+    // A unit is on one paper per sitting.
     expect(body(await edu.post('/exam-papers', { unitIds: [ids.bite] })).error!.code).toBe('TEACHING_TAKEN');
+  });
+
+  it('makes a separate ODEL paper for the same unit, sat only by its ODEL classes', async () => {
+    const res = await cs.post('/exam-papers', { unitIds: [ids.cosc], sitting: 'odel' });
+    expect(res.status).toBe(201);
+    ids.odelPaper = body<{ id: string }>(res).data.id;
+    const odel = body<ExamBoard>(await cs.get('/exams')).data.papers.find((p) => p.id === ids.odelPaper)!;
+    expect([odel.codes, odel.sitting, odel.classRows, odel.students]).toEqual(['COSC 130', 'odel', ['BSC.COMP SCI Y1S1 (D)'], 20]);
+    expect(body(await cs.post('/exam-papers', { unitIds: [ids.cosc], sitting: 'odel' })).error!.code).toBe('TEACHING_TAKEN');
+    // An ODEL paper for a unit with no ODEL class has nobody to sit it.
+    const empty = body<{ id: string }>(await cs.post('/exam-papers', { unitIds: [ids.proj], sitting: 'odel' })).data.id;
+    expect(body<ExamBoard>(await cs.get('/exams')).data.problems.map((p) => p.code)).toContain('no_students');
+    expect((await cs.delete(`/exam-papers/${empty}`)).status).toBe(200);
+  });
+
+  it('pastes ODEL papers as the moderation letters write them', async () => {
+    await cs.delete(`/exam-papers/${ids.odelPaper}`);
+    const pasted = await cs.post('/exam-papers/bulk', { rows: [{ Codes: 'COSC 130 odel', Title: 'Programming (ODEL)' }, { Codes: 'COSC 130', Sitting: 'ODEL' }] });
+    expect(body(pasted).data).toMatchObject({ created: 1, errorCount: 1 });
+    const odel = body<ExamBoard>(await cs.get('/exams')).data.papers.find((p) => p.sitting === 'odel')!;
+    expect([odel.codes, odel.title]).toEqual(['COSC 130', 'Programming (ODEL)']);
+    ids.odelPaper = odel.id;
   });
 
   it('marks a unit with no written exam, and keeps it off papers', async () => {
@@ -177,9 +201,10 @@ describe('exam papers', () => {
     }>(res).data;
     expect(data.published.map((d) => d.code)).toEqual(['DCOMP']);
     expect(data.not_published.map((d) => d.code)).toEqual(['DEDU']);
-    const paper = data.published[0]!.papers[0]!;
-    expect([paper.id, paper.codes, paper.examiner.staff_number]).toEqual([ids.paper, ['BITE 131', 'COSC 130'], 'STF/0001']);
-    expect(paper.rows.find((r) => r.course_id === ids.odel)!.mode).toBe('odel');
+    const [paper, odel] = data.published[0]!.papers as Array<{ id: string; codes: string[]; sitting: string; examiner: { staff_number: string }; rows: Array<{ course_id: string; mode: string }> }>;
+    expect([paper!.id, paper!.codes, paper!.sitting, paper!.examiner.staff_number]).toEqual([ids.paper, ['BITE 131', 'COSC 130'], 'regular', 'STF/0001']);
+    expect(paper!.rows.map((r) => r.course_id)).not.toContain(ids.odel);
+    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel' }]]);
     expect(data.published[0]!.practicals).toHaveLength(2);
   });
 
@@ -204,18 +229,25 @@ describe('invigilators', () => {
   it('names one per paper, never someone over their duty limit, and serves them to the Generator once published', async () => {
     generator.draft = {
       draft: { id: 'd1', name: 'Draft 1', shared_at: '2026-10-25T08:00:00Z', status: 'shared' },
-      papers: [{ paper_ref: ids.paper, codes: ['BITE 131', 'COSC 130'], date: '2026-12-01', session: 0, start_time: '08:30', end_time: '10:30', rooms: ['LH1', 'LH2'] }],
+      papers: [
+        { paper_ref: ids.paper, codes: ['BITE 131', 'COSC 130'], date: '2026-12-01', session: 0, start_time: '08:30', end_time: '10:30', rooms: ['LH1', 'LH2'] },
+        { paper_ref: ids.odelPaper, codes: ['COSC 130'], date: '2026-12-03', session: 1, start_time: '11:30', end_time: '13:30', rooms: ['LH4'] },
+      ],
     };
     let b = body<{ canEdit: boolean; papers: Array<{ rooms: string[]; date: string }>; problems: unknown[]; lecturers: Array<{ id: string; own: boolean }> }>(await cs.get('/invigilators')).data;
     expect(b.canEdit).toBe(true);
     expect(b.papers[0]!.rooms).toEqual(['LH1', 'LH2']);
-    expect(b.problems).toHaveLength(1);
+    expect(b.problems).toHaveLength(2);
 
     expect((await cs.put(`/invigilators/${ids.paper}`, { lecturerId: ids.jane })).status).toBe(200);
+    expect((await cs.put(`/invigilators/${ids.odelPaper}`, { lecturerId: ids.jane })).status).toBe(200);
     expect((await cs.post('/invigilators/publish')).status).toBe(200);
     // Only once published does the Generator see it.
     const res = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/invigilators`).set('X-API-Key', 'generator-key');
-    expect(body(res).data).toEqual({ [ids.paper!]: { '': { staff_number: 'STF/0002', name: 'Jane Otieno (FT)' } } });
+    expect(body(res).data).toEqual({
+      [ids.paper!]: { '': { staff_number: 'STF/0002', name: 'Jane Otieno (FT)' } },
+      [ids.odelPaper!]: { '': { staff_number: 'STF/0002', name: 'Jane Otieno (FT)' } },
+    });
     b = body<typeof b>(await cs.get('/invigilators')).data;
     expect(b.problems).toEqual([]);
   });

@@ -185,7 +185,7 @@ export async function moderationLetter(req: Request, res: Response): Promise<voi
     term: context.term.name,
     date: q.date || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }),
     moderator: q.moderator.split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
-    papers: data.papers.map((p) => [p.codes, p.title]),
+    papers: data.papers.map((p) => [p.sitting === 'odel' ? `${p.codes} (ODEL)` : p.codes, p.title]),
     signedBy: data.publication?.publishedBy ?? context.actor,
   });
   res

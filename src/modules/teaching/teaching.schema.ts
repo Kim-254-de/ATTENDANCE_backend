@@ -93,14 +93,18 @@ export type SpreadsheetInput = z.infer<typeof spreadsheetSchema>;
 
 // -- exams -----------------------------------------------------------------------------------------
 
-/** A written paper: one unit, or several sitting one shared paper ("BITE 131/COSC 130"). */
+/**
+ * A written paper: one unit, or several sitting one shared paper ("BITE 131/COSC 130"),
+ * sat by the units' regular classes or their ODEL and part-time ones.
+ */
 const paper = {
   unitIds: z.array(id).min(1).max(10),
   title: z.string().trim().max(255),
+  sitting: z.enum(['regular', 'odel']),
   examinerId: id.nullable(),
   notes: z.string().trim().max(500),
 };
-export const paperSchema = z.object(paper).partial({ title: true, examinerId: true, notes: true }).strict();
+export const paperSchema = z.object(paper).partial({ title: true, sitting: true, examinerId: true, notes: true }).strict();
 export const paperPatchSchema = z.object(paper).partial().strict();
 
 export const noWrittenExamSchema = z.object({ noWrittenExam: z.boolean() }).strict();

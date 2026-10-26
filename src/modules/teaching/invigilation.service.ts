@@ -3,7 +3,7 @@ import { AppError, ErrorCode } from '../../common/errors/index.js';
 import { AuditAction } from '../../db/types.js';
 import { sharedExamDraft, type SharedExamDraft, type SharedPaper } from '../../integrations/generator/generator.client.js';
 import * as examsRepo from './exams.repository.js';
-import { paperCodes } from './exams.service.js';
+import { paperLabel } from './exams.service.js';
 import * as repo from './teaching.repository.js';
 import { type LecturerRow } from './teaching.repository.js';
 import { audit, displayName, invalid, person, publicationDto, writeTeaching, type Ctx, type PublicationDto } from './teaching.service.js';
@@ -74,7 +74,7 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
       const l = inv ? lecturers.get(inv.lecturerId) : undefined;
       return {
         paperId: p.id,
-        codes: paperCodes(p, units).join('/'),
+        codes: paperLabel(p, units),
         title: p.title,
         date: where?.date ?? null,
         session: where?.session ?? null,
