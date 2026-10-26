@@ -331,6 +331,21 @@ describe('paste from Excel', () => {
     expect(b.problems).toEqual([]);
   });
 
+  it('names the nearest courses when a unit lists one that does not exist', async () => {
+    const res = await ict.post('/units/bulk', {
+      rows: [
+        { Code: 'BIT 120', Title: 'Networks', 'Hours per week': 3, Courses: 'BSC.IT Y1S2' },
+        { Code: 'BIT 121', Title: 'Maths', 'Hours per week': 3, Courses: 'BSC IT Y2S1' },
+        { Code: 'BIT 122', Title: 'Ethics', 'Hours per week': 3, Courses: 'BSC.INFO TECH Y1S1' },
+      ],
+    });
+    const errors = body<{ errors: Array<{ line: number; message: string }> }>(res).data.errors;
+    expect(errors[0]!.message).toBe("no course 'BSC.IT Y1S2' this term; did you mean 'BSC.IT Y1S1', 'BSC.IT Y2S1'?");
+    // Spacing and punctuation never matter: 'BSC IT Y2S1' is BSC.IT Y2S1.
+    expect(errors.map((e) => e.line)).toEqual([1, 3]);
+    expect(errors[1]!.message).toMatch(/^no course 'BSC.INFO TECH Y1S1' this term; add it on the Courses tab first \(write it as the Courses tab shows it/);
+  });
+
   it('reads a workbook back as cells', async () => {
     const ExcelJS = (await import('exceljs')).default;
     const book = new ExcelJS.Workbook();
