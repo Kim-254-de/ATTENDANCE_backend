@@ -21,7 +21,7 @@ export function createApp(): Express {
 
   // Behind a load balancer or reverse proxy, req.ip must reflect the real
   // client or the rate limiter would throttle the proxy as a single caller.
-  app.set('trust proxy', isProduction ? 1 : false);
+  app.set('trust proxy', isProduction ? env.TRUST_PROXY_HOPS : false);
   app.disable('x-powered-by');
 
   app.use(requestContext);
