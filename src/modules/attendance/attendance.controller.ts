@@ -1,0 +1,92 @@
+import type { Request, Response } from 'express';
+import { AppError } from '../../common/errors/index.js';
+import { sendCreated, sendSuccess } from '../../common/http/index.js';
+import { clientFingerprint } from '../../middleware/request-context.js';
+import { examService } from '../exam/index.js';
+import * as attendanceService from './attendance.service.js';
+import type {
+  BarcodeCheckInInput,
+  CardCheckInInput,
+  CheckInInput,
+  FingerprintCheckInInput,
+  SessionIdParam,
+} from './attendance.schema.js';
+
+/** HTTP in, HTTP out. */
+
+function userId(req: Request): string {
+  const id = req.auth?.userId;
+  if (!id) throw AppError.unauthenticated('Please sign in.');
+  return id;
+}
+
+/** POST /api/v1/attendance/check-in */
+export async function checkIn(req: Request, res: Response): Promise<void> {
+  const { payload, location } = req.body as CheckInInput;
+  // One scanner for both: an exam room's code is checked in by the exam module.
+  if (await examService.isExamCode(payload)) {
+    sendCreated(res, await examService.checkIn(payload, userId(req), location));
+    return;
+  }
+  const result = await attendanceService.checkIn(
+    payload,
+    userId(req),
+    { ...clientFingerprint(req), requestId: req.requestId },
+    location,
+  );
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/card-check-in
+ *
+ * Called by a card terminal, authenticated by its shared key rather than as a
+ * student, so there is no `req.auth` to read a user id from: the card names
+ * the student.
+ */
+export async function cardCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, cardUid } = req.body as CardCheckInInput;
+  const result = await attendanceService.checkInByCard(sessionId, cardUid, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/barcode-check-in
+ *
+ * Called by a card terminal reading the barcode on a student ID card, which
+ * carries the registration number. Authenticated by the card terminals' key.
+ */
+export async function barcodeCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, barcode } = req.body as BarcodeCheckInInput;
+  const result = await attendanceService.checkInByBarcode(sessionId, barcode, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
+  sendCreated(res, result);
+}
+
+/**
+ * POST /api/v1/attendance/fingerprint-check-in
+ *
+ * Called by a fingerprint terminal, authenticated by its shared key. The
+ * reader has already matched the finger; the body says which of its enrolment
+ * slots, and that names the student.
+ */
+export async function fingerprintCheckIn(req: Request, res: Response): Promise<void> {
+  const { sessionId, terminalId, fingerRef } = req.body as FingerprintCheckInInput;
+  const result = await attendanceService.checkInByFingerprint(sessionId, terminalId, fingerRef, {
+    ...clientFingerprint(req),
+    requestId: req.requestId,
+  });
+  sendCreated(res, result);
+}
+
+/** GET /api/v1/attendance/sessions/:sessionId */
+export async function sessionAttendance(req: Request, res: Response): Promise<void> {
+  const { sessionId } = req.params as unknown as SessionIdParam;
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  sendSuccess(res, await attendanceService.listSessionAttendance(sessionId, userId(req)));
+}

@@ -1,0 +1,171 @@
+import { z } from 'zod';
+
+const id = z.string().uuid('Not a valid identifier.');
+const hours = z.number().min(0).max(500).nullable();
+
+export const termQuerySchema = z.object({ term: z.string().trim().min(1).max(64).optional() }).strict();
+export type TermQuery = z.infer<typeof termQuerySchema>;
+
+export const idParamSchema = z.object({ id }).strict();
+export type IdParam = z.infer<typeof idParamSchema>;
+
+export const formatParamSchema = z.object({ format: z.enum(['pdf', 'docx', 'xlsx']) }).strict();
+export type FormatParam = z.infer<typeof formatParamSchema>;
+
+/** A cohort: 'BSC.CS', year 1, semester 1, 120 students (sub-class optional). */
+const course = {
+  programme: z.string().trim().min(1).max(64),
+  year: z.number().int().min(1).max(7),
+  semester: z.number().int().min(1).max(3),
+  subClass: z.string().trim().max(10),
+  students: z.number().int().min(1).max(5000),
+  mode: z.enum(['regular', 'odel', 'weekend', 'evening', 'school_based', 'part_time']),
+};
+export const courseSchema = z.object({ ...course, subClass: course.subClass.default(''), mode: course.mode.default('regular') }).strict();
+export const coursePatchSchema = z.object(course).partial().strict();
+
+const roomType = z.enum(['lecture_hall', 'lab', 'seminar']);
+const unit = {
+  code: z.string().trim().min(1).max(64),
+  title: z.string().trim().min(1).max(255),
+  weeklyHours: z.number().int().min(1).max(20),
+  classLength: z.number().int().min(1).max(6),
+  roomType,
+  // The courses that take it: this department's or, for servicing, another's.
+  courseIds: z.array(id).min(1).max(50),
+};
+export const unitSchema = z.object({ ...unit, roomType: roomType.default('lecture_hall') }).strict();
+export const unitPatchSchema = z.object(unit).partial().strict();
+
+const groupFields = {
+  lecturerId: id.nullable(),
+  lectureHours: hours,
+  practicalHours: hours,
+  cfHours: hours,
+};
+
+/** One class of a unit. `label` is '' for the whole class, else 'A', 'GR B'... */
+export const groupsSchema = z
+  .object({
+    groups: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().max(50).default(''),
+            members: z.array(z.object({ courseId: id, students: z.number().int().min(1).max(5000).nullable().optional() }).strict()).min(1).max(50),
+            ...groupFields,
+          })
+          .partial({ lecturerId: true, lectureHours: true, practicalHours: true, cfHours: true })
+          .strict(),
+      )
+      .min(1)
+      .max(26),
+  })
+  .strict();
+export const groupPatchSchema = z.object(groupFields).partial().strict();
+
+const lecturer = {
+  title: z.string().trim().max(30),
+  fullName: z.string().trim().min(1).max(255),
+  staffNumber: z.string().trim().max(64).nullable(),
+  employmentType: z.enum(['full_time', 'part_time']),
+  phone: z.string().trim().max(40),
+  email: z.string().trim().max(255),
+  maxWeeklyHours: z.number().int().min(0).max(60).nullable(),
+  maxExamDuties: z.number().int().min(0).max(100).nullable(),
+  active: z.boolean(),
+};
+export const lecturerSchema = z
+  .object(lecturer)
+  .partial({ title: true, staffNumber: true, employmentType: true, phone: true, email: true, maxWeeklyHours: true, maxExamDuties: true, active: true })
+  .strict();
+export const lecturerPatchSchema = z.object(lecturer).partial().strict();
+
+/** Pasted rows, each keyed by its column heading. */
+export const bulkSchema = z
+  .object({ rows: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).min(1).max(2000) })
+  .strict();
+export type BulkInput = z.infer<typeof bulkSchema>;
+
+/** A .xlsx file for the paste dialog, base64 (the JSON body limit on this path allows ~5 MB). */
+export const spreadsheetSchema = z.object({ file: z.string().min(1).max(7_000_000) }).strict();
+export type SpreadsheetInput = z.infer<typeof spreadsheetSchema>;
+
+// -- exams -----------------------------------------------------------------------------------------
+
+/**
+ * A written paper: one unit, or several sitting one shared paper ("BITE 131/COSC 130"),
+ * sat by the units' regular classes or their ODEL and part-time ones.
+ */
+const paper = {
+  unitIds: z.array(id).min(1).max(10),
+  title: z.string().trim().max(255),
+  sitting: z.enum(['regular', 'odel']),
+  examinerId: id.nullable(),
+  notes: z.string().trim().max(500),
+};
+export const paperSchema = z.object(paper).partial({ title: true, sitting: true, examinerId: true, notes: true }).strict();
+export const paperPatchSchema = z.object(paper).partial().strict();
+
+export const noWrittenExamSchema = z.object({ noWrittenExam: z.boolean() }).strict();
+
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'A time like 08:30.');
+export const practicalSchema = z
+  .object({ unitId: id, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'A date like 2026-11-20.'), startTime: hhmm, endTime: hhmm })
+  .strict();
+
+/** Who invigilates the paper (any department's lecturer, by id); null clears it. */
+/** `room`: '' for the paper's main invigilator (any time), else one of its extra rooms (once the draft is shared). */
+export const invigilatorSchema = z.object({ lecturerId: id.nullable(), room: z.string().trim().max(30).default('') }).strict();
+
+export const letterParamSchema = z.object({ format: z.enum(['pdf', 'docx']) }).strict();
+/** `moderator`: name and address, a line each. */
+export const letterQuerySchema = z
+  .object({ term: z.string().trim().min(1).max(64).optional(), moderator: z.string().max(1000).default(''), date: z.string().trim().max(40).default('') })
+  .strict();
+export type LetterQuery = z.infer<typeof letterQuerySchema>;
+
+// -- the uploaded exam list (exam-list.service.ts) -------------------------------------------------
+
+/** The department's exam list as a .docx, base64 (the JSON body limit on this path allows ~5 MB). */
+export const examListFileSchema = z.object({ file: z.string().min(1).max(7_000_000) }).strict();
+export type ExamListFileInput = z.infer<typeof examListFileSchema>;
+
+const unitCode = z.string().trim().min(2).max(30);
+export const examListSaveSchema = z
+  .object({
+    papers: z
+      .array(
+        z
+          .object({
+            codes: z.array(unitCode).min(1).max(6),
+            title: z.string().trim().min(1).max(255),
+            sitting: z.enum(['regular', 'odel']),
+            examinerId: z.string().uuid().nullable().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1500),
+  })
+  .strict();
+export type ExamListSaveInput = z.infer<typeof examListSaveSchema>;
+
+const paperRow = z
+  .object({
+    programme: z.string().trim().min(1).max(64),
+    year: z.number().int().min(1).max(10),
+    semester: z.number().int().min(1).max(3),
+    stream: z.string().trim().max(40).default(''),
+    students: z.number().int().min(0).max(5000),
+  })
+  .strict();
+
+export const paperRowsSchema = z.object({ rows: z.array(paperRow).max(200) }).strict();
+export type PaperRowsInput = z.infer<typeof paperRowsSchema>;
+
+/** Many listed papers' class rows in one save. */
+export const manyPaperRowsSchema = z
+  .object({ papers: z.array(z.object({ paperId: z.string().uuid(), rows: z.array(paperRow).max(200) }).strict()).min(1).max(1500) })
+  .strict();
+export type ManyPaperRowsInput = z.infer<typeof manyPaperRowsSchema>;
