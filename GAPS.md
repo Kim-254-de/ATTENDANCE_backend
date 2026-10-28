@@ -133,7 +133,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   shows warnings without disabling Publish.
 
 ### F-4 · Medium · Remove the uploaded exam list as a whole; student numbers in the paper's Edit dialog
-- **Raised:** 2026-10-28, backend   **Status:** done (ATTENDANCE_fronted, uncommitted at time of writing)
+- **Raised:** 2026-10-28, backend   **Status:** done (backend 06f4194, ATTENDANCE_fronted ab79943)
 - **What changed** (`/api/v1/departments/teaching`):
   - New `DELETE /exam-list?term=<id>`: removes every listed (uploaded) paper of the officer's department this term,
     with its class rows and invigilators; papers built from units stay. 409 while the papers are published (reopen
