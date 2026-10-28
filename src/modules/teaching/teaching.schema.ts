@@ -151,21 +151,21 @@ export const examListSaveSchema = z
   .strict();
 export type ExamListSaveInput = z.infer<typeof examListSaveSchema>;
 
-export const paperRowsSchema = z
+const paperRow = z
   .object({
-    rows: z
-      .array(
-        z
-          .object({
-            programme: z.string().trim().min(1).max(64),
-            year: z.number().int().min(1).max(10),
-            semester: z.number().int().min(1).max(3),
-            stream: z.string().trim().max(40).default(''),
-            students: z.number().int().min(0).max(5000),
-          })
-          .strict(),
-      )
-      .max(200),
+    programme: z.string().trim().min(1).max(64),
+    year: z.number().int().min(1).max(10),
+    semester: z.number().int().min(1).max(3),
+    stream: z.string().trim().max(40).default(''),
+    students: z.number().int().min(0).max(5000),
   })
   .strict();
+
+export const paperRowsSchema = z.object({ rows: z.array(paperRow).max(200) }).strict();
 export type PaperRowsInput = z.infer<typeof paperRowsSchema>;
+
+/** Many listed papers' class rows in one save. */
+export const manyPaperRowsSchema = z
+  .object({ papers: z.array(z.object({ paperId: z.string().uuid(), rows: z.array(paperRow).max(200) }).strict()).min(1).max(1500) })
+  .strict();
+export type ManyPaperRowsInput = z.infer<typeof manyPaperRowsSchema>;

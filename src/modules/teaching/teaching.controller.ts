@@ -10,7 +10,7 @@ import * as bulk from './teaching.import.js';
 import { BUILDERS, layout, MEDIA, readWorkbook, WorkbookError } from './teaching.export.js';
 import * as teaching from './teaching.service.js';
 import type {
-  BulkInput, ExamListFileInput, ExamListSaveInput, FormatParam, IdParam, LetterQuery, PaperRowsInput, SpreadsheetInput, TermQuery,
+  BulkInput, ExamListFileInput, ExamListSaveInput, FormatParam, IdParam, LetterQuery, ManyPaperRowsInput, PaperRowsInput, SpreadsheetInput, TermQuery,
 } from './teaching.schema.js';
 import type { CourseInput, GroupInput, GroupPatch, LecturerInput, UnitInput } from './teaching.service.js';
 
@@ -160,6 +160,11 @@ export async function deleteExamList(req: Request, res: Response): Promise<void>
 /** PUT /departments/teaching/exam-papers/:id/rows: the department's numbers for a listed paper. */
 export async function setPaperRows(req: Request, res: Response): Promise<void> {
   sendSuccess(res, await examList.setRows(await ctx(req), param(req), (req.body as PaperRowsInput).rows));
+}
+
+/** PUT /departments/teaching/exam-papers/rows: many listed papers' numbers at once. */
+export async function setManyPaperRows(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await examList.setManyRows(await ctx(req), (req.body as ManyPaperRowsInput).papers));
 }
 
 /** POST /departments/teaching/exam-papers/recount: listed papers' numbers read from SMARTTT again. */

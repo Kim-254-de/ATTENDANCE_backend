@@ -343,4 +343,27 @@ describe('the uploaded exam list', () => {
     // The other department's list is untouched.
     expect(body<Board>(await math.get('/exams')).data.papers.some((p) => p.listed)).toBe(true);
   });
+
+  it("takes many papers' numbers in one save, all or none", async () => {
+    expect((await math.post('/exams/reopen')).status).toBe(200);
+    const papers = body<Board>(await math.get('/exams')).data.papers;
+    const nobody = papers.find((p) => p.codes === 'MATH 100' && p.sitting === 'odel')!;
+    const stats = papers.find((p) => p.codes === 'MATH 446')!;
+    const row = (programme: string, year: number, students: number) => ({ programme, year, semester: 1, stream: '', students });
+    // One bad paper (a unit-built id that isn't the department's) and nothing is saved.
+    const bad = await math.put('/exam-papers/rows', {
+      papers: [{ paperId: nobody.id, rows: [row('MATH', 1, 25)] }, { paperId: '00000000-0000-4000-8000-000000000000', rows: [] }],
+    });
+    expect(bad.status).toBe(404);
+    expect(body<Board>(await math.get('/exams')).data.papers.find((p) => p.id === nobody.id)!.students).toBe(0);
+
+    const res = await math.put('/exam-papers/rows', {
+      papers: [{ paperId: nobody.id, rows: [row('MATH', 1, 25)] }, { paperId: stats.id, rows: [row('BSC.STAT', 4, 50)] }],
+    });
+    expect(res.status).toBe(200);
+    const after = body<Board>(res).data;
+    expect(after.papers.find((p) => p.id === nobody.id)!.students).toBe(25);
+    expect(after.papers.find((p) => p.id === stats.id)!.rows.map((r) => [r.students, r.smartttStudents, r.edited])).toEqual([[50, 44, true]]);
+    expect(after.warnings.some((w) => w.message.includes('MATH 100'))).toBe(false);
+  });
 });

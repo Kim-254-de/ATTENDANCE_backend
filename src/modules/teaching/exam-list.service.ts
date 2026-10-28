@@ -290,27 +290,44 @@ export interface RowInput {
 export async function setRows(ctx: Ctx, paperId: string, rows: RowInput[]): Promise<ExamBoardDto> {
   await exams(ctx, async (client) => {
     const d = await loadExamTerm(ctx.term.id, client);
-    const paper = d.exams.papers.find((p) => p.id === paperId);
-    if (!paper || paper.departmentId !== ctx.department.id) throw AppError.notFound('No such paper in your department.');
-    if (!isListed(paper)) throw invalid("This paper's students come from your units' courses; change them there.");
-    const before = new Map(paper.rows.map((r) => [rowKey(r), r]));
-    const out = new Map<string, ListedRowValues>();
-    for (const r of rows) {
-      const row = { programme: r.programme.trim().toUpperCase(), year: r.year, semester: r.semester, stream: r.stream.trim() };
-      if (!row.programme) throw invalid('Every class row needs its programme code.');
-      const key = rowKey(row);
-      if (out.has(key)) throw invalid(`${row.programme} Y${row.year}S${row.semester} is listed twice.`);
-      const was = before.get(key);
-      const smartttStudents = was?.smartttStudents ?? null;
-      out.set(key, { ...row, students: r.students, smartttStudents, edited: (was?.edited ?? false) || smartttStudents === null || r.students !== smartttStudents });
-    }
-    for (const [key, was] of before) {
-      if (!out.has(key) && was.smartttStudents !== null) out.set(key, { ...was, students: 0, edited: true });
-    }
-    await examsRepo.setListedRows(client, paper.id, [...out.values()]);
+    await applyRows(client, ctx, d, paperId, rows);
   });
   await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_paper.rows', id: paperId, after: rows });
   return board(ctx);
+}
+
+/**
+ * Several listed papers' class rows at once (the "Enter student numbers"
+ * screen), all or none: one bad paper saves nothing.
+ */
+export async function setManyRows(ctx: Ctx, papers: Array<{ paperId: string; rows: RowInput[] }>): Promise<ExamBoardDto> {
+  await exams(ctx, async (client) => {
+    const d = await loadExamTerm(ctx.term.id, client);
+    for (const p of papers) await applyRows(client, ctx, d, p.paperId, p.rows);
+  });
+  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_paper.rows_many', id: ctx.department.code, after: { papers: papers.length } });
+  return board(ctx);
+}
+
+async function applyRows(client: PoolClient, ctx: Ctx, d: Loaded, paperId: string, rows: RowInput[]): Promise<void> {
+  const paper = d.exams.papers.find((p) => p.id === paperId);
+  if (!paper || paper.departmentId !== ctx.department.id) throw AppError.notFound('No such paper in your department.');
+  if (!isListed(paper)) throw invalid("This paper's students come from your units' courses; change them there.");
+  const before = new Map(paper.rows.map((r) => [rowKey(r), r]));
+  const out = new Map<string, ListedRowValues>();
+  for (const r of rows) {
+    const row = { programme: r.programme.trim().toUpperCase(), year: r.year, semester: r.semester, stream: r.stream.trim() };
+    if (!row.programme) throw invalid('Every class row needs its programme code.');
+    const key = rowKey(row);
+    if (out.has(key)) throw invalid(`${row.programme} Y${row.year}S${row.semester} is listed twice.`);
+    const was = before.get(key);
+    const smartttStudents = was?.smartttStudents ?? null;
+    out.set(key, { ...row, students: r.students, smartttStudents, edited: (was?.edited ?? false) || smartttStudents === null || r.students !== smartttStudents });
+  }
+  for (const [key, was] of before) {
+    if (!out.has(key) && was.smartttStudents !== null) out.set(key, { ...was, students: 0, edited: true });
+  }
+  await examsRepo.setListedRows(client, paper.id, [...out.values()]);
 }
 
 /** Reads SMARTTT again for the department's listed papers; numbers the department set stay. */

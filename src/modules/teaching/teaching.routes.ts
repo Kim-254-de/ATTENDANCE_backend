@@ -27,6 +27,7 @@ import {
   examListFileSchema,
   examListSaveSchema,
   paperRowsSchema,
+  manyPaperRowsSchema,
 } from './teaching.schema.js';
 
 /**
@@ -86,6 +87,7 @@ teachingRouter.post('/exam-list/read', officer, term, validate({ body: examListF
 teachingRouter.post('/exam-list', officer, term, validate({ body: examListSaveSchema }), asyncHandler(c.saveExamList));
 teachingRouter.delete('/exam-list', officer, term, asyncHandler(c.deleteExamList));
 teachingRouter.post('/exam-papers/recount', officer, term, asyncHandler(c.recountPapers));
+teachingRouter.put('/exam-papers/rows', officer, term, validate({ body: manyPaperRowsSchema }), asyncHandler(c.setManyPaperRows));
 teachingRouter.put('/exam-papers/:id/rows', officer, term, byId, validate({ body: paperRowsSchema }), asyncHandler(c.setPaperRows));
 teachingRouter.patch('/exam-papers/:id', officer, term, byId, validate({ body: paperPatchSchema }), asyncHandler(c.updatePaper));
 teachingRouter.delete('/exam-papers/:id', officer, term, byId, asyncHandler(c.deletePaper));

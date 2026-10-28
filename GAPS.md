@@ -143,3 +143,14 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Frontend:** Exams tab has "Remove uploaded list" (confirm) beside the upload button; the paper Edit dialog has a
   "Number of students" section (the class-row editor, seeded with a guessed class for a paper nobody synced, e.g.
   MATH 241 → MATH Y2S1, so only the number is typed). Papers built from units show their total read-only.
+
+### F-5 · Medium · Student numbers for many papers in one save
+- **Raised:** 2026-10-29, backend   **Status:** done (frontend, same day)
+- **What changed** (`/api/v1/departments/teaching`):
+  - New `PUT /exam-papers/rows?term=<id>`: `{ "papers": [{ "paperId": "<uuid>", "rows": [{ "programme": "MATH",
+    "year": 2, "semester": 1, "stream": "", "students": 40 }] }] }` (1–1500 papers). Same rules per paper as
+    `PUT /exam-papers/:id/rows`; all or none (one unknown or unit-built paper → 404/400, nothing saved). 409 when
+    published. Response: the exam board.
+- **Frontend:** Exams tab "Enter student numbers": every uploaded paper with one box (papers sat by one class, or
+  nobody yet with a guessed class); a pasted column of numbers fills the boxes downward; papers with several
+  classes stay under Numbers.
