@@ -131,3 +131,15 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Why it matters:** departments name invigilators early; papers split over rooms could not be published before.
 - **Done when:** the Invigilators tab works before the draft (main only) and shows extra rooms after; the Exams tab
   shows warnings without disabling Publish.
+
+### F-4 · Medium · Remove the uploaded exam list as a whole; student numbers in the paper's Edit dialog
+- **Raised:** 2026-10-28, backend   **Status:** done (ATTENDANCE_fronted, uncommitted at time of writing)
+- **What changed** (`/api/v1/departments/teaching`):
+  - New `DELETE /exam-list?term=<id>`: removes every listed (uploaded) paper of the officer's department this term,
+    with its class rows and invigilators; papers built from units stay. 409 while the papers are published (reopen
+    first). Response: `{ "deleted": 104, "board": <exam board> }`. Audit `exam_list.delete`.
+  - No new field for numbers: a listed paper's students are still its class rows (`PUT /exam-papers/:id/rows`),
+    because the Generator sizes rooms and clashes by class row.
+- **Frontend:** Exams tab has "Remove uploaded list" (confirm) beside the upload button; the paper Edit dialog has a
+  "Number of students" section (the class-row editor, seeded with a guessed class for a paper nobody synced, e.g.
+  MATH 241 → MATH Y2S1, so only the number is typed). Papers built from units show their total read-only.

@@ -150,6 +150,13 @@ export async function saveExamList(req: Request, res: Response): Promise<void> {
   sendSuccess(res, { ...result, board: await exams.board(c) });
 }
 
+/** DELETE /departments/teaching/exam-list: every listed paper of the department's removed at once. */
+export async function deleteExamList(req: Request, res: Response): Promise<void> {
+  const c = await ctx(req);
+  const result = await examList.removeList(c);
+  sendSuccess(res, { ...result, board: await exams.board(c) });
+}
+
 /** PUT /departments/teaching/exam-papers/:id/rows: the department's numbers for a listed paper. */
 export async function setPaperRows(req: Request, res: Response): Promise<void> {
   sendSuccess(res, await examList.setRows(await ctx(req), param(req), (req.body as PaperRowsInput).rows));

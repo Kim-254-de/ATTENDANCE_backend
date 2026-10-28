@@ -250,6 +250,21 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
   return { ...counts, smarttt: { available: e.available, reason: e.available ? null : e.reason } };
 }
 
+/**
+ * The uploaded list taken back as a whole: every listed paper of the
+ * department's this term. Papers built from units stay.
+ */
+export async function removeList(ctx: Ctx): Promise<{ deleted: number }> {
+  const deleted = await exams(ctx, async (client) => {
+    const d = await loadExamTerm(ctx.term.id, client);
+    const own = d.exams.papers.filter((p) => p.departmentId === ctx.department.id && isListed(p));
+    for (const p of own) await examsRepo.deletePaper(client, p.id);
+    return own.length;
+  });
+  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_list.delete', id: ctx.department.code, after: { deleted } });
+  return { deleted };
+}
+
 function checkedExaminer(ctx: Ctx, d: Loaded, lecturerId: string | null): string | null {
   if (!lecturerId) return null;
   const l = d.term.lecturers.get(lecturerId);

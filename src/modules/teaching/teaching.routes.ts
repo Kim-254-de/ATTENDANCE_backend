@@ -84,6 +84,7 @@ teachingRouter.post('/exam-papers/bulk', officer, term, validate({ body: bulkSch
 // The department's exam list uploaded as its Word document, sized by who synced the units in SMARTTT.
 teachingRouter.post('/exam-list/read', officer, term, validate({ body: examListFileSchema }), asyncHandler(c.readExamList));
 teachingRouter.post('/exam-list', officer, term, validate({ body: examListSaveSchema }), asyncHandler(c.saveExamList));
+teachingRouter.delete('/exam-list', officer, term, asyncHandler(c.deleteExamList));
 teachingRouter.post('/exam-papers/recount', officer, term, asyncHandler(c.recountPapers));
 teachingRouter.put('/exam-papers/:id/rows', officer, term, byId, validate({ body: paperRowsSchema }), asyncHandler(c.setPaperRows));
 teachingRouter.patch('/exam-papers/:id', officer, term, byId, validate({ body: paperPatchSchema }), asyncHandler(c.updatePaper));

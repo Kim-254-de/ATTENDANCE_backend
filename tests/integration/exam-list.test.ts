@@ -80,9 +80,9 @@ async function makeOfficer(departmentId: string) {
   await pool.query(`INSERT INTO auth_sessions (id, user_id, refresh_token_hash, expires_at) VALUES ($1, $2, 'x', NOW() + INTERVAL '1 hour')`, [sessionId, u!.id]);
   const { signAccessToken } = await import('../../src/modules/auth/auth.session.js');
   const auth = `Bearer ${await signAccessToken({ userId: u!.id, sessionId, role: 'DEPARTMENT' })}`;
-  const at = (method: 'get' | 'post' | 'put') => (path: string, data?: object) =>
+  const at = (method: 'get' | 'post' | 'put' | 'delete') => (path: string, data?: object) =>
     request(app)[method](`/api/v1/departments/teaching${path}`).set('Authorization', auth).send(data);
-  return { get: at('get'), post: at('post'), put: at('put') };
+  return { get: at('get'), post: at('post'), put: at('put'), delete: at('delete') };
 }
 
 async function makeDepartment(name: string, code: string): Promise<string> {
@@ -327,5 +327,20 @@ describe('the uploaded exam list', () => {
   it('keeps the list locked once published', async () => {
     const res = await math.put(`/exam-papers/${ids.m241}/rows`, { rows: [] });
     expect(res.status).toBe(409);
+    expect((await math.delete('/exam-list')).status).toBe(409);
+  });
+
+  it('removes the uploaded list as a whole once reopened, leaving papers built from units', async () => {
+    expect((await cs.post('/exams/reopen')).status).toBe(200);
+    const before = body<Board>(await cs.get('/exams')).data.papers;
+    expect(before.some((p) => p.listed)).toBe(true);
+    const res = await cs.delete('/exam-list');
+    expect(res.status).toBe(200);
+    const data = body<{ deleted: number; board: Board }>(res).data;
+    expect(data.deleted).toBe(before.filter((p) => p.listed).length);
+    expect(data.board.papers.filter((p) => p.listed)).toEqual([]);
+    expect(data.board.papers).toHaveLength(before.filter((p) => !p.listed).length);
+    // The other department's list is untouched.
+    expect(body<Board>(await math.get('/exams')).data.papers.some((p) => p.listed)).toBe(true);
   });
 });
