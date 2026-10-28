@@ -145,7 +145,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   MATH 241 → MATH Y2S1, so only the number is typed). Papers built from units show their total read-only.
 
 ### F-5 · Medium · Student numbers for many papers in one save
-- **Raised:** 2026-10-29, backend   **Status:** done (frontend, same day)
+- **Raised:** 2026-10-29, backend   **Status:** done (backend ebe3c4d, ATTENDANCE_fronted b8f1298)
 - **What changed** (`/api/v1/departments/teaching`):
   - New `PUT /exam-papers/rows?term=<id>`: `{ "papers": [{ "paperId": "<uuid>", "rows": [{ "programme": "MATH",
     "year": 2, "semester": 1, "stream": "", "students": 40 }] }] }` (1–1500 papers). Same rules per paper as
