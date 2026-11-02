@@ -204,7 +204,7 @@ describe('exam papers', () => {
     const [paper, odel] = data.published[0]!.papers as Array<{ id: string; codes: string[]; sitting: string; examiner: { staff_number: string }; rows: Array<{ course_id: string; mode: string }> }>;
     expect([paper!.id, paper!.codes, paper!.sitting, paper!.examiner.staff_number]).toEqual([ids.paper, ['BITE 131', 'COSC 130'], 'regular', 'STF/0001']);
     expect(paper!.rows.map((r) => r.course_id)).not.toContain(ids.odel);
-    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel' }]]);
+    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel', guessed: false }]]);
     expect(data.published[0]!.practicals).toHaveLength(2);
   });
 

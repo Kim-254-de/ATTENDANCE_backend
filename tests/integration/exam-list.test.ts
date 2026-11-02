@@ -324,6 +324,14 @@ describe('the uploaded exam list', () => {
     expect(cosc.rows.map((r) => [r.course_id, r.students])).toEqual([['listed:BSCCS|1|1|', 100], ['listed:BSCMATH|1|1|', 20]]);
   });
 
+  it('tells the Generator which classes are only guessed from the code', async () => {
+    const res = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+    const data = body<{ published: Array<{ code: string; papers: Array<{ codes: string[]; rows: Array<{ guessed: boolean }> }> }> }>(res).data;
+    for (const paper of data.published.flatMap((d) => d.papers)) {
+      for (const r of paper.rows) expect(r.guessed).toBe(false); // SMARTTT's, or a class the department named
+    }
+  });
+
   it('keeps the list locked once published', async () => {
     const res = await math.put(`/exam-papers/${ids.m241}/rows`, { rows: [] });
     expect(res.status).toBe(409);
@@ -365,5 +373,13 @@ describe('the uploaded exam list', () => {
     expect(after.papers.find((p) => p.id === nobody.id)!.students).toBe(25);
     expect(after.papers.find((p) => p.id === stats.id)!.rows.map((r) => [r.students, r.smartttStudents, r.edited])).toEqual([[50, 44, true]]);
     expect(after.warnings.some((w) => w.message.includes('MATH 100'))).toBe(false);
+
+    // MATH Y1S1 is what the page fills in from "MATH 100"; BSC.STAT is a class the department named.
+    expect((await math.post('/exams/publish')).status).toBe(200);
+    const read = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+    const sent = body<{ published: Array<{ code: string; papers: Array<{ id: string; rows: Array<{ guessed: boolean }> }> }> }>(read).data
+      .published.find((d) => d.code === 'DBSC')!.papers;
+    expect(sent.find((p) => p.id === nobody.id)!.rows.map((r) => r.guessed)).toEqual([true]);
+    expect(sent.find((p) => p.id === stats.id)!.rows.map((r) => r.guessed)).toEqual([false]);
   });
 });
