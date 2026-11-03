@@ -165,3 +165,10 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Why it matters:** clashes are avoided by course, even when nobody has synced.
 - **Done when:** the upload review tells "classes on the timetable, no numbers" from "no class at all", and any
   class can be removed from a paper.
+
+### F-7 · High · Venues edited in the admin console
+- **Raised:** 2026-11-04, backend   **Status:** done (frontend on the same branch name)
+- **What changed:** `GET /admin/smarttt/rooms` -> `{ rooms: [{ id, code, name, building, capacity, capacity_confirmed, room_type, status, for_exams, health_unit }] }`,
+  `POST /admin/smarttt/rooms` and `PATCH /admin/smarttt/rooms/:id` (only the fields sent). SMARTTT validates; a code already used answers 400.
+- **Why it matters:** venues and their exam use change without a file; the health unit's rooms are marked here.
+- **Done when:** the Venues page has the table, an add form and the two switches.
