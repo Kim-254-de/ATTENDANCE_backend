@@ -7,18 +7,20 @@ import { smartttClient, type SmartttUnitEnrolment } from '../../integrations/sma
 import { readExamList, type ListedEntry } from './exam-list.read.js';
 import * as examsRepo from './exams.repository.js';
 import type { ListedRow, ListedRowValues, PaperRow, Sitting } from './exams.repository.js';
-import { board, EXAMS_KIND, isListed, loadExamTerm, type ExamBoardDto } from './exams.service.js';
+import { board, EXAMS_KIND, isGuessedRow, isListed, loadExamTerm, type ExamBoardDto } from './exams.service.js';
 import { compact } from './teaching.repository.js';
 import { audit, invalid, writeTeaching, type Ctx } from './teaching.service.js';
 
 /**
  * The department's exam list, uploaded instead of built from its units: the
  * Word document it sends for moderation (exam-list.read.ts), reviewed, then
- * saved as listed papers. Each listed paper's students are those who synced
- * its units in SMARTTT, by class row; the department can correct any number
- * or add a class, and a corrected row keeps its number when SMARTTT is read
- * again. SMARTTT is read again whenever the Generator imports the papers, so
- * the Director plans with the latest syncs.
+ * saved as listed papers. Each listed paper's classes are those taking its
+ * units on SMARTTT's master timetable (so the Generator keeps them from
+ * clashing even before anyone syncs), and those of the students who synced
+ * them; numbers are who synced. The department can correct any number, add a
+ * class or remove one, and what it set stays when SMARTTT is read again.
+ * SMARTTT is read again whenever the Generator imports the papers, so the
+ * Director plans with the latest classes and syncs.
  *
  * ODEL and part-time students sit the ODEL paper of a unit when it has one;
  * when the unit has only a regular paper they sit that one, as a class row
@@ -71,15 +73,37 @@ function smartttRows(e: Enrolment & { available: true }, codes: string[], sittin
   return out;
 }
 
-/** Fresh SMARTTT counts over the rows a paper has: a row the department set keeps its number. */
-function merged(existing: ListedRow[], fresh: Map<string, ListedRowValues>): ListedRowValues[] {
+/**
+ * Fresh SMARTTT classes and counts over the rows a paper has: a row the
+ * department set keeps its number. A class guessed from the code gives way to
+ * the real classes; a number typed for it moves to them when they have none
+ * (shared out evenly when there are several), so the paper keeps its seats.
+ */
+function merged(p: PaperRow, fresh: Map<string, ListedRowValues>): ListedRowValues[] {
   const out = new Map<string, ListedRowValues>();
-  for (const r of existing) {
+  const guesses: ListedRow[] = [];
+  for (const r of p.rows) {
     if (!r.edited) continue;
     const now = fresh.get(rowKey(r));
+    if (!now && isGuessedRow(p, r)) {
+      guesses.push(r);
+      continue;
+    }
     out.set(rowKey(r), { ...r, smartttStudents: now ? now.students : r.smartttStudents === null ? null : 0 });
   }
   for (const [key, r] of fresh) if (!out.has(key)) out.set(key, r);
+  const real = [...out.values()].filter((r) => r.students > 0 || !r.edited);
+  if (real.length === 0) {
+    for (const r of guesses) out.set(rowKey(r), r);
+  } else if (real.every((r) => r.students === 0)) {
+    const typed = guesses.reduce((n, r) => n + r.students, 0);
+    if (typed > 0) {
+      const share = Math.floor(typed / real.length);
+      real.forEach((r, i) => {
+        out.set(rowKey(r), { ...r, students: share + (i < typed % real.length ? 1 : 0), edited: true });
+      });
+    }
+  }
   return [...out.values()].sort((a, b) => rowKey(a).localeCompare(rowKey(b)));
 }
 
@@ -94,6 +118,7 @@ function hasOdelTwin(codes: string[], papers: Array<{ codes: string[]; sitting: 
 export interface ReviewEntry extends ListedEntry {
   /** SMARTTT's students for this sitting; null when SMARTTT couldn't be read. */
   students: number | null;
+  /** The classes taking it: on the master timetable (0 until someone syncs) or by who synced. */
   classRows: Array<{ label: string; students: number }>;
   /** Codes SMARTTT has no unit for: a typo, or a unit it doesn't know. */
   unknownCodes: string[];
@@ -110,7 +135,7 @@ export interface ReviewEntry extends ListedEntry {
 export interface ReviewDto {
   entries: ReviewEntry[];
   smarttt: { available: boolean; reason: string | null };
-  summary: { papers: number; newPapers: number; duplicates: number; unknown: number; noStudents: number };
+  summary: { papers: number; newPapers: number; duplicates: number; unknown: number; noStudents: number; noClasses: number };
 }
 
 /** The uploaded document read and checked against SMARTTT and the papers already entered. Nothing is stored. */
@@ -160,6 +185,7 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
       duplicates: out.filter((x) => x.duplicateOf !== null).length,
       unknown: out.filter((x) => x.unknownCodes.length).length,
       noStudents: out.filter((x) => x.students === 0).length,
+      noClasses: out.filter((x) => x.students === 0 && x.classRows.length === 0).length,
     },
   };
 }
@@ -229,7 +255,7 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
           examinerId: w.examinerId !== undefined ? checkedExaminer(ctx, d, w.examinerId) : found.examinerId,
           notes: found.notes,
         });
-        if (e.available) await examsRepo.setListedRows(client, found.id, merged(found.rows, fresh));
+        if (e.available) await examsRepo.setListedRows(client, found.id, merged(found, fresh));
         updated++;
       } else {
         const suggested = e.available ? w.codes.map((c) => e.units.get(compact(c))?.lecturers[0]).find((l) => l) : undefined;
@@ -343,7 +369,7 @@ export async function recount(ctx: Ctx): Promise<ExamBoardDto> {
 async function refreshPapers(client: PoolClient, papers: PaperRow[], d: Loaded, e: Enrolment & { available: true }): Promise<void> {
   const all = d.exams.papers.map((p) => ({ codes: paperCodesOf(p, d.units), sitting: p.sitting }));
   for (const p of papers) {
-    await examsRepo.setListedRows(client, p.id, merged(p.rows, smartttRows(e, p.codes, p.sitting, hasOdelTwin(p.codes, all))));
+    await examsRepo.setListedRows(client, p.id, merged(p, smartttRows(e, p.codes, p.sitting, hasOdelTwin(p.codes, all))));
   }
 }
 

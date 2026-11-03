@@ -48,11 +48,15 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
   next cell; "COSC 0172/0170" is two codes; rows under an ODEL/part-time
   heading, or "Math 241 odel", are ODEL papers). A review flags duplicates,
   codes SMARTTT doesn't know, codes another department listed and papers
-  nobody synced, before anything is saved. A listed paper's class rows and
-  numbers are the students who synced its units in SMARTTT
-  (`unit-enrolment/` there); the department corrects any number, and a
-  corrected row keeps it. SMARTTT is read again when the Generator imports
-  the papers. A listed paper's examiner is optional (SMARTTT's lecturer when
+  with no class, before anything is saved. A listed paper's class rows are
+  the classes taking its units on SMARTTT's master timetable and those of the
+  students who synced them; its numbers are who synced (`unit-enrolment/`
+  there). A class with no number yet still reaches the Generator, which keeps
+  it from clashing and gives it a room once it has a number. The department
+  corrects any number, adds a class or removes one, and that stays. A class
+  guessed from the code gives way to the real classes, passing them its number
+  if they have none. SMARTTT is read again when the Generator imports the
+  papers. A listed paper's examiner is optional (SMARTTT's lecturer when
   on the list). Its class rows reach the Generator with ids like
   `listed:BSCCS|1|1|`, so a class sitting several papers is one class row.
 - **Practicals**, on weekdays the department sets; the Generator only shows them.
