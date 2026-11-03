@@ -83,7 +83,9 @@ export function isGuessedRow(p: PaperRow, r: ListedRow): boolean {
  */
 export function listedCourses(p: PaperRow): Array<CourseRow & { guessed: boolean }> {
   return p.rows
-    .filter((r) => r.students > 0)
+    // Students 0: a class the master timetable names, number not known yet (it still holds to the
+    // Generator's hard rules); once the department set it to 0 or removed it, it doesn't sit the paper.
+    .filter((r) => r.students > 0 || !r.edited)
     .map((r) => ({
       id: `listed:${compact(r.programme)}|${r.year}|${r.semester}|${compact(r.stream)}`,
       departmentId: p.departmentId,
@@ -179,11 +181,16 @@ function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
  */
 function warnings(ctx: Ctx, d: Loaded): ExamProblem[] {
   return d.exams.papers
-    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).length === 0)
-    .map((p) => ({
-      code: 'no_students',
-      message: `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.`,
-    }));
+    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).every((c) => c.students === 0))
+    .map((p) => {
+      const classes = paperCourses(p, d).length;
+      return {
+        code: 'no_students',
+        message: classes
+          ? `${paperLabel(p, d.units)} has ${classes === 1 ? '1 class' : `${classes} classes`} on the master timetable and no student number yet. Its classes are kept from clashing and it gets a date; enter its students under Numbers so it gets a room.`
+          : `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT and the master timetable has no class for it. It still goes to the Director and gets a date; add its classes and students under Numbers so it gets a room and can't clash.`,
+      };
+    });
 }
 
 export interface PaperDto {

@@ -154,3 +154,14 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Frontend:** Exams tab "Enter student numbers": every uploaded paper with one box (papers sat by one class, or
   nobody yet with a guessed class); a pasted column of numbers fills the boxes downward; papers with several
   classes stay under Numbers.
+
+### F-6 · High · Uploaded papers' classes come from the master timetable
+- **Raised:** 2026-11-04, backend   **Status:** done (frontend on the same branch name)
+- **What changed:** a listed paper's `rows` now include every class taking its units on SMARTTT's master
+  timetable, `smartttStudents: 0, students: 0, edited: false` until someone syncs. They reach the Generator and
+  hold to its hard rules. A row with `edited: true, students: 0` is removed: it doesn't sit the paper.
+  The review has `classRows` for those classes with `students: 0`, and `summary.noClasses` (no class and no synced
+  student). A guessed class gives way to the real classes, passing them its number if they have none.
+- **Why it matters:** clashes are avoided by course, even when nobody has synced.
+- **Done when:** the upload review tells "classes on the timetable, no numbers" from "no class at all", and any
+  class can be removed from a paper.
