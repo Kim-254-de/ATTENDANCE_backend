@@ -69,6 +69,13 @@ export interface ExamData {
   invigilations: InvigilationRow[];
 }
 
+/**
+ * A paper on the term's exam list came from a moderation letter: it has the
+ * letter's codes and no units. Papers built from Teaching units before letters
+ * became the only source stay in the table, but no one reads them.
+ */
+const FROM_A_LETTER = `cardinality(p.codes) > 0 AND NOT EXISTS (SELECT 1 FROM teaching_exam_paper_units pu WHERE pu.paper_id = p.id)`;
+
 export async function loadExams(termId: string, client: Queryable = pool): Promise<ExamData> {
   const papers = await query<{
     id: string; department_id: string; department_code: string | null; title: string; sitting: Sitting; examiner_id: string | null;
@@ -77,7 +84,7 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
     `SELECT p.id, p.department_id, d.code AS department_code, p.title, p.sitting, p.examiner_id, p.notes, p.published_signature,
             ARRAY(SELECT pu.unit_id::text FROM teaching_exam_paper_units pu WHERE pu.paper_id = p.id) AS unit_ids, p.codes
        FROM teaching_exam_papers p JOIN departments d ON d.id = p.department_id
-      WHERE p.generator_term_id = $1`,
+      WHERE p.generator_term_id = $1 AND ${FROM_A_LETTER}`,
     [termId],
     client,
   );
@@ -116,7 +123,7 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
   );
   const invigilations = await query<{ id: string; paper_id: string; room: string; lecturer_id: string }>(
     `SELECT i.id, i.paper_id, i.room, i.lecturer_id FROM teaching_invigilations i
-       JOIN teaching_exam_papers p ON p.id = i.paper_id WHERE p.generator_term_id = $1`,
+       JOIN teaching_exam_papers p ON p.id = i.paper_id WHERE p.generator_term_id = $1 AND ${FROM_A_LETTER}`,
     [termId],
     client,
   );
@@ -143,43 +150,6 @@ export async function loadExams(termId: string, client: Queryable = pool): Promi
 }
 
 // -- papers --------------------------------------------------------------------------------------
-
-export interface PaperValues {
-  title: string;
-  sitting: Sitting;
-  examinerId: string | null;
-  notes: string;
-  unitIds: string[];
-}
-
-export async function insertPaper(client: PoolClient, termId: string, departmentId: string, v: PaperValues): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, sitting, examiner_id, notes)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [termId, departmentId, v.title, v.sitting, v.examinerId, v.notes],
-  );
-  const id = rows[0]!.id;
-  await setPaperUnits(client, id, v.unitIds, v.sitting);
-  return id;
-}
-
-export async function updatePaper(client: PoolClient, paperId: string, v: PaperValues): Promise<void> {
-  await client.query(
-    `UPDATE teaching_exam_papers SET title = $2, sitting = $3, examiner_id = $4, notes = $5 WHERE id = $1`,
-    [paperId, v.title, v.sitting, v.examinerId, v.notes],
-  );
-  await setPaperUnits(client, paperId, v.unitIds, v.sitting);
-}
-
-async function setPaperUnits(client: PoolClient, paperId: string, unitIds: string[], sitting: Sitting): Promise<void> {
-  await client.query(`DELETE FROM teaching_exam_paper_units WHERE paper_id = $1 AND NOT (unit_id = ANY($2::uuid[]))`, [paperId, unitIds]);
-  await client.query(`UPDATE teaching_exam_paper_units SET sitting = $2 WHERE paper_id = $1`, [paperId, sitting]);
-  await client.query(
-    `INSERT INTO teaching_exam_paper_units (paper_id, unit_id, sitting) SELECT $1, u, $3 FROM unnest($2::uuid[]) AS u
-     ON CONFLICT (paper_id, unit_id) DO NOTHING`,
-    [paperId, unitIds, sitting],
-  );
-}
 
 // -- listed papers (uploaded as the department's exam list) ---------------------------------------
 
@@ -229,11 +199,6 @@ export async function setListedRows(client: PoolClient, paperId: string, rows: L
 
 export async function deletePaper(client: PoolClient, paperId: string): Promise<void> {
   await client.query(`DELETE FROM teaching_exam_papers WHERE id = $1`, [paperId]);
-}
-
-export async function setNoWrittenExam(client: PoolClient, unitId: string, value: boolean): Promise<void> {
-  if (value) await client.query(`INSERT INTO teaching_no_written_exams (unit_id) VALUES ($1) ON CONFLICT DO NOTHING`, [unitId]);
-  else await client.query(`DELETE FROM teaching_no_written_exams WHERE unit_id = $1`, [unitId]);
 }
 
 export async function setPaperSignatures(client: PoolClient, signatures: Array<{ paperId: string; signature: string }>): Promise<void> {

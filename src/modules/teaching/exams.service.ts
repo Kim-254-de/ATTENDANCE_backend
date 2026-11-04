@@ -12,13 +12,11 @@ import { audit, courseLabel, displayName, invalid, publicationDto, writeTeaching
  * What departments enter for the exam timetable, and publish to the Director
  * (it used to be the Timetable Allocator's).
  *
- * Each department lists its written exam papers, built from its units: all
- * groups of a unit sit one paper, and one paper can carry several units'
- * codes ("BITE 131/COSC 130"). ODEL and part-time classes sit papers of their
- * own: a paper's sitting is 'regular' or 'odel', and its students are the
- * classes of that sitting taking its units. A unit is on at most one paper
- * per sitting, so a code listed twice for one sitting is refused. A unit with
- * no written exam is marked so.
+ * A department's written exam papers are the ones on its moderation letters,
+ * uploaded on the Exams tab (exam-list.service.ts), and only those: what it
+ * teaches, and what SMARTTT's timetable shows, never adds a paper. One paper
+ * can carry several codes ("BITE 131/COSC 130"). ODEL and part-time classes
+ * sit papers of their own: a paper's sitting is 'regular' or 'odel'.
  * Practicals are on dates the department sets; the Generator only shows them.
  *
  * An officer publishes the paper list (and practicals), which locks it until
@@ -107,8 +105,6 @@ export const paperLabel = (p: PaperRow, units: Map<string, UnitRow>): string =>
 /** ODEL and part-time classes sit the ODEL papers; every other class the regular ones. */
 export const sittingOf = (mode: CourseMode): Sitting => (mode === 'odel' || mode === 'part_time' ? 'odel' : 'regular');
 
-const SITTING_NAME: Record<Sitting, string> = { regular: 'regular', odel: 'ODEL' };
-
 /** The cohorts that sit the paper: every course of its sitting taking any of its units, once. */
 function paperCourses(p: PaperRow, d: Loaded): Array<CourseRow & { guessed?: boolean }> {
   if (isListed(p)) return listedCourses(p).sort((a, b) => courseLabel(a).localeCompare(courseLabel(b)));
@@ -145,33 +141,8 @@ export interface ExamProblem {
 }
 
 function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
-  const found: ExamProblem[] = [];
-  const own = d.term.units.filter((u) => u.departmentId === ctx.department.id).sort((a, b) => a.codeKey.localeCompare(b.codeKey));
-  const onPaper = new Set(d.exams.papers.flatMap((p) => p.unitIds.map((id) => `${id}|${p.sitting}`)));
-  const ownPapers = d.exams.papers.filter((p) => p.departmentId === ctx.department.id);
-  if (own.length === 0 && ownPapers.length === 0) {
-    found.push({ code: 'no_units', message: 'Upload your exam list, or enter your units (Units & groups) first.' });
-  }
-  for (const u of own) {
-    if (d.exams.noWrittenExam.has(u.id)) continue;
-    for (const sitting of sittingsOf(u, d)) {
-      if (onPaper.has(`${u.id}|${sitting}`)) continue;
-      found.push(
-        sitting === 'regular'
-          ? { code: 'unit_not_examined', message: `${u.code} is on no paper; add it to one, or mark it 'no written exam'.` }
-          : { code: 'unit_not_examined', message: `${u.code} has ODEL or part-time classes but no ODEL paper; add one.` },
-      );
-    }
-  }
-  for (const p of ownPapers) {
-    // A listed paper's examiner is optional, and it goes to the Director even with no students known (warnings()).
-    if (isListed(p)) continue;
-    if (!p.examinerId) found.push({ code: 'no_examiner', message: `Give ${p.title} an examiner.` });
-    if (paperCourses(p, d).length === 0) {
-      found.push({ code: 'no_students', message: `No ${SITTING_NAME[p.sitting]} class takes ${paperLabel(p, d.units)}; check its sitting.` });
-    }
-  }
-  return found;
+  if (d.exams.papers.some((p) => p.departmentId === ctx.department.id)) return [];
+  return [{ code: 'no_exam_list', message: 'Upload your moderation letter: its units are the ones on the exam timetable.' }];
 }
 
 /**
@@ -333,31 +304,10 @@ export async function board(ctx: Ctx): Promise<ExamBoardDto> {
 // -- papers ----------------------------------------------------------------------------------------
 
 export interface PaperInput {
-  unitIds?: string[];
   title?: string;
   sitting?: Sitting;
   examinerId?: string | null;
   notes?: string;
-}
-
-/** The paper's units: in this term, at least one this department's, none on another paper of its sitting or marked no written exam. */
-function checkUnits(ctx: Ctx, d: Loaded, unitIds: string[], paper: PaperRow | null, sitting: Sitting): string[] {
-  const ids = [...new Set(unitIds)];
-  if (ids.length === 0) throw invalid('Choose the unit (or units) the paper covers.');
-  const units = ids.map((id) => d.units.get(id));
-  if (units.some((u) => !u)) throw invalid("A unit chosen isn't in this term.");
-  if (!units.some((u) => u!.departmentId === ctx.department.id)) throw invalid("A paper needs at least one of your department's units.");
-  for (const p of d.exams.papers) {
-    if (p.id === paper?.id || p.sitting !== sitting) continue;
-    const taken = p.unitIds.find((id) => ids.includes(id));
-    if (taken) {
-      const which = sitting === 'odel' ? 'ODEL paper' : 'paper';
-      throw new AppError(409, ErrorCode.TEACHING_TAKEN, `${d.units.get(taken)!.code} is already on another ${which}.`);
-    }
-  }
-  const marked = units.filter((u) => d.exams.noWrittenExam.has(u!.id));
-  if (marked.length) throw new AppError(409, ErrorCode.TEACHING_TAKEN, `${marked.map((u) => u!.code).join(', ')} is marked 'no written exam'.`);
-  return ids;
 }
 
 function examinerFor(ctx: Ctx, d: Loaded, lecturerId: string): string {
@@ -373,52 +323,19 @@ function ownPaper(ctx: Ctx, d: Loaded, paperId: string): PaperRow {
   return p;
 }
 
-export async function createPaperIn(client: PoolClient, ctx: Ctx, input: PaperInput): Promise<string> {
-  const d = await load(ctx.term.id, client, [ctx.department.id]);
-  const sitting = input.sitting ?? 'regular';
-  const ids = checkUnits(ctx, d, input.unitIds ?? [], null, sitting);
-  const first = ids.map((id) => d.units.get(id)!).find((u) => u.departmentId === ctx.department.id)!;
-  const examinerId = input.examinerId ? examinerFor(ctx, d, input.examinerId) : defaultExaminer(first);
-  return examsRepo.insertPaper(client, ctx.term.id, ctx.department.id, {
-    title: input.title?.trim() || first.title,
-    sitting,
-    examinerId,
-    notes: input.notes?.trim() ?? '',
-    unitIds: ids,
-  });
-}
-
 export async function updatePaperIn(client: PoolClient, ctx: Ctx, paperId: string, input: PaperInput): Promise<void> {
   const d = await load(ctx.term.id, client, [ctx.department.id]);
   const paper = ownPaper(ctx, d, paperId);
-  const sitting = input.sitting ?? paper.sitting;
-  if (isListed(paper) && !input.unitIds?.length) {
-    await examsRepo.updateListedPaper(client, paper.id, {
-      codes: paper.codes,
-      title: input.title?.trim() || paper.title,
-      sitting,
-      examinerId: input.examinerId !== undefined ? (input.examinerId ? examinerFor(ctx, d, input.examinerId) : null) : paper.examinerId,
-      notes: input.notes !== undefined ? input.notes.trim() : paper.notes,
-    });
-    return;
-  }
-  const changesSitting = sitting !== paper.sitting;
-  await examsRepo.updatePaper(client, paper.id, {
-    unitIds: input.unitIds?.length || changesSitting ? checkUnits(ctx, d, input.unitIds?.length ? input.unitIds : paper.unitIds, paper, sitting) : paper.unitIds,
+  await examsRepo.updateListedPaper(client, paper.id, {
+    codes: paper.codes,
     title: input.title?.trim() || paper.title,
-    sitting,
+    sitting: input.sitting ?? paper.sitting,
     examinerId: input.examinerId !== undefined ? (input.examinerId ? examinerFor(ctx, d, input.examinerId) : null) : paper.examinerId,
     notes: input.notes !== undefined ? input.notes.trim() : paper.notes,
   });
 }
 
 const changed = (ctx: Ctx, what: string, id: string, data: unknown) => audit(ctx, AuditAction.TEACHING_CHANGED, { what, id, after: data });
-
-export async function createPaper(ctx: Ctx, input: PaperInput): Promise<{ id: string }> {
-  const id = await exams(ctx, (client) => createPaperIn(client, ctx, input));
-  await changed(ctx, 'exam_paper.create', id, input);
-  return { id };
-}
 
 export async function updatePaper(ctx: Ctx, paperId: string, input: PaperInput): Promise<void> {
   await exams(ctx, (client) => updatePaperIn(client, ctx, paperId, input));
@@ -431,46 +348,6 @@ export async function deletePaper(ctx: Ctx, paperId: string): Promise<void> {
     await examsRepo.deletePaper(client, paper.id);
   });
   await changed(ctx, 'exam_paper.delete', paperId, null);
-}
-
-/**
- * A paper per unit of the department's and sitting its classes need, not on
- * one yet (nor marked no written exam), titled as the unit.
- */
-export async function startFromUnits(ctx: Ctx): Promise<{ created: number }> {
-  const created = await exams(ctx, async (client) => {
-    const d = await load(ctx.term.id, client, [ctx.department.id]);
-    const onPaper = new Set(d.exams.papers.flatMap((p) => p.unitIds.map((id) => `${id}|${p.sitting}`)));
-    let n = 0;
-    for (const u of d.term.units) {
-      if (u.departmentId !== ctx.department.id || d.exams.noWrittenExam.has(u.id)) continue;
-      for (const sitting of sittingsOf(u, d)) {
-        if (onPaper.has(`${u.id}|${sitting}`)) continue;
-        await examsRepo.insertPaper(client, ctx.term.id, ctx.department.id, {
-          title: u.title, sitting, examinerId: defaultExaminer(u), notes: '', unitIds: [u.id],
-        });
-        n++;
-      }
-    }
-    return n;
-  });
-  if (created) await changed(ctx, 'exam_paper.from_units', ctx.department.code, { created });
-  return { created };
-}
-
-export async function setNoWrittenExamIn(client: PoolClient, ctx: Ctx, unitId: string, value: boolean): Promise<void> {
-  const d = await load(ctx.term.id, client);
-  const unit = d.units.get(unitId);
-  if (!unit || unit.departmentId !== ctx.department.id) throw AppError.notFound('No such unit in your department.');
-  if (value && d.exams.papers.some((p) => p.unitIds.includes(unit.id))) {
-    throw new AppError(409, ErrorCode.TEACHING_IN_USE, `${unit.code} is on a paper; take it off the paper first.`);
-  }
-  await examsRepo.setNoWrittenExam(client, unit.id, value);
-}
-
-export async function setNoWrittenExam(ctx: Ctx, unitId: string, value: boolean): Promise<void> {
-  await exams(ctx, (client) => setNoWrittenExamIn(client, ctx, unitId, value));
-  await changed(ctx, 'unit.no_written_exam', unitId, { noWrittenExam: value });
 }
 
 // -- practicals ------------------------------------------------------------------------------------

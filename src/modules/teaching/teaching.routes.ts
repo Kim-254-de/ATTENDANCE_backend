@@ -16,9 +16,7 @@ import {
   letterQuerySchema,
   lecturerPatchSchema,
   lecturerSchema,
-  noWrittenExamSchema,
   paperPatchSchema,
-  paperSchema,
   practicalSchema,
   spreadsheetSchema,
   termQuerySchema,
@@ -78,10 +76,7 @@ teachingRouter.post('/spreadsheet', officer, validate({ body: spreadsheetSchema 
 // Exam papers and invigilators are each published to the Director on their own, locking only their list.
 
 teachingRouter.get('/exams', officer, term, asyncHandler(c.examBoard));
-teachingRouter.post('/exam-papers', officer, term, validate({ body: paperSchema }), asyncHandler(c.createPaper));
 /** A paper per unit not on one yet, titled as the unit. */
-teachingRouter.post('/exam-papers/from-units', officer, term, asyncHandler(c.papersFromUnits));
-teachingRouter.post('/exam-papers/bulk', officer, term, validate({ body: bulkSchema }), asyncHandler(c.bulkPapers));
 // The department's exam list uploaded as its Word document, sized by who synced the units in SMARTTT.
 teachingRouter.post('/exam-list/read', officer, term, validate({ body: examListFileSchema }), asyncHandler(c.readExamList));
 teachingRouter.post('/exam-list', officer, term, validate({ body: examListSaveSchema }), asyncHandler(c.saveExamList));
@@ -91,7 +86,6 @@ teachingRouter.put('/exam-papers/rows', officer, term, validate({ body: manyPape
 teachingRouter.put('/exam-papers/:id/rows', officer, term, byId, validate({ body: paperRowsSchema }), asyncHandler(c.setPaperRows));
 teachingRouter.patch('/exam-papers/:id', officer, term, byId, validate({ body: paperPatchSchema }), asyncHandler(c.updatePaper));
 teachingRouter.delete('/exam-papers/:id', officer, term, byId, asyncHandler(c.deletePaper));
-teachingRouter.put('/units/:id/no-written-exam', officer, term, byId, validate({ body: noWrittenExamSchema }), asyncHandler(c.noWrittenExam));
 
 teachingRouter.post('/practicals', officer, term, validate({ body: practicalSchema }), asyncHandler(c.createPractical));
 teachingRouter.post('/practicals/bulk', officer, term, validate({ body: bulkSchema }), asyncHandler(c.bulkPracticals));

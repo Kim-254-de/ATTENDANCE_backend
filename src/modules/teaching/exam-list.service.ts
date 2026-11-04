@@ -234,14 +234,6 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
     const own = new Map(
       d.exams.papers.filter((p) => p.departmentId === ctx.department.id && isListed(p)).map((p) => [paperKey(p.codes, p.sitting), p] as const),
     );
-    for (const p of d.exams.papers) {
-      if (p.departmentId !== ctx.department.id || isListed(p)) continue;
-      const taken = paperCodesOf(p, d.units).map(compact);
-      const clash = [...wanted.values()].find((w) => w.sitting === p.sitting && w.codes.some((c) => taken.includes(compact(c))));
-      if (clash) {
-        throw new AppError(409, ErrorCode.TEACHING_TAKEN, `${clash.codes.join('/')} is already on one of your papers built from units; delete that paper first.`);
-      }
-    }
     let created = 0;
     let updated = 0;
     for (const [key, w] of wanted) {

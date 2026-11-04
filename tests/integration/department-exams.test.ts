@@ -62,6 +62,25 @@ async function makeOfficer(departmentId: string) {
   return { get: at('get'), post: at('post'), patch: at('patch'), put: at('put'), delete: at('delete') };
 }
 
+/** A paper as saving an uploaded moderation letter stores it (exam-list.test.ts covers the upload itself). */
+async function letterPaper(
+  departmentId: string,
+  codes: string[],
+  title: string,
+  rows: Array<[programme: string, year: number, stream: string, students: number]>,
+  { sitting = 'regular', examinerId = null }: { sitting?: string; examinerId?: string | null } = {},
+): Promise<string> {
+  const { rows: [paper] } = await pool.query<{ id: string }>(
+    `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, sitting, examiner_id, codes) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [TERM, departmentId, title, sitting, examinerId, codes]);
+  for (const [programme, year, stream, students] of rows) {
+    await pool.query(
+      `INSERT INTO teaching_exam_paper_rows (paper_id, programme, year, semester, stream, students) VALUES ($1, $2, $3, 1, $4, $5)`,
+      [paper!.id, programme, year, stream, students]);
+  }
+  return paper!.id;
+}
+
 async function makeDepartment(name: string, code: string): Promise<string> {
   const { rows: [d] } = await pool.query<{ id: string }>(`INSERT INTO departments (name, code) VALUES ($1, $2) RETURNING id`, [name, code]);
   return d!.id;
@@ -80,6 +99,7 @@ interface ExamBoard {
   otherUnits: Array<{ id: string; code: string }>;
   practicals: Array<{ unitCode: string; date: string; startTime: string }>;
   problems: Array<{ code: string; message: string }>;
+  summary: { papers: number };
 }
 
 beforeAll(async () => {
@@ -95,8 +115,10 @@ beforeAll(async () => {
     await pool.query(fs.readFileSync(new URL(`../../db/migrations/${f}`, import.meta.url), 'utf8'));
   }
   app = (await import('../../src/app.js')).createApp();
-  cs = await makeOfficer(await makeDepartment('Computer Science', 'DCOMP'));
-  edu = await makeOfficer(await makeDepartment('Education', 'DEDU'));
+  ids.csDept = await makeDepartment('Computer Science', 'DCOMP');
+  ids.eduDept = await makeDepartment('Education', 'DEDU');
+  cs = await makeOfficer(ids.csDept);
+  edu = await makeOfficer(ids.eduDept);
 
   // Teaching first, as departments enter it: two CS units (one taught by Peter), one Education unit.
   ids.y1 = body<{ id: string }>(await cs.post('/courses', { programme: 'BSC.COMP SCI', year: 1, semester: 1, students: 100 })).data.id;
@@ -125,56 +147,45 @@ afterAll(async () => {
 });
 
 describe('exam papers', () => {
-  it('starts with every unit needing a paper', async () => {
+  it('has none until a moderation letter is uploaded, however many units are entered', async () => {
     const b = body<ExamBoard>(await cs.get('/exams')).data;
-    expect(b.problems.map((p) => p.message)).toEqual([
-      "COSC 130 is on no paper; add it to one, or mark it 'no written exam'.",
-      'COSC 130 has ODEL or part-time classes but no ODEL paper; add one.',
-      "COSC 499 is on no paper; add it to one, or mark it 'no written exam'.",
-    ]);
-    expect(b.otherUnits.map((u) => u.code)).toEqual(['BITE 131']);
+    expect(b.papers).toEqual([]);
+    expect(b.problems.map((p) => p.code)).toEqual(['no_exam_list']);
+    expect(body(await cs.post('/exams/publish')).error!.code).toBe('TEACHING_NOT_READY');
   });
 
-  it('makes one shared paper for two departments\' units, examined by the unit\'s lecturer', async () => {
-    const res = await cs.post('/exam-papers', { unitIds: [ids.cosc, ids.bite] });
-    expect(res.status).toBe(201);
-    ids.paper = body<{ id: string }>(res).data.id;
+  it('cannot be made from units', async () => {
+    expect((await cs.post('/exam-papers', { unitIds: [ids.cosc] })).status).toBe(404);
+    expect((await cs.post('/exam-papers/from-units')).status).toBe(404);
+    expect((await cs.post('/exam-papers/bulk', { rows: [{ Codes: 'COSC 130' }] })).status).toBe(404);
+    expect((await cs.put(`/units/${ids.proj}/no-written-exam`, { noWrittenExam: true })).status).toBe(404);
+    expect(body<ExamBoard>(await cs.get('/exams')).data.papers).toEqual([]);
+  });
+
+  it('are the letter\'s, with no need for every unit entered to be on one', async () => {
+    ids.paper = await letterPaper(ids.csDept!, ['BITE 131', 'COSC 130'], 'Programming',
+      [['BED.SCI', 1, '', 50], ['BSC.COMP SCI', 1, '', 100]], { examinerId: ids.peter! });
+    ids.odelPaper = await letterPaper(ids.csDept!, ['COSC 130'], 'Programming (ODEL)', [['BSC.COMP SCI', 1, 'D', 20]], { sitting: 'odel' });
     const b = body<ExamBoard>(await cs.get('/exams')).data;
-    // The regular paper: the ODEL class (D) sits a paper of its own.
-    expect(b.papers).toEqual([expect.objectContaining({
-      codes: 'BITE 131/COSC 130', sitting: 'regular', title: 'Programming', examiner: 'Dr. Peter Kamami (FT)',
-      classRows: ['BED.SCI Y1S1', 'BSC.COMP SCI Y1S1'], students: 150,
-    })]);
-    // A unit is on one paper per sitting.
-    expect(body(await edu.post('/exam-papers', { unitIds: [ids.bite] })).error!.code).toBe('TEACHING_TAKEN');
+    expect(b.papers.map((p) => [p.codes, p.sitting, p.students])).toEqual([['BITE 131/COSC 130', 'regular', 150], ['COSC 130', 'odel', 20]]);
+    // COSC 499 is entered on Units & groups and on no letter: nothing to fix.
+    expect(b.problems).toEqual([]);
+    // A letter's paper can't be turned into one built from units.
+    expect((await cs.patch(`/exam-papers/${ids.paper}`, { unitIds: [ids.proj] })).status).toBe(400);
   });
 
-  it('makes a separate ODEL paper for the same unit, sat only by its ODEL classes', async () => {
-    const res = await cs.post('/exam-papers', { unitIds: [ids.cosc], sitting: 'odel' });
-    expect(res.status).toBe(201);
-    ids.odelPaper = body<{ id: string }>(res).data.id;
-    const odel = body<ExamBoard>(await cs.get('/exams')).data.papers.find((p) => p.id === ids.odelPaper)!;
-    expect([odel.codes, odel.sitting, odel.classRows, odel.students]).toEqual(['COSC 130', 'odel', ['BSC.COMP SCI Y1S1 (D)'], 20]);
-    expect(body(await cs.post('/exam-papers', { unitIds: [ids.cosc], sitting: 'odel' })).error!.code).toBe('TEACHING_TAKEN');
-    // An ODEL paper for a unit with no ODEL class has nobody to sit it.
-    const empty = body<{ id: string }>(await cs.post('/exam-papers', { unitIds: [ids.proj], sitting: 'odel' })).data.id;
-    expect(body<ExamBoard>(await cs.get('/exams')).data.problems.map((p) => p.code)).toContain('no_students');
-    expect((await cs.delete(`/exam-papers/${empty}`)).status).toBe(200);
-  });
-
-  it('pastes ODEL papers as the moderation letters write them', async () => {
-    await cs.delete(`/exam-papers/${ids.odelPaper}`);
-    const pasted = await cs.post('/exam-papers/bulk', { rows: [{ Codes: 'COSC 130 odel', Title: 'Programming (ODEL)' }, { Codes: 'COSC 130', Sitting: 'ODEL' }] });
-    expect(body(pasted).data).toMatchObject({ created: 1, errorCount: 1 });
-    const odel = body<ExamBoard>(await cs.get('/exams')).data.papers.find((p) => p.sitting === 'odel')!;
-    expect([odel.codes, odel.title]).toEqual(['COSC 130', 'Programming (ODEL)']);
-    ids.odelPaper = odel.id;
-  });
-
-  it('marks a unit with no written exam, and keeps it off papers', async () => {
-    expect((await cs.put(`/units/${ids.proj}/no-written-exam`, { noWrittenExam: true })).status).toBe(200);
-    expect(body(await cs.post('/exam-papers', { unitIds: [ids.proj] })).error!.code).toBe('TEACHING_TAKEN');
-    expect(body<ExamBoard>(await cs.get('/exams')).data.problems).toEqual([]);
+  it('leaves out a paper built from units before letters were the only source', async () => {
+    const { rows: [old] } = await pool.query<{ id: string }>(
+      `INSERT INTO teaching_exam_papers (generator_term_id, department_id, title, sitting) VALUES ($1, $2, 'Project', 'regular') RETURNING id`,
+      [TERM, ids.csDept]);
+    await pool.query(`INSERT INTO teaching_exam_paper_units (paper_id, unit_id) VALUES ($1, $2)`, [old!.id, ids.proj]);
+    ids.builtPaper = old!.id;
+    const b = body<ExamBoard>(await cs.get('/exams')).data;
+    expect(b.papers.map((p) => p.id)).not.toContain(old!.id);
+    expect(b.summary.papers).toBe(2);
+    expect((await cs.get('/moderation-letter/pdf?moderator=Prof')).status).toBe(200);
+    const invigilators = body<{ papers: Array<{ paperId: string }> }>(await cs.get('/invigilators')).data;
+    expect(invigilators.papers.map((p) => p.paperId)).not.toContain(old!.id);
   });
 
   it('takes practicals on weekdays only', async () => {
@@ -203,8 +214,10 @@ describe('exam papers', () => {
     expect(data.not_published.map((d) => d.code)).toEqual(['DEDU']);
     const [paper, odel] = data.published[0]!.papers as Array<{ id: string; codes: string[]; sitting: string; examiner: { staff_number: string }; rows: Array<{ course_id: string; mode: string }> }>;
     expect([paper!.id, paper!.codes, paper!.sitting, paper!.examiner.staff_number]).toEqual([ids.paper, ['BITE 131', 'COSC 130'], 'regular', 'STF/0001']);
-    expect(paper!.rows.map((r) => r.course_id)).not.toContain(ids.odel);
-    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel', guessed: false }]]);
+    expect(paper!.rows.map((r) => r.course_id)).toEqual(['listed:BEDSCI|1|1|', 'listed:BSCCOMPSCI|1|1|']);
+    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: 'listed:BSCCOMPSCI|1|1|D', students: 20, mode: 'odel', guessed: false }]]);
+    // Only the letter's two papers: not COSC 499, entered as a unit, nor the paper built from it earlier.
+    expect(data.published[0]!.papers.map((p) => p.id)).toEqual([ids.paper, ids.odelPaper]);
     expect(data.published[0]!.practicals).toHaveLength(2);
   });
 
@@ -284,9 +297,8 @@ describe('invigilators', () => {
   });
 
   it('never puts one person in two rooms at once, nor over their duty limit, whichever list names them', async () => {
-    const unit = body<{ id: string }>(await edu.post('/units', { code: 'EDU 140', title: 'Pedagogy', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id;
-    const same = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [unit] })).data.id;
-    const later = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [body<{ id: string }>(await edu.post('/units', { code: 'EDU 150', title: 'Assessment', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id] })).data.id;
+    const same = await letterPaper(ids.eduDept!, ['EDU 140'], 'Pedagogy', [['BED.SCI', 1, '', 50]]);
+    const later = await letterPaper(ids.eduDept!, ['EDU 150'], 'Assessment', [['BED.SCI', 1, '', 50]]);
     const paper = (ref: string, date: string, session: number, room = 'LH3') => ({ paper_ref: ref, codes: [], date, session, start_time: '08:30', end_time: '10:30', rooms: [room], main_room: room, extra_rooms: [] });
     const janes = generator.draft.papers[0]!;
     const janesRoom = 'LH1';
@@ -298,7 +310,7 @@ describe('invigilators', () => {
     expect([busy.status, body(busy).error!.message]).toEqual([409, 'Jane Otieno already invigilates Programming in LH1 on 2026-12-01 08:30-10:30.']);
 
     // In the same room as her other paper that session she can cover both, as one duty.
-    const shared = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [body<{ id: string }>(await edu.post('/units', { code: 'EDU 160', title: 'Methods', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id] })).data.id;
+    const shared = await letterPaper(ids.eduDept!, ['EDU 160'], 'Methods', [['BED.SCI', 1, '', 50]]);
     generator.draft.papers.push(paper(shared, '2026-12-01', 0, janesRoom));
     const before = body<{ lecturers: Array<{ id: string; duties: number }> }>(await edu.get('/invigilators')).data.lecturers.find((l) => l.id === ids.jane)!.duties;
     expect((await edu.put(`/invigilators/${shared}`, { lecturerId: ids.jane })).status).toBe(200);

@@ -171,25 +171,12 @@ export async function setManyPaperRows(req: Request, res: Response): Promise<voi
 export async function recountPapers(req: Request, res: Response): Promise<void> {
   sendSuccess(res, await examList.recount(await ctx(req)));
 }
-export async function createPaper(req: Request, res: Response): Promise<void> {
-  sendCreated(res, await exams.createPaper(await ctx(req), req.body as PaperInput));
-}
-export async function papersFromUnits(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await exams.startFromUnits(await ctx(req)));
-}
-export async function bulkPapers(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await bulk.bulkPapers(await ctx(req), rows(req)));
-}
 export async function updatePaper(req: Request, res: Response): Promise<void> {
   await exams.updatePaper(await ctx(req), param(req), req.body as PaperInput);
   sendSuccess(res, null);
 }
 export async function deletePaper(req: Request, res: Response): Promise<void> {
   await exams.deletePaper(await ctx(req), param(req));
-  sendSuccess(res, null);
-}
-export async function noWrittenExam(req: Request, res: Response): Promise<void> {
-  await exams.setNoWrittenExam(await ctx(req), param(req), (req.body as { noWrittenExam: boolean }).noWrittenExam);
   sendSuccess(res, null);
 }
 export async function createPractical(req: Request, res: Response): Promise<void> {

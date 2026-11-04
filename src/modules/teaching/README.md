@@ -37,32 +37,30 @@ used to be a separate app, the Timetable Allocator; the rules are the same.
 Also the department's, and also from the Allocator (`exams.service.ts`,
 `invigilation.service.ts`, `moderation-letter.ts`):
 
-- **Exam papers**: built from the department's units. All groups of a unit
-  sit one paper; one paper can carry several units' codes, another
-  department's too ("BITE 131/COSC 130"); a unit is on one paper at most.
-  Each has an examiner (default: the unit's lecturer). A unit can be marked
-  "no written exam". "A paper for each unit" starts the list.
-- **Uploaded exam list** (`exam-list.read.ts`, `exam-list.service.ts`): instead of
-  building papers from units, the department uploads the Word letter it sends
-  for moderation. Each table row with a unit code is a paper (title from the
-  next cell; "COSC 0172/0170" is two codes; rows under an ODEL/part-time
-  heading, or "Math 241 odel", are ODEL papers). A review flags duplicates,
-  codes SMARTTT doesn't know, codes another department listed and papers
-  with no class, before anything is saved. A listed paper's class rows are
-  the classes taking its units on SMARTTT's master timetable and those of the
-  students who synced them; its numbers are who synced (`unit-enrolment/`
-  there). A class with no number yet still reaches the Generator, which keeps
-  it from clashing and gives it a room once it has a number. The department
-  corrects any number, adds a class or removes one, and that stays. A class
-  guessed from the code gives way to the real classes, passing them its number
-  if they have none. SMARTTT is read again when the Generator imports the
-  papers. A listed paper's examiner is optional (SMARTTT's lecturer when
+- **Exam papers** are the units on the department's moderation letters and
+  nothing else: nothing entered on Units & groups or shown on SMARTTT's
+  timetable adds a paper. Papers built from units before this stay in
+  `teaching_exam_papers` but are no longer read (`exams.repository.ts`), so
+  they reach neither the page nor the Generator.
+- **Uploading a letter** (`exam-list.read.ts`, `exam-list.service.ts`): the Word
+  letter the department sends for moderation. Each table row with a unit code is
+  a paper (title from the next cell; "COSC 0172/0170" is two codes; rows under an
+  ODEL/part-time heading, or "Math 241 odel", are ODEL papers). A review flags
+  duplicates, codes SMARTTT doesn't know, codes another department listed and
+  papers with no class, before anything is saved. SMARTTT's master timetable and
+  syncs decide only who sits a paper: its class rows are the classes taking its
+  units on the timetable and those of the students who synced them; its numbers
+  are who synced (`unit-enrolment/` there). A class with no number yet still
+  reaches the Generator, which keeps it from clashing and gives it a room once it
+  has a number. The department corrects any number, adds a class or removes one,
+  and that stays. A class guessed from the code gives way to the real classes,
+  passing them its number if they have none. SMARTTT is read again when the
+  Generator imports the papers. Its examiner is optional (SMARTTT's lecturer when
   on the list). Its class rows reach the Generator with ids like
   `listed:BSCCS|1|1|`, so a class sitting several papers is one class row.
 - **Practicals**, on weekdays the department sets; the Generator only shows them.
 - **Moderation letter** (Word or PDF) to the external moderator, from the papers.
-- Publishing the papers needs every unit on a paper or marked, and every
-  paper an examiner; it locks only the paper list.
+- Publishing the papers needs a letter uploaded; it locks only the paper list.
 - **Invigilators**: each paper's main invigilator (in its main room, the one
   with most of its students; collects every room's scripts) can be named any
   time, before the timetable is generated too: the Generator gets them with
@@ -110,9 +108,7 @@ Generator's term (default: the newest).
 | `POST` | `/exam-papers/recount` | Listed papers' numbers read from SMARTTT again |
 | `GET` | `/export/:format` | The allocation form as `pdf`, `docx` or `xlsx` (phone numbers, and times once published) |
 | `GET` | `/exams` | Exam papers, units (on a paper or not), other departments' units, practicals, problems |
-| `POST` / `PATCH` / `DELETE` | `/exam-papers`, `/exam-papers/:id` | A paper |
-| `POST` | `/exam-papers/from-units`, `/exam-papers/bulk` | A paper per unit; paste from Excel |
-| `PUT` | `/units/:id/no-written-exam` | `{ noWrittenExam }` |
+| `PATCH` / `DELETE` | `/exam-papers/:id` | A letter's paper: its title, sitting, examiner, notes; or removed |
 | `POST` / `PUT` / `DELETE` | `/practicals`, `/practicals/:id`; `POST /practicals/bulk` | Practicals |
 | `POST` | `/exams/publish`, `/exams/reopen` | The paper list |
 | `GET` | `/moderation-letter/:format` | `pdf` or `docx`; `?moderator=` (lines) `&date=` |
