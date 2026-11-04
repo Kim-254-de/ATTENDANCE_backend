@@ -107,8 +107,9 @@ export class SmartttHttpClient {
   }
 
   /**
-   * How many students synced each unit this term, by class row, and who
-   * teaches it: what a department's uploaded exam papers are sized with.
+   * The classes taking each unit this term (on the master timetable, or by
+   * who synced it), how many students synced, and who teaches it: what a
+   * department's uploaded exam papers are built from.
    */
   async unitEnrolment(codes: string[]): Promise<SmartttUnitEnrolmentResult> {
     if (!env.SMARTTT_BASE_URL) return { status: 'DISABLED' };

@@ -206,7 +206,7 @@ describe('the uploaded exam list', () => {
     expect(r.entries[3]!.duplicateOf).toBe(1);
     expect(r.entries[2]!.unknownCodes).toEqual(['COSC 0170']);
     expect(r.entries[4]!.section).toBe('ODEL / PART-TIME DRAFTS');
-    expect(r.summary).toEqual({ papers: 6, newPapers: 6, duplicates: 1, unknown: 2, noStudents: 2 });
+    expect(r.summary).toEqual({ papers: 6, newPapers: 6, duplicates: 1, unknown: 2, noStudents: 2, noClasses: 2 });
     expect((await pool.query(`SELECT 1 FROM teaching_exam_papers`)).rowCount).toBe(0);
   });
 
@@ -282,7 +282,7 @@ describe('the uploaded exam list', () => {
     const nobody = saved.board.papers.find((p) => p.codes === 'MATH 100' && p.sitting === 'odel')!;
     expect([nobody.students, nobody.rows]).toEqual([0, []]);
     expect(saved.board.warnings.map((w) => w.message)).toEqual([
-      'Nobody has synced MATH 100 (ODEL) in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.',
+      'Nobody has synced MATH 100 (ODEL) in SMARTTT and the master timetable has no class for it. It still goes to the Director and gets a date; add its classes and students under Numbers so it gets a room and can\'t clash.',
     ]);
   });
 
@@ -322,6 +322,14 @@ describe('the uploaded exam list', () => {
     const cosc = data.published.find((d) => d.code === 'DCOMP')!.papers[0]!;
     expect(cosc.codes).toEqual(['COSC 170', 'COSC 172']);
     expect(cosc.rows.map((r) => [r.course_id, r.students])).toEqual([['listed:BSCCS|1|1|', 100], ['listed:BSCMATH|1|1|', 20]]);
+  });
+
+  it('tells the Generator which classes are only guessed from the code', async () => {
+    const res = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+    const data = body<{ published: Array<{ code: string; papers: Array<{ codes: string[]; rows: Array<{ guessed: boolean }> }> }> }>(res).data;
+    for (const paper of data.published.flatMap((d) => d.papers)) {
+      for (const r of paper.rows) expect(r.guessed).toBe(false); // SMARTTT's, or a class the department named
+    }
   });
 
   it('keeps the list locked once published', async () => {
@@ -365,5 +373,84 @@ describe('the uploaded exam list', () => {
     expect(after.papers.find((p) => p.id === nobody.id)!.students).toBe(25);
     expect(after.papers.find((p) => p.id === stats.id)!.rows.map((r) => [r.students, r.smartttStudents, r.edited])).toEqual([[50, 44, true]]);
     expect(after.warnings.some((w) => w.message.includes('MATH 100'))).toBe(false);
+
+    // MATH Y1S1 is what the page fills in from "MATH 100"; BSC.STAT is a class the department named.
+    expect((await math.post('/exams/publish')).status).toBe(200);
+    const read = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+    const sent = body<{ published: Array<{ code: string; papers: Array<{ id: string; rows: Array<{ guessed: boolean }> }> }> }>(read).data
+      .published.find((d) => d.code === 'DBSC')!.papers;
+    expect(sent.find((p) => p.id === nobody.id)!.rows.map((r) => r.guessed)).toEqual([true]);
+    expect(sent.find((p) => p.id === stats.id)!.rows.map((r) => r.guessed)).toEqual([false]);
+  });
+  describe('classes from the master timetable', () => {
+    const generatorFeed = async () => {
+      const read = await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key');
+      return body<{
+        courses: Array<{ id: string; label: string; students: number }>;
+        published: Array<{ code: string; papers: Array<{ id: string; rows: Array<{ course_id: string; students: number; guessed: boolean }> }> }>;
+      }>(read).data;
+    };
+
+    it('reach the Generator with no number yet, known classes and not guesses', async () => {
+      expect((await math.post('/exams/reopen')).status).toBe(200);
+      smarttt.units['STAT 300'] = { name: 'Regression', rows: [row('BSC.STAT', 3, 0), row('BED.SCI', 3, 0, 'regular', '1')] };
+      const r = body<Review>(await math.post('/exam-list/read', { file: await letter([['1', 'STAT 300', 'Regression']]) })).data;
+      expect(r.entries[0]).toMatchObject({ students: 0, classRows: [{ label: 'BED.SCI Y3S1 (1)', students: 0 }, { label: 'BSC.STAT Y3S1', students: 0 }] });
+      expect(r.summary).toMatchObject({ noStudents: 1, noClasses: 0 });
+
+      const saved = body<{ board: Board }>(await math.post('/exam-list', { papers: [{ codes: ['STAT 300'], title: 'Regression', sitting: 'regular' }] })).data.board;
+      const paper = saved.papers.find((p) => p.codes === 'STAT 300')!;
+      ids.stat = paper.id;
+      expect(paper.rows.map((x) => [x.programme, x.students, x.smartttStudents, x.edited])).toEqual([['BED.SCI', 0, 0, false], ['BSC.STAT', 0, 0, false]]);
+      expect(paper.classRows).toHaveLength(2);
+      expect(saved.warnings.map((w) => w.message)).toContain(
+        'STAT 300 has 2 classes on the master timetable and no student number yet. Its classes are kept from clashing and it gets a date; enter its students under Numbers so it gets a room.',
+      );
+
+      expect((await math.post('/exams/publish')).status).toBe(200);
+      const feed = await generatorFeed();
+      const sent = feed.published.flatMap((d) => d.papers).find((p) => p.id === ids.stat)!;
+      expect(sent.rows.map((x) => [x.course_id, x.students, x.guessed])).toEqual([
+        ['listed:BEDSCI|3|1|1', 0, false],
+        ['listed:BSCSTAT|3|1|', 0, false],
+      ]);
+      expect(feed.courses.map((c) => c.id)).toEqual(expect.arrayContaining(['listed:BEDSCI|3|1|1', 'listed:BSCSTAT|3|1|']));
+    });
+
+    it('stay off a paper once the department removes them, and take a number when someone syncs', async () => {
+      expect((await math.post('/exams/reopen')).status).toBe(200);
+      const res = await math.put(`/exam-papers/${ids.stat}/rows`, { rows: [{ programme: 'BSC.STAT', year: 3, semester: 1, stream: '', students: 0 }] });
+      expect(res.status).toBe(200);
+      expect(body<Board>(res).data.papers.find((p) => p.id === ids.stat)!.classRows).toEqual(['BSC.STAT Y3S1']);
+
+      smarttt.units['STAT 300']!.rows = [row('BSC.STAT', 3, 18), row('BED.SCI', 3, 0, 'regular', '1')];
+      const paper = body<Board>(await math.post('/exam-papers/recount')).data.papers.find((p) => p.id === ids.stat)!;
+      expect(paper.rows.map((x) => [x.programme, x.students, x.edited])).toEqual([['BED.SCI', 0, true], ['BSC.STAT', 18, false]]);
+      expect(paper.classRows).toHaveLength(1);
+    });
+
+    it('replace a guessed class, which passes them the number typed for it', async () => {
+      smarttt.units['GEOL 210'] = { name: 'Rocks', rows: [] };
+      const saved = body<{ board: Board }>(await math.post('/exam-list', { papers: [{ codes: ['GEOL 210'], title: 'Rocks', sitting: 'regular' }] })).data.board;
+      const id = saved.papers.find((p) => p.codes === 'GEOL 210')!.id;
+      await math.put(`/exam-papers/${id}/rows`, { rows: [{ programme: 'GEOL', year: 2, semester: 1, stream: '', students: 41 }] });
+
+      smarttt.units['GEOL 210']!.rows = [row('BSC.GEOL', 2, 0), row('BSC.CHEM', 2, 0), row('GEOL.X', 2, 0)];
+      const paper = body<Board>(await math.post('/exam-papers/recount')).data.papers.find((p) => p.id === id)!;
+      expect(paper.students).toBe(41);
+      expect(paper.rows.map((x) => [x.programme, x.students, x.edited])).toEqual([
+        ['BSC.CHEM', 14, true], ['BSC.GEOL', 14, true], ['GEOL.X', 13, true],
+      ]);
+    });
+
+    it('replace a guessed class outright when they have synced students', async () => {
+      smarttt.units['GEOL 220'] = { name: 'Maps', rows: [] };
+      const saved = body<{ board: Board }>(await math.post('/exam-list', { papers: [{ codes: ['GEOL 220'], title: 'Maps', sitting: 'regular' }] })).data.board;
+      const id = saved.papers.find((p) => p.codes === 'GEOL 220')!.id;
+      await math.put(`/exam-papers/${id}/rows`, { rows: [{ programme: 'GEOL', year: 2, semester: 1, stream: '', students: 41 }] });
+      smarttt.units['GEOL 220']!.rows = [row('BSC.GEOL', 2, 30)];
+      const paper = body<Board>(await math.post('/exam-papers/recount')).data.papers.find((p) => p.id === id)!;
+      expect(paper.rows.map((x) => [x.programme, x.students])).toEqual([['BSC.GEOL', 30]]);
+    });
   });
 });

@@ -204,7 +204,7 @@ describe('exam papers', () => {
     const [paper, odel] = data.published[0]!.papers as Array<{ id: string; codes: string[]; sitting: string; examiner: { staff_number: string }; rows: Array<{ course_id: string; mode: string }> }>;
     expect([paper!.id, paper!.codes, paper!.sitting, paper!.examiner.staff_number]).toEqual([ids.paper, ['BITE 131', 'COSC 130'], 'regular', 'STF/0001']);
     expect(paper!.rows.map((r) => r.course_id)).not.toContain(ids.odel);
-    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel' }]]);
+    expect([odel!.id, odel!.sitting, odel!.rows]).toEqual([ids.odelPaper, 'odel', [{ course_id: ids.odel, students: 20, mode: 'odel', guessed: false }]]);
     expect(data.published[0]!.practicals).toHaveLength(2);
   });
 
@@ -287,12 +287,29 @@ describe('invigilators', () => {
     const unit = body<{ id: string }>(await edu.post('/units', { code: 'EDU 140', title: 'Pedagogy', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id;
     const same = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [unit] })).data.id;
     const later = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [body<{ id: string }>(await edu.post('/units', { code: 'EDU 150', title: 'Assessment', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id] })).data.id;
-    const paper = (ref: string, date: string, session: number) => ({ paper_ref: ref, codes: [], date, session, start_time: '08:30', end_time: '10:30', rooms: ['LH3'] });
+    const paper = (ref: string, date: string, session: number, room = 'LH3') => ({ paper_ref: ref, codes: [], date, session, start_time: '08:30', end_time: '10:30', rooms: [room], main_room: room, extra_rooms: [] });
+    const janes = generator.draft.papers[0]!;
+    const janesRoom = 'LH1';
+    generator.draft.papers[0] = { ...janes, rooms: [janesRoom], main_room: janesRoom, extra_rooms: [] };
     generator.draft.papers.push(paper(same, '2026-12-01', 0), paper(later, '2026-12-02', 0));
 
     // Jane (Computer Science's list) already invigilates in that session.
     const busy = await edu.put(`/invigilators/${same}`, { lecturerId: ids.jane });
-    expect([busy.status, body(busy).error!.message]).toEqual([409, 'Jane Otieno already invigilates Programming on 2026-12-01 08:30-10:30.']);
+    expect([busy.status, body(busy).error!.message]).toEqual([409, 'Jane Otieno already invigilates Programming in LH1 on 2026-12-01 08:30-10:30.']);
+
+    // In the same room as her other paper that session she can cover both, as one duty.
+    const shared = body<{ id: string }>(await edu.post('/exam-papers', { unitIds: [body<{ id: string }>(await edu.post('/units', { code: 'EDU 160', title: 'Methods', weeklyHours: 3, classLength: 3, courseIds: [ids.ed] })).data.id] })).data.id;
+    generator.draft.papers.push(paper(shared, '2026-12-01', 0, janesRoom));
+    const before = body<{ lecturers: Array<{ id: string; duties: number }> }>(await edu.get('/invigilators')).data.lecturers.find((l) => l.id === ids.jane)!.duties;
+    expect((await edu.put(`/invigilators/${shared}`, { lecturerId: ids.jane })).status).toBe(200);
+    const board = body<{ lecturers: Array<{ id: string; duties: number }>; problems: Array<{ code: string }> }>(await edu.get('/invigilators')).data;
+    expect(board.lecturers.find((l) => l.id === ids.jane)!.duties).toBe(before);
+    expect(board.problems.some((p) => p.code === 'invigilator_clash')).toBe(false);
+    // The Director then moves that paper to another room: now it is flagged.
+    generator.draft.papers[generator.draft.papers.length - 1] = paper(shared, '2026-12-01', 0, 'LH3');
+    const moved = body<{ problems: Array<{ code: string }> }>(await edu.get('/invigilators')).data;
+    expect(moved.problems.some((p) => p.code === 'invigilator_clash')).toBe(true);
+    expect((await edu.put(`/invigilators/${shared}`, { lecturerId: null })).status).toBe(200);
     // Peter may take one duty; Education's own copy of him (same staff number) has no limit, but his does.
     await edu.post('/lecturers', { fullName: 'Peter Kamami', staffNumber: 'STF/0001' });
     const eduPeter = body<{ lecturers: Array<{ id: string; own: boolean; staffNumber: string }> }>(await edu.get('/invigilators')).data

@@ -61,14 +61,31 @@ export const paperCodes = (p: PaperRow, units: Map<string, UnitRow>): string[] =
 export const isListed = (p: PaperRow): boolean => p.unitIds.length === 0 && p.codes.length > 0;
 
 /**
+ * The class the Exams tab fills in for a paper nobody synced so it can take a
+ * number: programme from the first code's letters, year from its first
+ * non-zero digit ("MATH 241" is MATH Y2S1). The department's page has the same
+ * rule (guessedRow). A row still saying exactly this, with no SMARTTT count,
+ * is a guess and not who is known to sit the paper: the Generator seats it
+ * but doesn't hold it to a class's hard rules. Correcting the class makes it known.
+ */
+export function isGuessedRow(p: PaperRow, r: ListedRow): boolean {
+  if (r.smartttStudents !== null) return false;
+  const first = p.codes[0] ?? '';
+  const year = Number(/[1-9]/.exec(first.replace(/^\D+/, ''))?.[0] ?? 1);
+  return compact(r.programme) === first.replace(/[^A-Za-z]/g, '').toUpperCase() && r.year === Math.min(year, 10) && r.semester === 1 && !r.stream.trim();
+}
+
+/**
  * A listed paper's class rows as courses, so everything downstream (the
  * board, the Generator's import) treats them alike. The id is the class
  * itself (programme, year, semester, stream): one class sitting several
  * papers is one class row in the Generator, so its papers never clash.
  */
-export function listedCourses(p: PaperRow): CourseRow[] {
+export function listedCourses(p: PaperRow): Array<CourseRow & { guessed: boolean }> {
   return p.rows
-    .filter((r) => r.students > 0)
+    // Students 0: a class the master timetable names, number not known yet (it still holds to the
+    // Generator's hard rules); once the department set it to 0 or removed it, it doesn't sit the paper.
+    .filter((r) => r.students > 0 || !r.edited)
     .map((r) => ({
       id: `listed:${compact(r.programme)}|${r.year}|${r.semester}|${compact(r.stream)}`,
       departmentId: p.departmentId,
@@ -79,6 +96,7 @@ export function listedCourses(p: PaperRow): CourseRow[] {
       subClass: r.stream,
       students: r.students,
       mode: p.sitting === 'odel' ? 'odel' : 'regular',
+      guessed: isGuessedRow(p, r),
     }));
 }
 
@@ -92,7 +110,7 @@ export const sittingOf = (mode: CourseMode): Sitting => (mode === 'odel' || mode
 const SITTING_NAME: Record<Sitting, string> = { regular: 'regular', odel: 'ODEL' };
 
 /** The cohorts that sit the paper: every course of its sitting taking any of its units, once. */
-function paperCourses(p: PaperRow, d: Loaded): CourseRow[] {
+function paperCourses(p: PaperRow, d: Loaded): Array<CourseRow & { guessed?: boolean }> {
   if (isListed(p)) return listedCourses(p).sort((a, b) => courseLabel(a).localeCompare(courseLabel(b)));
   const ids = new Set(p.unitIds.flatMap((id) => d.units.get(id)?.courseIds ?? []));
   return [...ids]
@@ -163,11 +181,16 @@ function problems(ctx: Ctx, d: Loaded): ExamProblem[] {
  */
 function warnings(ctx: Ctx, d: Loaded): ExamProblem[] {
   return d.exams.papers
-    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).length === 0)
-    .map((p) => ({
-      code: 'no_students',
-      message: `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT yet. It still goes to the Director and gets a date; enter its students under Numbers so it gets a room.`,
-    }));
+    .filter((p) => p.departmentId === ctx.department.id && isListed(p) && paperCourses(p, d).every((c) => c.students === 0))
+    .map((p) => {
+      const classes = paperCourses(p, d).length;
+      return {
+        code: 'no_students',
+        message: classes
+          ? `${paperLabel(p, d.units)} has ${classes === 1 ? '1 class' : `${classes} classes`} on the master timetable and no student number yet. Its classes are kept from clashing and it gets a date; enter its students under Numbers so it gets a room.`
+          : `Nobody has synced ${paperLabel(p, d.units)} in SMARTTT and the master timetable has no class for it. It still goes to the Director and gets a date; add its classes and students under Numbers so it gets a room and can't clash.`,
+      };
+    });
 }
 
 export interface PaperDto {
@@ -573,7 +596,7 @@ export async function submissions(termId: string): Promise<Record<string, unknow
           examiner: examiner ? { staff_number: examiner.staffNumber, name: displayName(examiner) } : null,
           invigilator: main?.staffNumber ? { staff_number: main.staffNumber, name: displayName(main) } : null,
           notes: p.notes,
-          rows: sitting.map((c) => ({ course_id: c.id, students: c.students, mode: c.mode })),
+          rows: sitting.map((c) => ({ course_id: c.id, students: c.students, mode: c.mode, guessed: c.guessed === true })),
           students: sitting.reduce((n, c) => n + c.students, 0),
         };
       });

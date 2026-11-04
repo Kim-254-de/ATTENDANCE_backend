@@ -204,6 +204,31 @@ describe("SMARTTT's admin functions in the console", () => {
     expect((await as(admin.auth).post(`/admin/smarttt/terms/${termId}/set-current`)).status).toBe(200);
   });
 
+  it('list, add and edit venues, recording each change', async () => {
+    const admin = await makeUser('ADMIN');
+    const id = '11111111-1111-4111-8111-111111111111';
+    adminAnswers['GET rooms/'] = Response.json({ rooms: [{ id, code: 'TC 1' }] });
+    adminAnswers['POST rooms/'] = Response.json({ id, code: 'NURS 1' }, { status: 201 });
+    adminAnswers[`PATCH rooms/${id}/`] = Response.json({ id, for_exams: false });
+
+    expect(body(await as(admin.auth).get('/admin/smarttt/rooms')).data).toEqual({ rooms: [{ id, code: 'TC 1' }] });
+    const made = await as(admin.auth).post('/admin/smarttt/rooms').send({ code: 'NURS 1', name: 'NURS 1', building: 'Health', capacity: 60, health_unit: true });
+    expect(made.status).toBe(201);
+    expect(JSON.parse(calls[1]!.body.toString())).toMatchObject({ code: 'NURS 1', health_unit: true });
+    const changed = await as(admin.auth).patch(`/admin/smarttt/rooms/${id}`).send({ for_exams: false });
+    expect(changed.status).toBe(200);
+    expect(calls[2]).toMatchObject({ method: 'PATCH', path: `/api/v1/integrations/admin/rooms/${id}/` });
+    expect((await as(admin.auth).patch('/admin/smarttt/rooms/not-an-id').send({})).status).toBe(400);
+    expect((await as(admin.auth).get('/admin/smarttt/rooms/capacities')).status).not.toBe(404);
+
+    adminAnswers['GET rooms/duplicates/'] = Response.json({ groups: [] });
+    adminAnswers['POST rooms/merge-duplicates/'] = Response.json({ groups: 1, rooms_removed: 1, results: [] });
+    adminAnswers['POST rooms/merge/'] = Response.json({ kept: 'ED 4', merged: ['HALL'], slots_dropped: 0 });
+    expect(body(await as(admin.auth).get('/admin/smarttt/rooms/duplicates')).data).toEqual({ groups: [] });
+    expect((await as(admin.auth).post('/admin/smarttt/rooms/merge-duplicates')).status).toBe(200);
+    expect((await as(admin.auth).post('/admin/smarttt/rooms/merge').send({ keep: id, merge: [id] })).status).toBe(200);
+  });
+
   it("remove one department's lecturer allocation, named in the query", async () => {
     const admin = await makeUser('ADMIN');
     adminAnswers['DELETE timetable/assign-lecturers/'] = Response.json({ detail: 'Removed the allocation from Arts & Humanities.', slots_updated: 4 });
