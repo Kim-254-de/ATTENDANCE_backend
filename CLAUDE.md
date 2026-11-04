@@ -32,3 +32,24 @@ Never delete or rewrite the other side's entries; add a reply line under it inst
 (`- **Reply (<date>, <who>):** …`). Number new entries one above the highest in their section.
 
 Commit `GAPS.md` with the change it describes, so the other side sees both in the same pull.
+
+## Secrets: keeping the GitGuardian check green
+
+GitGuardian scans every commit in a pull request for passwords, keys and tokens. A hit fails the
+check, and it stays failed because the value is still in the history even after a later fix.
+
+- **Real secrets never go in the repo.** Keys, tokens, passwords and connection strings go in
+  `.env`, which is gitignored. `.env.example` holds placeholders such as `CHANGE_ME` only.
+- **Test passwords go only in test folders.** Those paths are listed in `.gitguardian.yaml`, and
+  GitGuardian skips them. Make the values obviously made up (`Test-Passw0rd`), and use them only
+  against the test database or the mocks.
+- **A new test folder goes into `.gitguardian.yaml` in the same commit**, before any password is
+  written there.
+- **Don't hide a value from the scanner** by splitting strings or encoding it. If a password is
+  needed outside a test folder, it's a real secret: read it from the environment.
+- **Before pushing,** look at `git diff --cached` for anything that looks like a key or password.
+- **If the check fails anyway:** if the value is real, revoke and replace it first, then remove
+  it. If it's a test value, the repo owner marks the incident "Test credential" in the
+  GitGuardian dashboard, which clears the check, and moves the file into a test folder.
+- GitGuardian reads `.gitguardian.yaml` from the **default branch**, so a change to it only
+  takes effect once it's merged there.

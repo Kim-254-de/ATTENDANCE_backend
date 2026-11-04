@@ -1,0 +1,8 @@
+# GitGuardian: what not to scan for secrets.
+# Only made-up test values live in these paths (see "Secrets" in CLAUDE.md). Real keys, tokens and
+# passwords never go in the repo at all: they go in .env, which is gitignored.
+# GitGuardian reads this file from the default branch, so a change here works once it is merged there.
+version: 2
+secret:
+  ignored_paths:
+    - "tests/**"
