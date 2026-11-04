@@ -31,6 +31,14 @@ const MAIN = '';
 
 const when = (p: SharedPaper) => `${p.date} ${p.startTime}-${p.endTime}`;
 const slotOf = (p: SharedPaper | undefined) => (p?.date && p.session !== null ? `${p.date}|${p.session}` : null);
+/** The room of a paper's invigilator: its main room, or the extra room named. */
+const roomOf = (p: SharedPaper | undefined, room: string) => (room === MAIN ? (p?.mainRoom ?? null) : room);
+/** One duty: a person covering several papers in one room in a session is there once. */
+const dutyOf = (p: SharedPaper | undefined, room: string, paperId: string) => {
+  const slot = slotOf(p);
+  const where = roomOf(p, room);
+  return slot && where ? `${slot}|${where}` : `paper|${paperId}|${room}`;
+};
 
 async function shared(ctx: Ctx): Promise<{ draft: SharedExamDraft['draft']; papers: Map<string, SharedPaper> }> {
   const data = await sharedExamDraft(ctx.term.id);
@@ -86,11 +94,12 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
     const l = at.has(`${paperId}|${room}`) ? lecturers.get(at.get(`${paperId}|${room}`)!.lecturerId) : undefined;
     return { invigilatorId: l?.id ?? null, invigilator: l ? displayName(l) : null, invigilatorDepartment: l?.departmentCode ?? null };
   };
-  const duties = new Map<string, number>();
+  const dutySets = new Map<string, Set<string>>();
   for (const i of exams.invigilations) {
     const l = lecturers.get(i.lecturerId);
-    if (l) duties.set(person(l), (duties.get(person(l)) ?? 0) + 1);
+    if (l) dutySets.set(person(l), (dutySets.get(person(l)) ?? new Set<string>()).add(dutyOf(draft.papers.get(i.paperId), i.room, i.paperId)));
   }
+  const duties = new Map([...dutySets].map(([who, set]) => [who, set.size] as const));
   const standing = latest && !latest.reopenedAt ? latest : null;
   const own = exams.papers.filter((p) => p.departmentId === ctx.department.id);
   const papers = own
@@ -122,25 +131,28 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
       if (!x.invigilatorId) problems.push({ code: 'no_invigilator', message: `Name an invigilator for ${p.codes} in ${x.room}.` });
     }
   }
-  // Clashes, now that sessions are known: one person in two places at once (any department's papers).
+  // Clashes, now that sessions are known: one person in two rooms at once (any department's papers).
+  // Several papers in one room are fine: one person can cover them all.
   const titles = new Map(exams.papers.map((p) => [p.id, paperLabel(p, units)]));
   const ownIds = new Set(own.map((p) => p.id));
-  const bySlot = new Map<string, Array<{ paperId: string; who: LecturerRow }>>();
+  const bySlot = new Map<string, Array<{ paperId: string; who: LecturerRow; room: string }>>();
   for (const i of exams.invigilations) {
     const l = lecturers.get(i.lecturerId);
-    const slot = slotOf(draft.papers.get(i.paperId));
-    if (!l || !slot) continue;
+    const where = draft.papers.get(i.paperId);
+    const slot = slotOf(where);
+    const room = roomOf(where, i.room);
+    if (!l || !slot || !room) continue;
     const key = `${person(l)}|${slot}`;
-    bySlot.set(key, [...(bySlot.get(key) ?? []), { paperId: i.paperId, who: l }]);
+    bySlot.set(key, [...(bySlot.get(key) ?? []), { paperId: i.paperId, who: l, room }]);
   }
   for (const list of bySlot.values()) {
-    const distinct = [...new Set(list.map((x) => x.paperId))];
-    if (distinct.length < 2 && list.length < 2) continue;
+    if (new Set(list.map((x) => x.room)).size < 2) continue;
     if (!list.some((x) => ownIds.has(x.paperId))) continue;
+    const distinct = [...new Set(list.map((x) => x.paperId))];
     const where = draft.papers.get(list[0]!.paperId)!;
     problems.push({
       code: 'invigilator_clash',
-      message: `${list[0]!.who.fullName} is named for ${distinct.map((id) => titles.get(id)).join(' and ')}${distinct.length < 2 ? ' twice' : ''} at the same time (${when(where)}).`,
+      message: `${list[0]!.who.fullName} is named for ${distinct.map((id) => titles.get(id)).join(' and ')}${distinct.length < 2 ? ' twice' : ''} in different rooms at the same time (${when(where)}).`,
     });
   }
   for (const l of everyone.filter((x) => x.departmentId === ctx.department.id && x.staffNumber)) {
@@ -174,8 +186,9 @@ export async function board(ctx: Ctx): Promise<InvigilatorBoardDto> {
 
 /**
  * Names (or clears) a paper's main invigilator (`room` '') or an extra room's.
- * Never someone already in another room of the paper, busy in another paper
- * in that session, or at their duty limit.
+ * Never someone already in another room of the paper, in another room that
+ * session, or at their duty limit. Several papers in one room can share one
+ * person, and count as one duty.
  */
 export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: string | null, room = MAIN): Promise<void> {
   const draft = await shared(ctx);
@@ -200,22 +213,27 @@ export async function setInvigilator(ctx: Ctx, paperId: string, lecturerId: stri
       const who = person(lecturer);
       const byId = new Map(everyone.map((l) => [l.id, l]));
       const slot = slotOf(where);
-      let duties = 0;
+      const mine = roomOf(where, room);
+      const held = new Set<string>();
       for (const other of exams.invigilations) {
         const l: LecturerRow | undefined = byId.get(other.lecturerId);
         if (!l || person(l) !== who || (other.paperId === paper.id && other.room === room)) continue;
-        duties++;
+        const elsewhere = draft.papers.get(other.paperId);
+        held.add(dutyOf(elsewhere, other.room, other.paperId));
         if (other.paperId === paper.id) {
           throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} is already named for ${other.room || 'the main room'} of this paper.`);
         }
-        if (slot && slot === slotOf(draft.papers.get(other.paperId))) {
+        // Another paper that session is fine in the same room: they cover both. Not in another room.
+        const theirs = roomOf(elsewhere, other.room);
+        if (slot && slot === slotOf(elsewhere) && mine && theirs && mine !== theirs) {
           const otherPaper = exams.papers.find((p) => p.id === other.paperId);
-          throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already invigilates ${otherPaper?.title ?? 'a paper'} on ${when(where!)}.`);
+          throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already invigilates ${otherPaper?.title ?? 'a paper'} in ${theirs} on ${when(where!)}.`);
         }
       }
       // The same person on every department's list: the smallest limit set applies.
       const limit = limitOf(everyone, lecturer);
-      if (limit !== null && duties + 1 > limit) {
+      const duties = held.size;
+      if (limit !== null && !held.has(dutyOf(where, room, paper.id)) && duties + 1 > limit) {
         throw new AppError(409, ErrorCode.CONFLICT, `${lecturer.fullName} already has ${duties} duties; the limit is ${limit}.`);
       }
       await examsRepo.setInvigilation(client, paper.id, room, lecturer.id, ctx.actor);
