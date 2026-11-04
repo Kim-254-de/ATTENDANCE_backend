@@ -57,7 +57,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
      enums, auth or limits; anything a screen now shows wrongly; anything you noticed in the UI. -->
 
 ### F-1 · Medium · Exam rooms: invigilator routes, exam check-in, exam mode
-- **Raised:** 2026-10-25, backend   **Status:** open
+- **Raised:** 2026-10-25, backend   **Status:** done (ATTENDANCE_fronted df634d2, d9eac25)
 - **Seen:** new in `src/modules/exam` (commits 04bf02d, 6a832da). SMARTTT pushes one exam
   session per paper per room (who is seated there, its main or extra invigilator) and the
   term's mode. All under `/api/v1`, lecturer routes need a staff number:
@@ -85,6 +85,10 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Done when:** the lecturer portal has the exam rooms and the scanner handles exam codes.
   Already built on ATTENDANCE_fronted branch `exam-sessions` (df634d2): `/exams`,
   `/exam-room/:id`, and the scan page; review it rather than starting over.
+- **Reply (2026-10-31, Wayler):** reviewed and kept df634d2. d9eac25 fixes what the review found: Open room
+  now appears by itself when the slot starts, Close room asks in the app's dialog, the exam room uses the palette,
+  and `GEOFENCE_ANCHOR_UNAVAILABLE` → "Open without the location check" has a test. `EXAM_MODE` on opening a class
+  shows your message as it is.
 
 ### F-2 · High · The department uploads its exam list; numbers come from SMARTTT
 - **Raised:** 2026-10-27, backend   **Status:** done (ATTENDANCE_fronted 0d92647)
