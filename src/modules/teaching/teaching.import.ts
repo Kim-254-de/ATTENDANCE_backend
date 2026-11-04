@@ -21,8 +21,7 @@ import {
   type LecturerInput,
   type UnitInput,
 } from './teaching.service.js';
-import * as examsRepo from './exams.repository.js';
-import { createPaperIn, savePracticalIn, setNoWrittenExamIn, updatePaperIn, type PaperInput } from './exams.service.js';
+import { savePracticalIn } from './exams.service.js';
 
 /**
  * "Paste from Excel" for the department workbook's tabs:
@@ -437,90 +436,9 @@ export async function bulkLecturers(ctx: Ctx, rows: Array<Record<string, unknown
   return finish(ctx, 'lecturers.bulk', r);
 }
 
-// -- exam papers and practicals --------------------------------------------------------------------
+// -- practicals -----------------------------------------------------------------------------------
 //
-//     Exam papers   Codes | Title | Sitting | Written exam | Examiner | Staff no. | Notes
 //     Practicals    Unit code | Date | Start | End
-//
-// "Codes" holds one code, or several for a shared paper ("BITE 131/COSC 130").
-// "Sitting" is Regular (or blank) or ODEL (also "Part-time"); a code written
-// as in the moderation letters, "MATH 241 odel", is the ODEL paper too.
-// "Written exam" No marks the units as having no written exam. A paper is
-// matched to an existing one by its first code and sitting, and updated.
-
-export async function bulkPapers(ctx: Ctx, rows: Array<Record<string, unknown>>): Promise<BulkResult> {
-  const r = await writeTeaching(
-    ctx,
-    async (client) => {
-      let created = 0;
-      let updated = 0;
-      let marked = 0;
-      const errors: BulkResult['errors'] = [];
-      const seen = new Map<string, number>();
-      for (const [i, raw] of rows.entries()) {
-        const line = i + 1;
-        const row = cleanRow(raw);
-        try {
-          const cell = row['codes'] ?? row['unit_codes'] ?? row['unit_code'] ?? row['code'] ?? fail('Codes is required');
-          const data = await repo.loadTerm(ctx.term.id, [], client);
-          const units = new Map(data.units.map((u) => [u.codeKey, u]));
-          const odelMark = /\s*\(?\b(odel|odl|part[\s-]?time)\b\)?\s*$/i;
-          const parts = cell.split(/[/;,]+/).map((c) => c.trim()).filter(Boolean);
-          const sitting = sittingWord(row['sitting']) ?? (parts.some((c) => odelMark.test(c)) ? 'odel' : 'regular');
-          const codes = parts.map((c) => c.replace(odelMark, '').trim());
-          const found = codes.map((code) => {
-            const key = `${compact(code)}|${sitting}`;
-            if (seen.has(key)) fail(`${code} is also on row ${seen.get(key)}`);
-            return units.get(compact(code)) ?? fail(`no unit ${code} this term`);
-          });
-          for (const code of codes) seen.set(`${compact(code)}|${sitting}`, line);
-          await savepoint(client, async () => {
-            if (['no', 'n', 'false', '0'].includes((row['written_exam'] ?? 'yes').trim().toLowerCase())) {
-              for (const u of found) await setNoWrittenExamIn(client, ctx, u.id, true);
-              marked += found.length;
-              return;
-            }
-            const fields: PaperInput = { unitIds: found.map((u) => u.id), sitting };
-            if (row['title']) fields.title = row['title'];
-            if (row['notes']) fields.notes = row['notes'];
-            const staff = row['staff_no'] ?? row['staff_number'];
-            if (staff || row['examiner']) {
-              const [, name] = splitName(row['examiner'] ?? '');
-              const lecturer = await findLecturer(client, ctx, staff ?? null, name);
-              if (!lecturer) fail(`no lecturer ${row['examiner'] ?? staff} on your list; add them on Lecturers`);
-              fields.examinerId = lecturer!.id;
-            }
-            const existing = (await examsRepo.loadExams(ctx.term.id, client)).papers.find(
-              (p) => p.sitting === sitting && p.unitIds.includes(found[0]!.id),
-            );
-            if (existing) {
-              await updatePaperIn(client, ctx, existing.id, fields);
-              updated++;
-            } else {
-              await createPaperIn(client, ctx, fields);
-              created++;
-            }
-          });
-        } catch (error) {
-          errors.push({ line, message: message(error) });
-        }
-      }
-      const extra = marked ? `; ${marked} units marked 'no written exam'` : '';
-      return result(created, updated, errors, { message: `${created} papers added, ${updated} updated${extra}.` });
-    },
-    { kind: 'exams' },
-  );
-  return finish(ctx, 'exam_papers.bulk', r);
-}
-
-/** 'Regular', 'ODEL', 'Part-time'...; blank is undefined (worked out from the codes). */
-function sittingWord(value: string | undefined): 'regular' | 'odel' | undefined {
-  const word = (value ?? '').toLowerCase().replace(/[^a-z]/g, '');
-  if (!word) return undefined;
-  if (['regular', 'fulltime'].includes(word)) return 'regular';
-  if (['odel', 'odl', 'distance', 'parttime'].includes(word)) return 'odel';
-  return fail(`sitting '${value}' must be Regular or ODEL`);
-}
 
 /** '2026-11-20', '20/11/2026', '20-11-2026', '20.11.2026' -> '2026-11-20'. */
 function day(value: string | undefined): string {

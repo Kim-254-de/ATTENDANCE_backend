@@ -338,7 +338,7 @@ describe('the uploaded exam list', () => {
     expect((await math.delete('/exam-list')).status).toBe(409);
   });
 
-  it('removes the uploaded list as a whole once reopened, leaving papers built from units', async () => {
+  it('removes the uploaded list as a whole once reopened', async () => {
     expect((await cs.post('/exams/reopen')).status).toBe(200);
     const before = body<Board>(await cs.get('/exams')).data.papers;
     expect(before.some((p) => p.listed)).toBe(true);

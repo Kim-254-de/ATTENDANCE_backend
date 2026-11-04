@@ -205,3 +205,12 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Why it matters:** a mark on one twin didn't reach the other, and two exams could be put in one physical room.
 - **Done when:** the Venues page shows the groups with what merging does, and can merge chosen venues.
 
+### F-9 · High · Only papers on a moderation letter reach the exam timetable
+- **Raised:** 2026-11-04, backend   **Status:** done (frontend on the same branch name)
+- **What changed:** removed `POST /departments/teaching/exam-papers`, `POST .../exam-papers/from-units`,
+  `POST .../exam-papers/bulk` and `PUT .../units/:id/no-written-exam`; `PATCH` of an exam paper no longer takes `unitIds`
+  (400). The exams board and the Generator's read return only letter papers; `problems` is only `no_exam_list`
+  when a department has none. The health unit is revoked too: `health_unit` is still sent on venues but means nothing,
+  and the Venues page no longer shows it.
+- **Why it matters:** a department has to upload and publish its letter; a paper built from units no longer counts.
+- **Done when:** the Exams tab has no way to add a paper by hand or from units, and asks for the letter instead.
