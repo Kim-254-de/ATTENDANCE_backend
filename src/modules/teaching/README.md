@@ -72,7 +72,8 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
   each extra room gets an invigilator of its own (`room` on the
   invigilation; '' is the main one). Anyone on any department's list; one
   person (staff number) is never in two rooms in one session, nor over their
-  `maxExamDuties` (the smallest set on any of their lists). Published on
+  `maxExamDuties` (the smallest set on any of their lists). Several papers in
+  one room in a session can share one person, which is one duty. Published on
   their own, once the draft is shared; the Director can publish the exam
   timetable only when every paper and extra room has one. A paper with no
   students known (nobody synced it) isn't held up: it still goes to the
