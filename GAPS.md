@@ -43,6 +43,26 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
 - **Done when:** either the API issues and checks the token, or this entry says Lax-only is
   the intended design, and the frontend removes the unused options (we'll do that part).
 
+### B-3 · High · Pass SMARTTT's venue groups through the admin console
+- **Raised:** 2026-11-03, frontend (Wayler)   **Status:** open
+- **Seen:** the Venues page (`ATTENDANCE_fronted/src/portals/admin/smarttt/VenuesPage.tsx:60`)
+  can only switch "In the health unit" on or off, because a room has only `health_unit`. The
+  proxy table in `src/modules/admin/admin.smarttt.ts:71-78` passes `/rooms` through and has
+  no route for groups. SMARTTT is asked to add venue groups (SMARTTT_BACKEND `GAPS.md` B-3),
+  and the Generator to use them (Timetable-Generator `GAPS.md` B-4).
+  **Example to test against:** the university starts a new Bachelor of Engineering. Its papers
+  (codes starting `BENG`) must be sat only in the engineering workshops, W1 and W2, and no
+  other course's paper may be put in W1 or W2.
+- **What we ask for:** once SMARTTT has the group endpoints, add them to the proxy table:
+  `GET /admin/smarttt/rooms/groups` and `POST /admin/smarttt/rooms/groups`, with `group` passed
+  through unchanged in the room list, `POST /admin/smarttt/rooms` and `PATCH /admin/smarttt/rooms/:id`.
+  An unknown group is refused like any other SMARTTT validation error: 400, naming the field.
+- **Why it matters:** the admin sets the groups on the Venues page; without these routes the
+  page can't list or create them.
+- **Done when:** the two routes answer through the console and an F- entry below gives their
+  responses. We'll replace the "In the health unit" switch with a group picker and a "New
+  group" action (that part is ours).
+
 ### Checked and fine (2026-10-25)
 - Every route the frontend calls exists, including all of `/departments/teaching/*` and
   `/admin/smarttt/*`.
