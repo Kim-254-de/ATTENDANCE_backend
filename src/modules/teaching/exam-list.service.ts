@@ -4,7 +4,7 @@ import { logger } from '../../config/logger.js';
 import { transaction } from '../../db/database.js';
 import { AuditAction } from '../../db/types.js';
 import { smartttClient, type SmartttUnitEnrolment } from '../../integrations/smarttt/index.js';
-import { readExamList, type ListedEntry } from './exam-list.read.js';
+import { classOf, readExamList, type ListedEntry } from './exam-list.read.js';
 import * as examsRepo from './exams.repository.js';
 import type { ListedRow, ListedRowValues, PaperRow, Sitting } from './exams.repository.js';
 import { board, EXAMS_KIND, isGuessedRow, isListed, loadExamTerm, type ExamBoardDto } from './exams.service.js';
@@ -25,6 +25,11 @@ import { audit, invalid, writeTeaching, type Ctx } from './teaching.service.js';
  * ODEL and part-time students sit the ODEL paper of a unit when it has one;
  * when the unit has only a regular paper they sit that one, as a class row
  * of their own ("BSC.CS Y2S1 (ODEL)").
+ *
+ * A letter's heading can name a class and its size. That number is the class's on
+ * each paper under the heading, and uploading a letter again overwrites what the
+ * class had, a number typed earlier too. A class the letter gives no number keeps
+ * what it has, and the department or the Director can enter one.
  */
 
 const exams = <T>(ctx: Ctx, work: (client: PoolClient) => Promise<T>) => writeTeaching(ctx, work, { kind: EXAMS_KIND });
@@ -107,10 +112,102 @@ function merged(p: PaperRow, fresh: Map<string, ListedRowValues>): ListedRowValu
   return [...out.values()].sort((a, b) => rowKey(a).localeCompare(rowKey(b)));
 }
 
+export interface LetterClassInput {
+  programme: string;
+  year: number;
+  semester: number;
+  students: number;
+}
+
+/**
+ * The classes a letter names, over a paper's rows. The letter's number is the
+ * whole class's, so the class's other rows (its streams, or the timetable's other
+ * semester) go to 0, which keeps SMARTTT from bringing them back, and a guess gives way.
+ */
+function withLetterClasses(paper: PaperRow | null, rows: ListedRowValues[], classes: LetterClassInput[] | undefined, sitting: Sitting): ListedRowValues[] {
+  if (!classes?.length) return rows;
+  const out = new Map(rows.map((r) => [rowKey(r), r] as const));
+  if (paper) for (const r of paper.rows) if (isGuessedRow(paper, r)) out.delete(rowKey(r));
+  const stream = sitting === 'odel' ? 'ODEL' : '';
+  const named = new Set(classes.map((c) => rowKey({ ...c, stream })));
+  for (const c of classes) {
+    const programme = c.programme.trim().toUpperCase();
+    let smartttStudents: number | null = null;
+    for (const [key, r] of [...out]) {
+      if (compact(r.programme) !== compact(programme) || r.year !== c.year) continue;
+      if (sitting !== 'odel' && r.stream.trim().toUpperCase() === 'ODEL') continue;
+      if (r.smartttStudents !== null) smartttStudents = (smartttStudents ?? 0) + r.smartttStudents;
+      if (named.has(key)) continue;
+      if (r.smartttStudents === null) out.delete(key);
+      else out.set(key, { ...r, students: 0, edited: true });
+    }
+    const row = { programme, year: c.year, semester: c.semester, stream, students: c.students, smartttStudents, edited: true };
+    out.set(rowKey(row), row);
+  }
+  return [...out.values()].sort((a, b) => rowKey(a).localeCompare(rowKey(b)));
+}
+
 /** Is there an ODEL paper of any of these codes in the term (any department), or about to be? */
 function hasOdelTwin(codes: string[], papers: Array<{ codes: string[]; sitting: Sitting }>): boolean {
   const mine = new Set(codes.map(compact));
   return papers.some((p) => p.sitting === 'odel' && p.codes.some((c) => mine.has(compact(c))));
+}
+
+// -- the classes a letter names --------------------------------------------------------------------
+
+export interface LetterClass {
+  id: string;
+  heading: string;
+  name: string;
+  /** Null when neither the letter nor the timetable says: the department checks it. */
+  year: number | null;
+  semester: number | null;
+  students: number;
+  /** SMARTTT's programme, when exactly one has this name. */
+  programme: string;
+}
+
+const DEGREE_WORDS = /\b(BACHELORS?|OF|SCIENCE|IN|BSC|B\s*SC|AND|THE)\b/g;
+/** 'BACHELOR OF SCIENCE IN NURSING', 'BSc Nursing' -> 'NURSING': how a class is matched to a programme. */
+const nameKey = (name: string) => compact(name.toUpperCase().replace(/\./g, ' ').replace(DEGREE_WORDS, ' '));
+
+type Programme = { code: string; name: string };
+
+/** The numbered classes in the letter's headings, and which of them each line sits under. */
+function letterClasses(entries: ListedEntry[], programmes: Programme[], e: Enrolment): { classes: LetterClass[]; ofLine: Map<number, string> } {
+  const codes = new Map<string, Set<string>>();
+  for (const p of programmes) {
+    const key = nameKey(p.name);
+    if (key) codes.set(key, (codes.get(key) ?? new Set()).add(p.code));
+  }
+  const classes = new Map<string, LetterClass>();
+  const ofLine = new Map<number, string>();
+  for (const x of entries) {
+    const c = x.section ? classOf(x.section) : null;
+    if (!c?.students) continue;
+    const key = nameKey(c.name);
+    const id = `${key}|${c.year ?? ''}|${c.semester ?? ''}`;
+    ofLine.set(x.line, id);
+    if (classes.has(id)) continue;
+    const found = [...(codes.get(key) ?? [])];
+    classes.set(id, { id, heading: x.section, name: c.name, year: c.year, semester: c.semester, students: c.students, programme: found.length === 1 ? found[0]! : '' });
+  }
+  // What the letter leaves out, from the timetable when it has only one answer for the class's own papers.
+  if (e.available) {
+    for (const c of classes.values()) {
+      if (!c.programme || (c.year !== null && c.semester !== null)) continue;
+      const rows = entries
+        .filter((x) => ofLine.get(x.line) === c.id)
+        .flatMap((x) => x.codes.flatMap((code) => e.units.get(compact(code))?.rows ?? []))
+        .filter((r) => compact(r.programme) === compact(c.programme) && (c.year === null || r.year === c.year));
+      const seen = new Set(rows.map((r) => `${r.year}|${r.semester ?? ''}`));
+      if (seen.size === 1 && rows[0]) {
+        c.year = rows[0].year;
+        c.semester ??= rows[0].semester;
+      }
+    }
+  }
+  return { classes: [...classes.values()], ofLine };
 }
 
 // -- review ----------------------------------------------------------------------------------------
@@ -130,10 +227,16 @@ export interface ReviewEntry extends ListedEntry {
   existingPaperId: string | null;
   /** Who teaches it in SMARTTT, and their id on your lecturer list when they're on it. */
   examiner: { lecturerId: string | null; name: string; staffNumber: string } | null;
+  /** The classes the letter names for this paper, under any of its lines: ids in `classes`. */
+  letterClasses: string[];
 }
 
 export interface ReviewDto {
   entries: ReviewEntry[];
+  /** The classes the letter's headings give a number for. */
+  classes: LetterClass[];
+  /** SMARTTT's programmes, to match a class to by hand. */
+  programmes: Programme[];
   smarttt: { available: boolean; reason: string | null };
   summary: { papers: number; newPapers: number; duplicates: number; unknown: number; noStudents: number; noClasses: number };
 }
@@ -142,6 +245,17 @@ export interface ReviewDto {
 export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
   const entries = await readExamList(file);
   const [d, e] = await Promise.all([loadExamTerm(ctx.term.id), enrolment(entries.flatMap((x) => x.codes))]);
+  const hasNumbers = entries.some((x) => x.section && classOf(x.section)?.students);
+  const programmes = hasNumbers ? await smartttClient.programs() : [];
+  const named = letterClasses(entries, programmes, e);
+  const classesOfPaper = new Map<string, string[]>();
+  for (const x of entries) {
+    const id = named.ofLine.get(x.line);
+    if (!id) continue;
+    const key = paperKey(x.codes, x.sitting);
+    const list = classesOfPaper.get(key) ?? [];
+    if (!list.includes(id)) classesOfPaper.set(key, [...list, id]);
+  }
   const all = [...d.exams.papers.map((p) => ({ p, codes: paperCodesOf(p, d.units), sitting: p.sitting }))];
   const firstLine = new Map<string, number>();
   const pending = entries.map((x) => ({ codes: x.codes, sitting: x.sitting }));
@@ -174,10 +288,13 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
       otherDepartments: [...new Set(overlapping.filter((o) => o.p.departmentId !== ctx.department.id).map((o) => o.p.departmentCode))].sort(),
       existingPaperId: own?.p.id ?? null,
       examiner,
+      letterClasses: classesOfPaper.get(key) ?? [],
     };
   });
   return {
     entries: out,
+    classes: named.classes,
+    programmes,
     smarttt: { available: e.available, reason: e.available ? null : e.reason },
     summary: {
       papers: out.filter((x) => x.duplicateOf === null).length,
@@ -211,12 +328,14 @@ export interface ListedPaperInput {
   sitting: Sitting;
   /** Undefined: SMARTTT's lecturer when they're on your list (a new paper only); null: none. */
   examinerId?: string | null;
+  /** The classes the letter names for it, as reviewed: these numbers overwrite what the classes had. */
+  classes?: LetterClassInput[];
 }
 
 /**
  * Saves the reviewed list: a paper per set of codes and sitting, its title
- * updated when it is already there, its students from SMARTTT. Papers not
- * in the list are kept (delete them on the page).
+ * updated when it is already there, its students from the letter's headings and
+ * SMARTTT. Papers not in the list are kept (delete them on the page).
  */
 export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ created: number; updated: number; smarttt: ReviewDto['smarttt'] }> {
   const wanted = new Map<string, ListedPaperInput>();
@@ -247,7 +366,8 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
           examinerId: w.examinerId !== undefined ? checkedExaminer(ctx, d, w.examinerId) : found.examinerId,
           notes: found.notes,
         });
-        if (e.available) await examsRepo.setListedRows(client, found.id, merged(found, fresh));
+        const base = e.available ? merged(found, fresh) : found.rows;
+        if (e.available || w.classes?.length) await examsRepo.setListedRows(client, found.id, withLetterClasses(found, base, w.classes, w.sitting));
         updated++;
       } else {
         const suggested = e.available ? w.codes.map((c) => e.units.get(compact(c))?.lecturers[0]).find((l) => l) : undefined;
@@ -258,7 +378,7 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
           examinerId: w.examinerId !== undefined ? checkedExaminer(ctx, d, w.examinerId) : suggested ? ownLecturer(ctx, d, suggested.staffNumber) : null,
           notes: '',
         });
-        await examsRepo.setListedRows(client, id, [...fresh.values()]);
+        await examsRepo.setListedRows(client, id, withLetterClasses(null, [...fresh.values()], w.classes, w.sitting));
         created++;
       }
     }

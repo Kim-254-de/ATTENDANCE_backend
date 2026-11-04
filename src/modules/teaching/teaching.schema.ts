@@ -138,6 +138,19 @@ export const examListSaveSchema = z
             title: z.string().trim().min(1).max(255),
             sitting: z.enum(['regular', 'odel']),
             examinerId: z.string().uuid().nullable().optional(),
+            classes: z
+              .array(
+                z
+                  .object({
+                    programme: z.string().trim().min(1).max(64),
+                    year: z.number().int().min(1).max(10),
+                    semester: z.number().int().min(1).max(3),
+                    students: z.number().int().min(1).max(5000),
+                  })
+                  .strict(),
+              )
+              .max(60)
+              .optional(),
           })
           .strict(),
       )
