@@ -229,7 +229,10 @@ export interface UnitRoom {
 export async function findRoom(roomCode: string | null): Promise<UnitRoom> {
   if (!roomCode) return { roomCode: null, latitude: null, longitude: null, surveyedAccuracyMetres: null };
   const row = await queryOne<{ latitude: number | null; longitude: number | null; surveyed_accuracy_m: number | null }>(
-    `SELECT latitude, longitude, surveyed_accuracy_m FROM rooms WHERE code = $1`,
+    // By the room however it is written ("TC1", "TC 1"): SMARTTT's code can change when twins are merged. A surveyed one first.
+    `SELECT latitude, longitude, surveyed_accuracy_m FROM rooms
+      WHERE regexp_replace(upper(code), '[^A-Z0-9]', '', 'g') = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g')
+      ORDER BY latitude IS NULL, code = $1 DESC LIMIT 1`,
     [roomCode],
   );
   return {

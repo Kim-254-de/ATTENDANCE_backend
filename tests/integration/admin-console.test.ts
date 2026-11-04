@@ -220,6 +220,13 @@ describe("SMARTTT's admin functions in the console", () => {
     expect(calls[2]).toMatchObject({ method: 'PATCH', path: `/api/v1/integrations/admin/rooms/${id}/` });
     expect((await as(admin.auth).patch('/admin/smarttt/rooms/not-an-id').send({})).status).toBe(400);
     expect((await as(admin.auth).get('/admin/smarttt/rooms/capacities')).status).not.toBe(404);
+
+    adminAnswers['GET rooms/duplicates/'] = Response.json({ groups: [] });
+    adminAnswers['POST rooms/merge-duplicates/'] = Response.json({ groups: 1, rooms_removed: 1, results: [] });
+    adminAnswers['POST rooms/merge/'] = Response.json({ kept: 'ED 4', merged: ['HALL'], slots_dropped: 0 });
+    expect(body(await as(admin.auth).get('/admin/smarttt/rooms/duplicates')).data).toEqual({ groups: [] });
+    expect((await as(admin.auth).post('/admin/smarttt/rooms/merge-duplicates')).status).toBe(200);
+    expect((await as(admin.auth).post('/admin/smarttt/rooms/merge').send({ keep: id, merge: [id] })).status).toBe(200);
   });
 
   it("remove one department's lecturer allocation, named in the query", async () => {

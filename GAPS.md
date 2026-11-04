@@ -172,3 +172,12 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   `POST /admin/smarttt/rooms` and `PATCH /admin/smarttt/rooms/:id` (only the fields sent). SMARTTT validates; a code already used answers 400.
 - **Why it matters:** venues and their exam use change without a file; the health unit's rooms are marked here.
 - **Done when:** the Venues page has the table, an add form and the two switches.
+
+### F-8 · High · One room under two codes
+- **Raised:** 2026-11-04, backend   **Status:** done (frontend on the same branch name)
+- **What changed:** `GET /admin/smarttt/rooms/duplicates` -> `{ groups: [{ keep, merge: [..], result: { capacity, capacity_confirmed, for_exams, health_unit } }] }`
+  (each room `{ id, code, capacity, capacity_confirmed, for_exams, health_unit, slots }`; changes nothing),
+  `POST /admin/smarttt/rooms/merge-duplicates`, and `POST /admin/smarttt/rooms/merge` `{ keep, merge: [ids] }` for rooms whose codes don't say they are one.
+- **Why it matters:** a mark on one twin didn't reach the other, and two exams could be put in one physical room.
+- **Done when:** the Venues page shows the groups with what merging does, and can merge chosen venues.
+
