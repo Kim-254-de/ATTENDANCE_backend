@@ -18,7 +18,8 @@ import { auditService } from '../audit/index.js';
  *                                            DELETE ?source=<department> removes one
  *   /admin/smarttt/notifications             send a notification; the history
  *   /admin/smarttt/staff-ids ...             the approved staff-ID list lecturers register against
- *   /admin/smarttt/rooms ...                 venues: list, add, edit (exam use, health unit)
+ *   /admin/smarttt/rooms ...                 venues: list, add, edit (exam use, health unit); one room under
+ *                                            two codes: preview, merge them all, or merge chosen ones
  *   /admin/smarttt/rooms/capacities          venue capacities: upload, summary
  *   /admin/smarttt/programs                  programmes, for choosing a notification's audience
  *
@@ -70,6 +71,9 @@ const ROUTES: Route[] = [
   { method: 'GET', path: '/rooms', smarttt: 'rooms/', body: 'none' },
   { method: 'POST', path: '/rooms', smarttt: 'rooms/', body: 'json' },
   { method: 'PATCH', path: '/rooms/:id', smarttt: 'rooms/:id/', body: 'json' },
+  { method: 'GET', path: '/rooms/duplicates', smarttt: 'rooms/duplicates/', body: 'none' },
+  { method: 'POST', path: '/rooms/merge-duplicates', smarttt: 'rooms/merge-duplicates/', body: 'none' },
+  { method: 'POST', path: '/rooms/merge', smarttt: 'rooms/merge/', body: 'json' },
   { method: 'GET', path: '/rooms/capacities', smarttt: 'rooms/capacity-summary/', body: 'none' },
   { method: 'POST', path: '/rooms/capacities', smarttt: 'rooms/upload/', body: 'file' },
 
