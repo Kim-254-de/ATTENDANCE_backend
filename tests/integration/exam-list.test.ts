@@ -59,6 +59,9 @@ vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit)
     }
     return json({ term: { id: 'x', academic_year: '2026/2027', semester: 1 }, units, unknown });
   }
+  if (url.startsWith(`${SMARTTT}/api/v1/integrations/attendance/programs/`)) {
+    return json({ programs: [{ code: 'BSC.NURS', name: 'BSc Nursing' }, { code: 'BSC.HRIM', name: 'BSc Health Records' }, { code: 'BSC.MATH', name: 'BSc Mathematics' }] });
+  }
   return realFetch(input, init);
 });
 
@@ -156,6 +159,11 @@ beforeAll(async () => {
     'COSC 170': { name: 'Programming', rows: [row('BSC.CS', 1, 100)] },
     'COSC 172': { name: 'Programming II', rows: [row('BSC.CS', 1, 90), row('BSC.MATH', 1, 20)] },
     'MATH 100': { name: 'Nobody synced it', rows: [] },
+    'NURS 111': { name: 'Anatomy', rows: [row('BSC.NURS', 1, 20, 'regular', 'A'), row('BSC.NURS', 1, 5, 'regular', 'B')] },
+    'NURS 112': { name: 'Physiology', rows: [] },
+    'NURS 113': { name: 'Biochemistry', rows: [row('BSC.NURS', 1, 0)] },
+    'HRIM 111': { name: 'Records', rows: [row('BSC.HRIM', 2, 3)] },
+    'BOTA 473': { name: 'Plant Biochemistry', rows: [row('BSC.BOT', 4, 7)] },
   };
 }, 60_000);
 
@@ -452,5 +460,104 @@ describe('the uploaded exam list', () => {
       const paper = body<Board>(await math.post('/exam-papers/recount')).data.papers.find((p) => p.id === id)!;
       expect(paper.rows.map((x) => [x.programme, x.students])).toEqual([['BSC.GEOL', 30]]);
     });
+  });
+});
+
+describe("a letter's headings name classes and their numbers", () => {
+  const NAMED = [
+    ['', 'BACHELOR OF SCIENCE NURSING (SEPTEMBER 2026 INTAKE) Y1S1 (107 STUDENTS) MISHECK 0793315005', ''],
+    ['1', 'NURS 111', 'Anatomy'],
+    ['2', 'NURS 112', 'Physiology'],
+    ['', 'BSc Health Records (Sep 2025) (14 students)', ''],
+    ['3', 'HRIM 111', 'Records'],
+    ['4', 'NURS 112', 'Physiology'],
+    ['', 'SERVICING UNITS', ''],
+    ['5', 'BOTA 473', 'Plant Biochemistry'],
+  ];
+  const nursing = { programme: 'BSC.NURS', year: 1, semester: 1, students: 107 };
+  let health: Api;
+  const paper = (board: Board, code: string) => board.papers.find((p) => p.codes === code)!;
+  const shown = (board: Board, code: string) => paper(board, code).rows.filter((r) => r.students > 0).map((r) => [r.programme, r.stream, r.students]);
+
+  it('reads a heading as a class, whatever else it says', async () => {
+    const { classOf } = await import('../../src/modules/teaching/exam-list.read.js');
+    expect(classOf('BACHELOR OF SCIENCE NURSING (SEPTEMBER 2026 INTAKE) Y1S1 (107 STUDENTS) MISHECK 0793315005')).toEqual({ name: 'BACHELOR OF SCIENCE NURSING', year: 1, semester: 1, students: 107 });
+    expect(classOf('Basic Science: BSc Medical Biochemistry YEAR 3 SEMESTER 1 GSS (2 STUDENTS)')).toEqual({ name: 'BSc Medical Biochemistry', year: 3, semester: 1, students: 2 });
+    expect(classOf('BSC ENVIRONMENTAL SCIENCE Y1S1 2026 INTAKE 3 STUDENTS SSP')?.students).toBe(3);
+    expect(classOf('BSc Records (Sep 2026) (14 students)')).toEqual({ name: 'BSc Records', year: null, semester: null, students: 14 });
+    expect(classOf('BSc Nursing Y2S1')?.students).toBeNull();
+    expect(classOf('BSc Nursing Y2S1 (0 students)')?.students).toBeNull();
+    for (const h of ['SERVICING UNITS', 'CERTIFICATE IN ANIMAL HEALTH', 'ODEL/PART-TIME DRAFTS']) expect(classOf(h)).toBeNull();
+  });
+
+  it("lists the letter's classes matched to programmes, stores nothing, and a paper sits every class naming it", async () => {
+    health = await makeOfficer(await makeDepartment('Nursing', 'DNUR'));
+    const res = await health.post('/exam-list/read', { file: await letter(NAMED) });
+    const data = body<Review & { classes: Array<{ id: string; programme: string; year: number | null; semester: number | null; students: number; name: string }>; programmes: unknown[] }>(res).data;
+    expect(data.programmes).toHaveLength(3);
+    expect(data.classes.map((c) => [c.programme, c.year, c.semester, c.students])).toEqual([['BSC.NURS', 1, 1, 107], ['BSC.HRIM', 2, 1, 14]]); // year and semester from the timetable
+    const lines = data.entries as unknown as Array<{ codes: string[]; letterClasses: string[] }>;
+    expect(lines.find((e) => e.codes[0] === 'NURS 112')!.letterClasses).toHaveLength(2);
+    expect(lines.find((e) => e.codes[0] === 'BOTA 473')!.letterClasses).toEqual([]);
+    expect(body<Board>(await health.get('/exams')).data.papers).toHaveLength(0);
+  });
+
+  it('a first upload that read no numbers is overwritten by the second, a typed number too, and SMARTTT keeps out', async () => {
+    const save = (papers: object[]) => health.post('/exam-list', { papers });
+    await save([{ codes: ['NURS 111'], title: 'Anatomy', sitting: 'regular' }, { codes: ['NURS 113'], title: 'Biochemistry', sitting: 'regular' }]);
+    let board = body<Board>(await health.get('/exams')).data;
+    expect(paper(board, 'NURS 111').students).toBe(25);
+    await health.put(`/exam-papers/${paper(board, 'NURS 113').id}/rows`, { rows: [{ programme: 'BSC.NURS', year: 1, semester: 1, stream: '', students: 60 }] });
+
+    const res = await save([
+      { codes: ['NURS 111'], title: 'Anatomy', sitting: 'regular', classes: [nursing] },
+      { codes: ['NURS 113'], title: 'Biochemistry', sitting: 'regular', classes: [nursing] },
+    ]);
+    expect(body<{ updated: number }>(res).data.updated).toBe(2);
+    board = body<Board>(await health.get('/exams')).data;
+    expect(shown(board, 'NURS 111')).toEqual([['BSC.NURS', '', 107]]); // not 107 + the streams' 25
+    expect(paper(board, 'NURS 111').students).toBe(107);
+    expect(paper(board, 'NURS 113').students).toBe(107);
+
+    board = body<Board>(await health.post('/exam-papers/recount')).data;
+    expect(paper(board, 'NURS 111').students).toBe(107);
+  });
+
+  it('a class the letter gives no number for keeps what it has, and can be entered by hand', async () => {
+    const save = (classes?: object[]) => health.post('/exam-list', { papers: [{ codes: ['HRIM 111'], title: 'Records', sitting: 'regular', ...(classes ? { classes } : {}) }] });
+    await save();
+    let board = body<Board>(await health.get('/exams')).data;
+    const id = paper(board, 'HRIM 111').id;
+    expect(paper(board, 'HRIM 111').students).toBe(3);
+    await health.put(`/exam-papers/${id}/rows`, { rows: [{ programme: 'BSC.HRIM', year: 2, semester: 1, stream: '', students: 12 }, { programme: 'BSC.X', year: 1, semester: 1, stream: '', students: 4 }] });
+    await save();
+    board = body<Board>(await health.get('/exams')).data;
+    expect(paper(board, 'HRIM 111').students).toBe(16);
+    // A number for one class leaves the other class alone.
+    await save([{ programme: 'BSC.HRIM', year: 2, semester: 1, students: 14 }]);
+    board = body<Board>(await health.get('/exams')).data;
+    expect(shown(board, 'HRIM 111')).toEqual(expect.arrayContaining([['BSC.HRIM', '', 14], ['BSC.X', '', 4]]));
+    expect(paper(board, 'HRIM 111').students).toBe(18);
+  });
+
+  it('adds a class SMARTTT has no row for, keeps an ODEL class apart, and works with SMARTTT down', async () => {
+    const res = await health.post('/exam-list', { papers: [{ codes: ['NURS 112'], title: 'Physiology', sitting: 'regular', classes: [nursing, { programme: 'BSC.HRIM', year: 2, semester: 1, students: 14 }] }] });
+    expect(res.status).toBeLessThan(300);
+    let board = body<Board>(await health.get('/exams')).data;
+    expect(paper(board, 'NURS 112').students).toBe(121);
+    await health.post('/exam-list', { papers: [{ codes: ['NURS 112'], title: 'Physiology', sitting: 'odel', classes: [{ ...nursing, students: 9 }] }] });
+    board = body<Board>(await health.get('/exams')).data;
+    const odel = board.papers.find((p) => p.codes === 'NURS 112' && p.sitting === 'odel')!;
+    expect(odel.rows.map((r) => [r.stream, r.students])).toEqual([['ODEL', 9]]);
+    smarttt.down = true;
+    await health.post('/exam-list', { papers: [{ codes: ['NURS 112'], title: 'Physiology', sitting: 'regular', classes: [{ ...nursing, students: 110 }] }] });
+    board = body<Board>(await health.get('/exams')).data;
+    expect(board.papers.find((p) => p.codes === 'NURS 112' && p.sitting === 'regular')!.students).toBe(124);
+  });
+
+  it('refuses a class with no programme or no students', async () => {
+    const bad = (c: object) => health.post('/exam-list', { papers: [{ codes: ['NURS 111'], title: 'Anatomy', sitting: 'regular', classes: [c] }] });
+    expect((await bad({ programme: '', year: 1, semester: 1, students: 5 })).status).toBe(400);
+    expect((await bad({ programme: 'X', year: 1, semester: 1, students: 0 })).status).toBe(400);
   });
 });

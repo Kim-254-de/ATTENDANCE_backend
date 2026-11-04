@@ -214,3 +214,9 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   and the Venues page no longer shows it.
 - **Why it matters:** a department has to upload and publish its letter; a paper built from units no longer counts.
 - **Done when:** the Exams tab has no way to add a paper by hand or from units, and asks for the letter instead.
+
+### F-10 · High · A letter's headings give classes their numbers; uploading again overwrites
+- **Raised:** 2026-11-05, backend   **Status:** done (frontend on the same branch name)
+- **What changed:** `POST /departments/teaching/exam-list/read` also answers `classes` (`{ id, heading, name, year, semester, students, programme }`, year and semester null when nobody says, programme '' when no single SMARTTT programme has that name) and `programmes` (`{ code, name }`), and each entry has `letterClasses` (ids). `POST /departments/teaching/exam-list` takes `classes` on each paper: `[{ programme, year, semester, students }]`. Those numbers overwrite what the class had on the paper, a typed number too, and the class's other rows go to `students: 0, edited: true`. A class with no number in the letter is unchanged.
+- **Why it matters:** the nursing letter gives each class's size in its heading; a second upload has to correct a first that read none.
+- **Done when:** the upload review lists the letter's classes, lets a programme be chosen, and sends them on save.

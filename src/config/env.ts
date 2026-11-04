@@ -170,6 +170,7 @@ const envSchema = z
     SMARTTT_STUDENT_UNITS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/student-units/'),
     /** How many students synced each unit this term, by class row: sizes uploaded exam papers. */
     SMARTTT_UNIT_ENROLMENT_PATH: z.string().min(1).default('/api/v1/integrations/attendance/unit-enrolment/'),
+    SMARTTT_PROGRAMS_PATH: z.string().min(1).default('/api/v1/integrations/attendance/programs/'),
     SMARTTT_LECTURER_UNITS_PATH: z
       .string()
       .min(1)

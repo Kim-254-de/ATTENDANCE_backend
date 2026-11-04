@@ -16,6 +16,9 @@ import type { Sitting } from './exams.repository.js';
  * heading are ODEL papers until the next heading. Codes are tidied ("Math
  * 241" is "MATH 241"; "COSC 0172/0170" is COSC 0172 and COSC 0170). Nothing
  * is decided here about whether a code exists: the review does that.
+ *
+ * A heading can name a class and its size, as a course allocation does ("BSc
+ * Nursing (Sep 2026) Y1S1 (107 students)"): classOf reads that.
  */
 
 export interface ListedEntry {
@@ -30,6 +33,37 @@ export interface ListedEntry {
 
 const W = 'w:';
 const MAX_BYTES = 5 * 1024 * 1024;
+
+const CLASS_YEAR = /\bY(?:EAR)?\s*([1-9])(?:\s*,?\s*S(?:EM(?:ESTER)?)?\s*([1-3]))?\b/i;
+const CLASS_STUDENTS = /\b(\d{1,4})\s*STUDENTS?\b/i;
+const CLASS_END = /\(|\b(?:19|20)\d{2}\b/;
+
+export interface HeadingClass {
+  name: string;
+  year: number | null;
+  semester: number | null;
+  students: number | null;
+}
+
+/**
+ * The class a heading names: "BACHELOR OF SCIENCE NURSING (SEPTEMBER 2026 INTAKE)
+ * Y1S1 (107 STUDENTS) MISHECK 0793315005". Null for a heading with neither a year
+ * nor a number ("SERVICING UNITS"); a number of 0 says nothing.
+ */
+export function classOf(heading: string): HeadingClass | null {
+  const year = CLASS_YEAR.exec(heading);
+  const students = CLASS_STUDENTS.exec(heading);
+  if (!year && !students) return null;
+  const cut = Math.min(...[year, students, CLASS_END.exec(heading)].filter((m) => m !== null).map((m) => m.index));
+  const name = heading.slice(0, cut).split(':').pop()!.replace(/\s+/g, ' ').replace(/^[\s,.-]+|[\s,.-]+$/g, '');
+  if (!/[A-Za-z]{2}/.test(name)) return null;
+  return {
+    name: name.slice(0, 120),
+    year: year ? Number(year[1]) : null,
+    semester: year?.[2] ? Number(year[2]) : null,
+    students: students ? Number(students[1]) || null : null,
+  };
+}
 
 /** A whole code cell: one or more codes separated by "/", maybe followed by "odel". */
 const CODE_CELL = /^([A-Za-z]{2,6})\s*-?\s*(\d{2,5}[A-Za-z]?)((?:\s*[/&,]\s*(?:[A-Za-z]{2,6}\s*-?\s*)?\d{2,5}[A-Za-z]?)*)(?:\s*[-(]?\s*(odel|part[\s-]?time)\s*\)?)?\s*$/i;
@@ -136,14 +170,15 @@ export async function readExamList(file: Buffer): Promise<ListedEntry[]> {
   let section = '';
   let sectionOdel = false;
   const heading = (text: string) => {
-    section = text.slice(0, 120);
+    section = text.slice(0, 200);
     sectionOdel = ODEL_HEADING.test(text);
   };
   for (const block of blocks(body)) {
     if (block.kind === 'p') {
       // A short line on its own in capitals (or naming ODEL) is a heading; letter text ("Dear Sir, ...") isn't.
       const t = block.text;
-      if (t && t.length <= 80 && !/[.,;]$/.test(t) && (ODEL_HEADING.test(t) || (/[A-Z]{3}/.test(t) && t === t.toUpperCase()))) heading(t);
+      const plain = t.length <= 80 && (ODEL_HEADING.test(t) || (/[A-Z]{3}/.test(t) && t === t.toUpperCase()));
+      if (t && t.length <= 200 && !/[.,;]$/.test(t) && (plain || classOf(t)?.students)) heading(t);
       continue;
     }
     const at = block.cells.findIndex((c) => codesOf(c) !== null);

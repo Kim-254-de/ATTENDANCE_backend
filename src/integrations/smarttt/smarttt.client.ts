@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { toAuthenticatedAccount, toLecturerUnits, toStaffRecord, toStudentRecord, toStudentUnits, toUnitEnrolment } from './smarttt.mapper.js';
+import { z } from 'zod';
 import type {
   SmartttAuthenticateResult,
   SmartttLecturerUnitsResult,
@@ -9,6 +10,8 @@ import type {
   SmartttStudentUnitsResult,
   SmartttUnitEnrolmentResult,
 } from './smarttt.types.js';
+
+const programsSchema = z.object({ programs: z.array(z.object({ code: z.string(), name: z.string().optional().default('') })) });
 
 /**
  * HTTP client for SMARTTT, the university timetable system.
@@ -129,6 +132,15 @@ export class SmartttHttpClient {
       return { status: 'UNAVAILABLE', reason: 'The timetable system returned an unexpected response.' };
     }
     return { status: 'FOUND', ...mapped };
+  }
+
+  /** Programme codes and names, to match a class a moderation letter names. Empty when they can't be read. */
+  async programs(): Promise<Array<{ code: string; name: string }>> {
+    if (!env.SMARTTT_BASE_URL) return [];
+    const result = await this.send(this.url(env.SMARTTT_PROGRAMS_PATH), { method: 'GET' }, {});
+    if (result.status !== 'OK') return [];
+    const parsed = programsSchema.safeParse(result.body);
+    return parsed.success ? parsed.data.programs : [];
   }
 
   /**

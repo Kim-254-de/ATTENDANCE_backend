@@ -50,7 +50,7 @@ Also the department's, and also from the Allocator (`exams.service.ts`,
   papers with no class, before anything is saved. SMARTTT's master timetable and
   syncs decide only who sits a paper: its class rows are the classes taking its
   units on the timetable and those of the students who synced them; its numbers
-  are who synced (`unit-enrolment/` there). A class with no number yet still
+  are who synced (`unit-enrolment/` there), or the number a letter's heading gives its class (`programs/` there to match it), which an upload overwrites with. A class with no number yet still
   reaches the Generator, which keeps it from clashing and gives it a room once it
   has a number. The department corrects any number, adds a class or removes one,
   and that stays. A class guessed from the code gives way to the real classes,
