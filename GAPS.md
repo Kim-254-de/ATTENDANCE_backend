@@ -214,6 +214,7 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   and the Venues page no longer shows it.
 - **Why it matters:** a department has to upload and publish its letter; a paper built from units no longer counts.
 - **Done when:** the Exams tab has no way to add a paper by hand or from units, and asks for the letter instead.
+- **Reply (2026-11-05, backend):** the user then asked for units to be typed in one by one as well. The Exams tab's "Add a unit" saves a paper through `POST /departments/teaching/exam-list` like a line of the letter, so it counts the same. Papers from Teaching units still don't.
 
 ### F-10 · High · A letter's headings give classes their numbers; uploading again overwrites
 - **Raised:** 2026-11-05, backend   **Status:** done (frontend on the same branch name)
