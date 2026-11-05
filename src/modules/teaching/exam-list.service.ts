@@ -4,7 +4,7 @@ import { logger } from '../../config/logger.js';
 import { transaction } from '../../db/database.js';
 import { AuditAction } from '../../db/types.js';
 import { smartttClient, type SmartttUnitEnrolment } from '../../integrations/smarttt/index.js';
-import { classOf, readExamList, type ListedEntry } from './exam-list.read.js';
+import { classOf, codesKey, readExamList, type ListedEntry } from './exam-list.read.js';
 import * as examsRepo from './exams.repository.js';
 import type { ListedRow, ListedRowValues, PaperRow, Sitting } from './exams.repository.js';
 import { board, EXAMS_KIND, isGuessedRow, isListed, loadExamTerm, type ExamBoardDto } from './exams.service.js';
@@ -225,6 +225,11 @@ export interface ReviewEntry extends ListedEntry {
   otherDepartments: string[];
   /** Your paper this updates (title), rather than a new one. */
   existingPaperId: string | null;
+  /**
+   * Your regular paper of these codes that this ODEL line turns into an ODEL paper, keeping its
+   * examiner, invigilators and numbers: the letter lists the unit only as ODEL now. Null otherwise.
+   */
+  switchesPaperId: string | null;
   /** Who teaches it in SMARTTT, and their id on your lecturer list when they're on it. */
   examiner: { lecturerId: string | null; name: string; staffNumber: string } | null;
   /** The classes the letter names for this paper, under any of its lines: ids in `classes`. */
@@ -238,7 +243,18 @@ export interface ReviewDto {
   /** SMARTTT's programmes, to match a class to by hand. */
   programmes: Programme[];
   smarttt: { available: boolean; reason: string | null };
-  summary: { papers: number; newPapers: number; duplicates: number; unknown: number; noStudents: number; noClasses: number };
+  summary: {
+    papers: number;
+    newPapers: number;
+    duplicates: number;
+    unknown: number;
+    noStudents: number;
+    noClasses: number;
+    /** Lines taken as a unit's ODEL paper for being its second listing. */
+    secondListings: number;
+    /** Your regular papers this letter turns into ODEL papers. */
+    toOdel: number;
+  };
 }
 
 /** The uploaded document read and checked against SMARTTT and the papers already entered. Nothing is stored. */
@@ -259,6 +275,9 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
   const all = [...d.exams.papers.map((p) => ({ p, codes: paperCodesOf(p, d.units), sitting: p.sitting }))];
   const firstLine = new Map<string, number>();
   const pending = entries.map((x) => ({ codes: x.codes, sitting: x.sitting }));
+  const listedRegular = new Set(entries.filter((x) => x.sitting === 'regular').map((x) => codesKey(x.codes)));
+  const ownListed = d.exams.papers.filter((p) => p.departmentId === ctx.department.id && isListed(p));
+  const claimed = new Set<string>();
   const out = entries.map((x): ReviewEntry => {
     const key = paperKey(x.codes, x.sitting);
     const duplicateOf = firstLine.get(key) ?? null;
@@ -266,6 +285,14 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
     const mine = new Set(x.codes.map(compact));
     const overlapping = all.filter((o) => o.sitting === x.sitting && o.codes.some((c) => mine.has(compact(c))));
     const own = overlapping.find((o) => o.p.departmentId === ctx.department.id && paperKey(o.codes, o.sitting) === key);
+    let switchesPaperId: string | null = null;
+    if (x.sitting === 'odel' && duplicateOf === null && !own && !listedRegular.has(codesKey(x.codes))) {
+      const regular = ownListed.find((p) => p.sitting === 'regular' && codesKey(p.codes) === codesKey(x.codes) && !claimed.has(p.id));
+      if (regular) {
+        switchesPaperId = regular.id;
+        claimed.add(regular.id);
+      }
+    }
     let students: number | null = null;
     let classRows: ReviewEntry['classRows'] = [];
     let examiner: ReviewEntry['examiner'] = null;
@@ -287,6 +314,7 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
       duplicateOf,
       otherDepartments: [...new Set(overlapping.filter((o) => o.p.departmentId !== ctx.department.id).map((o) => o.p.departmentCode))].sort(),
       existingPaperId: own?.p.id ?? null,
+      switchesPaperId,
       examiner,
       letterClasses: classesOfPaper.get(key) ?? [],
     };
@@ -303,6 +331,8 @@ export async function review(ctx: Ctx, file: Buffer): Promise<ReviewDto> {
       unknown: out.filter((x) => x.unknownCodes.length).length,
       noStudents: out.filter((x) => x.students === 0).length,
       noClasses: out.filter((x) => x.students === 0 && x.classRows.length === 0).length,
+      secondListings: out.filter((x) => x.secondListingOf !== null && x.duplicateOf === null).length,
+      toOdel: out.filter((x) => x.switchesPaperId).length,
     },
   };
 }
@@ -330,14 +360,23 @@ export interface ListedPaperInput {
   examinerId?: string | null;
   /** The classes the letter names for it, as reviewed: these numbers overwrite what the classes had. */
   classes?: LetterClassInput[];
+  /**
+   * For an ODEL paper: your regular paper of the same codes that becomes it (review's
+   * switchesPaperId). It keeps its id, examiner, invigilators and numbers; the letter's numbers win.
+   */
+  replacesPaperId?: string | null;
 }
 
 /**
  * Saves the reviewed list: a paper per set of codes and sitting, its title
  * updated when it is already there, its students from the letter's headings and
- * SMARTTT. Papers not in the list are kept (delete them on the page).
+ * SMARTTT. Papers not in the list are kept (delete them on the page). An ODEL
+ * paper given replacesPaperId is that regular paper of yours, switched to ODEL.
  */
-export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ created: number; updated: number; smarttt: ReviewDto['smarttt'] }> {
+export async function save(
+  ctx: Ctx,
+  input: ListedPaperInput[],
+): Promise<{ created: number; updated: number; switched: number; smarttt: ReviewDto['smarttt'] }> {
   const wanted = new Map<string, ListedPaperInput>();
   for (const p of input) {
     const codes = [...new Set(p.codes.map((c) => c.replace(/\s+/g, ' ').trim().toUpperCase()).filter(Boolean))];
@@ -353,10 +392,27 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
     const own = new Map(
       d.exams.papers.filter((p) => p.departmentId === ctx.department.id && isListed(p)).map((p) => [paperKey(p.codes, p.sitting), p] as const),
     );
+    // Regular papers becoming ODEL ones, checked: yours, the same codes, and not also listed as regular.
+    const switching = new Map<string, PaperRow>();
+    for (const [key, w] of wanted) {
+      if (!w.replacesPaperId) continue;
+      const paper = d.exams.papers.find((p) => p.id === w.replacesPaperId);
+      const label = w.codes.join('/');
+      if (w.sitting !== 'odel') throw invalid(`${label}: only an ODEL paper can take over a regular one.`);
+      if (!paper || paper.departmentId !== ctx.department.id || !isListed(paper) || paper.sitting !== 'regular') {
+        throw invalid(`${label}: the regular paper it replaces isn't on your list. Upload the letter again.`);
+      }
+      if (codesKey(paper.codes) !== codesKey(w.codes)) throw invalid(`${label}: the regular paper it replaces has other codes (${paper.codes.join('/')}).`);
+      if (wanted.has(paperKey(w.codes, 'regular'))) throw invalid(`${label} is also listed as a regular paper, so it can't replace it.`);
+      if (own.has(key)) continue; // an ODEL paper of these codes is already there: it is updated instead
+      if ([...switching.values()].some((p) => p.id === paper.id)) throw invalid(`${label}: that regular paper is taken over twice.`);
+      switching.set(key, paper);
+    }
     let created = 0;
     let updated = 0;
+    let switched = 0;
     for (const [key, w] of wanted) {
-      const found = own.get(key);
+      const found = own.get(key) ?? switching.get(key);
       const fresh = e.available ? smartttRows(e, w.codes, w.sitting, hasOdelTwin(w.codes, [...others, ...pending])) : new Map<string, ListedRowValues>();
       if (found) {
         await examsRepo.updateListedPaper(client, found.id, {
@@ -368,7 +424,8 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
         });
         const base = e.available ? merged(found, fresh) : found.rows;
         if (e.available || w.classes?.length) await examsRepo.setListedRows(client, found.id, withLetterClasses(found, base, w.classes, w.sitting));
-        updated++;
+        if (own.has(key)) updated++;
+        else switched++;
       } else {
         const suggested = e.available ? w.codes.map((c) => e.units.get(compact(c))?.lecturers[0]).find((l) => l) : undefined;
         const id = await examsRepo.insertListedPaper(client, ctx.term.id, ctx.department.id, {
@@ -382,7 +439,7 @@ export async function save(ctx: Ctx, input: ListedPaperInput[]): Promise<{ creat
         created++;
       }
     }
-    return { created, updated };
+    return { created, updated, switched };
   });
   await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_list.save', id: ctx.department.code, after: counts });
   return { ...counts, smarttt: { available: e.available, reason: e.available ? null : e.reason } };
