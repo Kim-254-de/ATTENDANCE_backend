@@ -13,7 +13,12 @@ import type { Sitting } from './exams.repository.js';
  *
  * A row or paragraph with words and no code is a heading ("HISTORY",
  * "ODEL/PART-TIME DRAFTS"); papers under an ODEL, part-time or distance
- * heading are ODEL papers until the next heading. Codes are tidied ("Math
+ * heading are ODEL papers until the next heading. A unit listed a second time
+ * with nothing saying ODEL is its ODEL paper (departments list the regular
+ * paper first, then the ODEL one); a third listing is a duplicate. A title
+ * saying ODEL ("Gross Anatomy ODEL") marks the ODEL paper too. Under a class
+ * heading ("BSc Nursing Y1S1 (107 students)"), as in a course allocation, a unit
+ * listed again is one paper another class sits, not an ODEL paper. Codes are tidied ("Math
  * 241" is "MATH 241"; "COSC 0172/0170" is COSC 0172 and COSC 0170). Nothing
  * is decided here about whether a code exists: the review does that.
  *
@@ -29,6 +34,8 @@ export interface ListedEntry {
   /** The heading the row sits under, '' before any. */
   section: string;
   sitting: Sitting;
+  /** The line this one repeats, when it was taken as that unit's ODEL paper for being listed a second time. */
+  secondListingOf: number | null;
 }
 
 const W = 'w:';
@@ -67,6 +74,8 @@ export function classOf(heading: string): HeadingClass | null {
 
 /** A whole code cell: one or more codes separated by "/", maybe followed by "odel". */
 const CODE_CELL = /^([A-Za-z]{2,6})\s*-?\s*(\d{2,5}[A-Za-z]?)((?:\s*[/&,]\s*(?:[A-Za-z]{2,6}\s*-?\s*)?\d{2,5}[A-Za-z]?)*)(?:\s*[-(]?\s*(odel|part[\s-]?time)\s*\)?)?\s*$/i;
+/** "Gross Anatomy ODEL", "General genetics-Odel", "Pasture & Fodder Crops (ODEL)". */
+const ODEL_TITLE = /(?:^|[\s(-])odel\b/i;
 const ODEL_HEADING = /\b(odel|part[\s-]?time|distance|open\s+and\s+distance)\b/i;
 const HEADER_WORDS = /^(s\/?\s*no\.?|no\.?|#|unit\s*code|code|unit\s*(name|title)|title|course\s*(code|title)|comments?|remarks?)$/i;
 
@@ -194,11 +203,42 @@ export async function readExamList(file: Buffer): Promise<ListedEntry[]> {
       codes: found.codes,
       title: title.slice(0, 255),
       section,
-      sitting: found.odel || sectionOdel ? 'odel' : 'regular',
+      sitting: found.odel || sectionOdel || ODEL_TITLE.test(title) ? 'odel' : 'regular',
+      secondListingOf: null,
     });
   }
   if (entries.length === 0) {
     throw new AppError(422, ErrorCode.VALIDATION_FAILED, 'No unit codes were found in the tables of this document.');
   }
-  return entries;
+  return secondListingsAsOdel(entries);
+}
+
+/** The codes of a paper however they're written or ordered: "COSC 130/BITE 131" = "BITE131/COSC130". */
+export const codesKey = (codes: string[]): string =>
+  codes.map((c) => c.replace(/[^A-Za-z0-9]/g, '').toUpperCase()).sort().join('/');
+
+/**
+ * A unit listed twice with nothing saying ODEL: the second listing is its ODEL
+ * paper, unless the letter already has one, or either listing is under a class
+ * heading (a course allocation: another class sitting the same paper). Later listings stay
+ * as they are (the review shows them as duplicates).
+ */
+export function secondListingsAsOdel(entries: ListedEntry[]): ListedEntry[] {
+  const regularLine = new Map<string, number>();
+  const sectionOf = new Map(entries.map((x) => [x.line, x.section] as const));
+  const byClass = (a: string, b: string) => classOf(a) !== null || classOf(b) !== null;
+  const hasOdel = new Set<string>();
+  for (const x of entries) if (x.sitting === 'odel') hasOdel.add(codesKey(x.codes));
+  return entries.map((x) => {
+    const key = codesKey(x.codes);
+    if (x.sitting === 'odel') return x;
+    const first = regularLine.get(key);
+    if (first === undefined) {
+      regularLine.set(key, x.line);
+      return x;
+    }
+    if (hasOdel.has(key) || byClass(sectionOf.get(first) ?? '', x.section)) return x;
+    hasOdel.add(key);
+    return { ...x, sitting: 'odel', secondListingOf: first };
+  });
 }

@@ -138,6 +138,8 @@ export const examListSaveSchema = z
             title: z.string().trim().min(1).max(255),
             sitting: z.enum(['regular', 'odel']),
             examinerId: z.string().uuid().nullable().optional(),
+            /** Your regular paper this ODEL paper takes over (the review's switchesPaperId). */
+            replacesPaperId: z.string().uuid().nullable().optional(),
             classes: z
               .array(
                 z

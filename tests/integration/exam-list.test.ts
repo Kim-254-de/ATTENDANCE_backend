@@ -119,6 +119,7 @@ interface Review {
     line: number; codes: string[]; title: string; section: string; sitting: string; students: number | null;
     classRows: Array<{ label: string; students: number }>; unknownCodes: string[]; duplicateOf: number | null;
     otherDepartments: string[]; existingPaperId: string | null; examiner: { lecturerId: string | null; staffNumber: string } | null;
+    secondListingOf: number | null; switchesPaperId: string | null;
   }>;
   smarttt: { available: boolean; reason: string | null };
   summary: { papers: number; newPapers: number; duplicates: number; unknown: number; noStudents: number };
@@ -214,7 +215,7 @@ describe('the uploaded exam list', () => {
     expect(r.entries[3]!.duplicateOf).toBe(1);
     expect(r.entries[2]!.unknownCodes).toEqual(['COSC 0170']);
     expect(r.entries[4]!.section).toBe('ODEL / PART-TIME DRAFTS');
-    expect(r.summary).toEqual({ papers: 6, newPapers: 6, duplicates: 1, unknown: 2, noStudents: 2, noClasses: 2 });
+    expect(r.summary).toEqual({ papers: 6, newPapers: 6, duplicates: 1, unknown: 2, noStudents: 2, noClasses: 2, secondListings: 0, toOdel: 0 });
     expect((await pool.query(`SELECT 1 FROM teaching_exam_papers`)).rowCount).toBe(0);
   });
 
@@ -559,5 +560,104 @@ describe("a letter's headings name classes and their numbers", () => {
     const bad = (c: object) => health.post('/exam-list', { papers: [{ codes: ['NURS 111'], title: 'Anatomy', sitting: 'regular', classes: [c] }] });
     expect((await bad({ programme: '', year: 1, semester: 1, students: 5 })).status).toBe(400);
     expect((await bad({ programme: 'X', year: 1, semester: 1, students: 0 })).status).toBe(400);
+  });
+});
+
+
+describe('a unit listed twice, and a letter changed to ODEL', () => {
+  let bot: Api;
+  type Entry = Review['entries'][number];
+  const read = async (rows: string[][]) => {
+    const res = await bot.post('/exam-list/read', { file: await letter([['S.NO', 'UNIT CODE', 'UNIT TITLE'], ...rows]) });
+    expect(res.status).toBe(200);
+    return body<Review & { entries: Entry[]; summary: Review['summary'] & { secondListings: number; toOdel: number } }>(res).data;
+  };
+  const saved = (r: { entries: Entry[] }) =>
+    r.entries
+      .filter((e) => e.duplicateOf === null)
+      .map((e) => ({ codes: e.codes, title: e.title, sitting: e.sitting, ...(e.switchesPaperId ? { replacesPaperId: e.switchesPaperId } : {}) }));
+
+  beforeAll(async () => {
+    bot = await makeOfficer(await makeDepartment('Plant Sciences', 'DPLS'));
+  });
+
+  it('takes the second listing as the ODEL paper and a third as a duplicate', async () => {
+    const r = await read([
+      ['1', 'BOTA 473', 'Plant Biochemistry'],
+      ['2', 'HRIM 111', 'Records'],
+      ['3', 'BOTA 473', 'Plant Biochemistry'],
+      ['4', 'BOTA 473', 'Plant Biochemistry'],
+    ]);
+    expect(r.entries.map((e) => [e.line, e.sitting, e.secondListingOf, e.duplicateOf])).toEqual([
+      [1, 'regular', null, null],
+      [2, 'regular', null, null],
+      [3, 'odel', 1, null],
+      [4, 'regular', null, 1],
+    ]);
+    expect(r.summary).toMatchObject({ papers: 3, duplicates: 1, secondListings: 1, toOdel: 0 });
+  });
+
+  it('keeps one paper when a listing is under a class heading, as in a course allocation', async () => {
+    const r = await read([
+      ['', 'BSc Plant Science Y4S1 (30 students)', ''],
+      ['1', 'BOTA 473', 'Plant Biochemistry'],
+      ['', 'SERVICING UNITS', ''],
+      ['2', 'BOTA 473', 'Plant Biochemistry'],
+    ]);
+    expect(r.entries.map((e) => [e.sitting, e.secondListingOf, e.duplicateOf])).toEqual([['regular', null, null], ['regular', null, 1]]);
+  });
+
+  it('reads ODEL in a title as the ODEL paper', async () => {
+    const r = await read([['1', 'HRIM 111', 'Records'], ['2', 'HRIM 111', 'Records ODEL'], ['3', 'BOTA 473', 'Plant Biochemistry-Odel']]);
+    expect(r.entries.map((e) => [e.sitting, e.secondListingOf])).toEqual([['regular', null], ['odel', null], ['odel', null]]);
+  });
+
+  it('switches a regular paper to ODEL when the letter now lists it only as ODEL, keeping the paper', async () => {
+    const first = await bot.post('/exam-list', { papers: [{ codes: ['BOTA 473'], title: 'Plant Biochemistry', sitting: 'regular' }] });
+    expect(first.status).toBe(200);
+    const before = body<{ board: Board }>(first).data.board.papers.find((p) => p.codes === 'BOTA 473')!;
+    const examiner = body<{ id: string }>(await bot.post('/lecturers', { title: 'Dr.', fullName: 'Jane Mbae', staffNumber: 'STF/0777' })).data.id;
+    expect((await bot.post('/exam-list', { papers: [{ codes: ['BOTA 473'], title: 'Plant Biochemistry', sitting: 'regular', examinerId: examiner }] })).status).toBe(200);
+
+    const r = await read([['', 'ODEL / PART-TIME DRAFTS', ''], ['1', 'BOTA 473', 'Plant Biochemistry']]);
+    expect(r.entries[0]).toMatchObject({ sitting: 'odel', existingPaperId: null, switchesPaperId: before.id });
+    expect(r.summary).toMatchObject({ newPapers: 1, toOdel: 1 });
+    const res = await bot.post('/exam-list', { papers: saved(r) });
+    expect(res.status).toBe(200);
+    const data = body<{ created: number; updated: number; switched: number; board: Board }>(res).data;
+    expect([data.created, data.updated, data.switched]).toEqual([0, 0, 1]);
+    const bota = data.board.papers.filter((p) => p.codes === 'BOTA 473');
+    expect(bota).toHaveLength(1);
+    expect(bota[0]).toMatchObject({ id: before.id, sitting: 'odel', examinerId: examiner });
+    // Read again, it's the ODEL paper already there: nothing more to switch.
+    expect((await read([['1', 'BOTA 473 odel', 'Plant Biochemistry']])).entries[0]).toMatchObject({ existingPaperId: before.id, switchesPaperId: null });
+  });
+
+  it("adds the ODEL paper a letter's second listing gives, leaving the regular paper as it was", async () => {
+    await bot.post('/exam-list', { papers: [{ codes: ['HRIM 111'], title: 'Records', sitting: 'regular' }] });
+    const regular = body<Board>(await bot.get('/exams')).data.papers.find((p) => p.codes === 'HRIM 111' && p.sitting === 'regular')!;
+    const r = await read([['1', 'HRIM 111', 'Records'], ['2', 'HRIM 111', 'Records']]);
+    expect(r.entries.map((e) => [e.sitting, e.existingPaperId, e.switchesPaperId])).toEqual([
+      ['regular', regular.id, null],
+      ['odel', null, null],
+    ]);
+    const data = body<{ created: number; updated: number; switched: number; board: Board }>(await bot.post('/exam-list', { papers: saved(r) })).data;
+    expect([data.created, data.updated, data.switched]).toEqual([1, 1, 0]);
+    const hrim = data.board.papers.filter((p) => p.codes === 'HRIM 111').map((p) => [p.id === regular.id, p.sitting]);
+    expect(hrim.sort()).toEqual([[false, 'odel'], [true, 'regular']]);
+  });
+
+  it('refuses to switch a paper that is also listed as regular, or one not on the list', async () => {
+    const regular = body<Board>(await bot.get('/exams')).data.papers.find((p) => p.codes === 'HRIM 111' && p.sitting === 'regular')!;
+    const both = await bot.post('/exam-list', {
+      papers: [
+        { codes: ['HRIM 111'], title: 'Records', sitting: 'regular' },
+        { codes: ['HRIM 111'], title: 'Records', sitting: 'odel', replacesPaperId: regular.id },
+      ],
+    });
+    expect(both.status).toBe(422);
+    expect(body(both).error!.message).toMatch(/also listed as a regular paper/);
+    const unknown = await bot.post('/exam-list', { papers: [{ codes: ['MATH 446'], title: 'X', sitting: 'odel', replacesPaperId: randomUUID() }] });
+    expect(unknown.status).toBe(422);
   });
 });
