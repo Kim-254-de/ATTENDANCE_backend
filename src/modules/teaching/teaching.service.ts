@@ -79,6 +79,18 @@ export async function context(userId: string, termId: string | undefined): Promi
   return { term, department: { id: own.departmentId, name: own.departmentName, code }, userId, actor };
 }
 
+/**
+ * The Director, from the Generator, acting for a department on its exam list (a moderation letter
+ * uploaded on the Director's end). The department is named by its code, as the Generator knows it.
+ */
+export async function directorContext(accountId: string, termId: string, departmentCode: string): Promise<Ctx> {
+  const want = compact(departmentCode);
+  const [term, departments, actor] = await Promise.all([pickTerm(termId), repo.listDepartments(), repo.findUserName(accountId)]);
+  const department = departments.find((d) => compact(d.code) === want);
+  if (!want || !department) throw AppError.notFound(`No department has the code ${departmentCode}.`);
+  return { term, department: { id: department.id, name: department.name, code: want }, userId: accountId, actor };
+}
+
 // -- shared ----------------------------------------------------------------------------------------
 
 /** 'COSC 103', 'GR A' -> 'COSC103-GRA'; a whole class -> 'COSC103-MAIN', as the Generator keys it. */

@@ -237,3 +237,12 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   `POST /integrations/generator/password` `{ "account_id": "<uuid>", "current_password": "…", "new_password": "…" }` -> `{ "changed": true }` or `{ "changed": false, "reason": "wrong_password" | "same_password" }`; 400 when the new one breaks the password rules. Audited as `PASSWORD_CHANGED` with `via: GENERATOR`, and the usual "password changed" email is sent.
 - **Why it matters:** the admin console's Officers list now shows the name the Director chose, and the audit log can show `OFFICER_NAME_CHANGED`.
 - **Done when:** the audit log screen names the new action (if it lists actions by name).
+
+### F-13 · Medium · The Director can upload a department's moderation letter, which publishes its exam list
+- **Raised:** 2026-11-13, backend   **Status:** open
+- **What changed:** two calls for the Timetable Generator (X-API-Key = GENERATOR_API_KEY), the department named by its code:
+  `POST /integrations/generator/terms/:termId/exam-list/read` `{ "account_id": "<director uuid>", "department_code": "DHRM", "file": "<.docx base64>" }` -> the same review as `POST /departments/teaching/exam-list/read`.
+  `POST /integrations/generator/terms/:termId/exam-list` `{ "account_id", "department_code", "papers": [ …as POST /departments/teaching/exam-list… ] }` -> `{ created, updated, switched, smarttt, published }`.
+  The save works even while the department's exam list is published (a department must reopen first), and then **publishes the department's list in the Director's name** (audit `TEACHING_CHANGED` / `TEACHING_PUBLISHED` with `via: GENERATOR`). Same reader and rules as the department's own upload.
+- **Why it matters:** a department's Exams tab can now show papers it didn't upload, and a publication by the Director (publication `name` is the Director's). If the department had reopened its list, what it had changed is published too.
+- **Done when:** the Exams tab's publication line reads naturally when the Director published (e.g. "Published by Dr. … (Director)").

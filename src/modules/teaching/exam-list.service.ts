@@ -7,7 +7,7 @@ import { smartttClient, type SmartttUnitEnrolment } from '../../integrations/sma
 import { classOf, codesKey, readExamList, type ListedEntry } from './exam-list.read.js';
 import * as examsRepo from './exams.repository.js';
 import type { ListedRow, ListedRowValues, PaperRow, Sitting } from './exams.repository.js';
-import { board, EXAMS_KIND, isGuessedRow, isListed, loadExamTerm, type ExamBoardDto } from './exams.service.js';
+import { board, EXAMS_KIND, isGuessedRow, isListed, loadExamTerm, publish, type ExamBoardDto } from './exams.service.js';
 import { compact } from './teaching.repository.js';
 import { audit, invalid, writeTeaching, type Ctx } from './teaching.service.js';
 
@@ -32,7 +32,8 @@ import { audit, invalid, writeTeaching, type Ctx } from './teaching.service.js';
  * what it has, and the department or the Director can enter one.
  */
 
-const exams = <T>(ctx: Ctx, work: (client: PoolClient) => Promise<T>) => writeTeaching(ctx, work, { kind: EXAMS_KIND });
+const exams = <T>(ctx: Ctx, work: (client: PoolClient) => Promise<T>, whilePublished = false) =>
+  writeTeaching(ctx, work, { kind: EXAMS_KIND, whilePublished });
 
 /** One paper per set of codes and sitting: "COSC 130/BITE 131" and "BITE 131/COSC 130" are the same paper. */
 const paperKey = (codes: string[], sitting: Sitting) => `${codes.map(compact).sort().join('/')}|${sitting}`;
@@ -376,6 +377,7 @@ export interface ListedPaperInput {
 export async function save(
   ctx: Ctx,
   input: ListedPaperInput[],
+  options: { whilePublished?: boolean } = {},
 ): Promise<{ created: number; updated: number; switched: number; smarttt: ReviewDto['smarttt'] }> {
   const wanted = new Map<string, ListedPaperInput>();
   for (const p of input) {
@@ -440,9 +442,21 @@ export async function save(
       }
     }
     return { created, updated, switched };
-  });
-  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_list.save', id: ctx.department.code, after: counts });
+  }, options.whilePublished);
+  await audit(ctx, AuditAction.TEACHING_CHANGED, { what: 'exam_list.save', id: ctx.department.code, after: counts, ...(options.whilePublished ? { via: 'GENERATOR' } : {}) });
   return { ...counts, smarttt: { available: e.available, reason: e.available ? null : e.reason } };
+}
+
+/**
+ * A moderation letter the Director uploaded on the Generator, for this department: saved like the
+ * department's own (the same reading, review and rules), whether or not the department's list is
+ * published, then the list is published so the Director's import brings it in. The department sees
+ * the papers on its Exams tab, published under the Director's name.
+ */
+export async function saveForDirector(ctx: Ctx, input: ListedPaperInput[]): Promise<Awaited<ReturnType<typeof save>> & { published: number }> {
+  const result = await save(ctx, input, { whilePublished: true });
+  const after = await publish(ctx, { whilePublished: true });
+  return { ...result, published: after.papers.length };
 }
 
 /**

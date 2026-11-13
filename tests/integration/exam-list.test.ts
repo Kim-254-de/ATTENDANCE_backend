@@ -661,3 +661,51 @@ describe('a unit listed twice, and a letter changed to ODEL', () => {
     expect(unknown.status).toBe(422);
   });
 });
+
+describe("the Director uploads a department's letter on the Generator", () => {
+  let director: string;
+  let records: Api;
+  const generator = (path: string, data: object, key = 'generator-key') =>
+    request(app).post(`/api/v1/integrations/generator/terms/${TERM}${path}`).set('X-API-Key', key).send(data);
+
+  beforeAll(async () => {
+    records = await makeOfficer(await makeDepartment('Health Records', 'DHRM'));
+    const { rows: [u] } = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, full_name, role, status, email_verified_at)
+       VALUES ('director@uni.ac.ke', 'x', 'Dee Director', 'TIMETABLING', 'ACTIVE', NOW()) RETURNING id`);
+    director = u!.id;
+  });
+
+  it('reads the letter with the same review a department gets, storing nothing', async () => {
+    const file = await letter([['S.NO', 'UNIT CODE', 'UNIT TITLE'], ['1', 'HRIM 111', 'Records'], ['2', 'HRIM 111', 'Records again']]);
+    expect((await generator('/exam-list/read', { account_id: director, department_code: 'DHRM', file }, 'wrong')).status).toBe(401);
+    expect((await generator('/exam-list/read', { account_id: director, department_code: 'NOPE', file })).status).toBe(404);
+    const res = await generator('/exam-list/read', { account_id: director, department_code: 'dhrm', file });
+    expect(res.status).toBe(200);
+    const r = body<Review>(res).data;
+    // The same rules as a department's upload: a unit listed twice is its ODEL paper (secondListingOf).
+    expect(r.entries.map((e) => [e.codes.join('/'), e.sitting, e.secondListingOf])).toEqual([['HRIM 111', 'regular', null], ['HRIM 111', 'odel', 1]]);
+    expect(body<Board>(await records.get('/exams')).data.papers).toEqual([]);
+  });
+
+  it("saves into the department's list and publishes it, so the Generator imports it", async () => {
+    const res = await generator('/exam-list', { account_id: director, department_code: 'DHRM', papers: [{ codes: ['HRIM 111'], title: 'Records', sitting: 'regular' }] });
+    expect(res.status).toBe(200);
+    expect(body(res).data).toMatchObject({ created: 1, updated: 0, published: 1 });
+    const own = body<Board>(await records.get('/exams')).data;
+    expect(own.published).toBe(true);
+    expect(own.papers.map((p) => [p.codes, p.listed, p.students])).toEqual([['HRIM 111', true, 3]]);
+    const exams = body<{ published: Array<{ code: string; papers: Array<{ codes: string[] }> }> }>(
+      await request(app).get(`/api/v1/integrations/generator/terms/${TERM}/exams`).set('X-API-Key', 'generator-key')).data;
+    expect(exams.published.find((d) => d.code === 'DHRM')!.papers.map((p) => p.codes)).toEqual([['HRIM 111']]);
+  });
+
+  it('works on a published list too, where the department itself must reopen first', async () => {
+    expect((await records.post('/exam-list', { papers: [{ codes: ['HRIM 111'], title: 'Health Records', sitting: 'regular' }] })).status).toBe(409);
+    const res = await generator('/exam-list', { account_id: director, department_code: 'DHRM', papers: [{ codes: ['HRIM 111'], title: 'Health Records', sitting: 'regular' }] });
+    expect(body(res).data).toMatchObject({ created: 0, updated: 1, published: 1 });
+    const own = body<Board & { publication: { publishedBy?: string; name?: string } | null }>(await records.get('/exams')).data;
+    expect(own.papers[0]!.title).toBe('Health Records');
+    expect(JSON.stringify(own.publication)).toContain('Dee Director');
+  });
+});

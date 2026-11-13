@@ -11,6 +11,7 @@ import { validate } from '../../middleware/validate.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as generatorAuth from '../auth/auth.generator.js';
 import { fullNameSchema, passwordSchema } from '../auth/auth.schema.js';
+import { examListFileSchema, examListSaveSchema, type ExamListSaveInput } from '../teaching/teaching.schema.js';
 import { directoryService } from '../directory/index.js';
 import {
   examService,
@@ -172,6 +173,44 @@ integrationRouter.get(
   validate({ params: z.object({ termId: z.string().trim().min(1).max(64) }) }),
   asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await invigilationService.forGenerator((req.params as { termId: string }).termId));
+  }),
+);
+
+/**
+ * The Director uploads a department's moderation letter on the Generator (the department
+ * named by its code): read and reviewed exactly as on the department's Exams tab. Nothing is
+ * stored. `file` is the .docx in base64.
+ */
+integrationRouter.post(
+  '/generator/terms/:termId/exam-list/read',
+  requireKey('GENERATOR_API_KEY'),
+  validate({
+    params: z.object({ termId: z.string().trim().min(1).max(64) }),
+    body: z.object({ account_id: z.string().uuid(), department_code: z.string().trim().min(1).max(32) }).merge(examListFileSchema).strict(),
+  }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { account_id, department_code, file } = req.body as { account_id: string; department_code: string; file: string };
+    const ctx = await teachingService.directorContext(account_id, (req.params as { termId: string }).termId, department_code);
+    sendSuccess(res, await examListService.review(ctx, Buffer.from(file, 'base64')));
+  }),
+);
+
+/**
+ * The reviewed letter saved into the department's exam list, as the department's own upload
+ * would be, and the list published (in the Director's name) so the Generator's import brings
+ * it in. It works whether or not the department has published.
+ */
+integrationRouter.post(
+  '/generator/terms/:termId/exam-list',
+  requireKey('GENERATOR_API_KEY'),
+  validate({
+    params: z.object({ termId: z.string().trim().min(1).max(64) }),
+    body: z.object({ account_id: z.string().uuid(), department_code: z.string().trim().min(1).max(32) }).merge(examListSaveSchema).strict(),
+  }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { account_id, department_code, papers } = req.body as { account_id: string; department_code: string } & ExamListSaveInput;
+    const ctx = await teachingService.directorContext(account_id, (req.params as { termId: string }).termId, department_code);
+    sendSuccess(res, await examListService.saveForDirector(ctx, papers));
   }),
 );
 

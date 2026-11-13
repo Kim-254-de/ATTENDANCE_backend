@@ -395,8 +395,8 @@ export async function deletePractical(ctx: Ctx, practicalId: string): Promise<vo
 
 // -- publishing ------------------------------------------------------------------------------------
 
-export async function publish(ctx: Ctx): Promise<ExamBoardDto> {
-  const papers = await exams(ctx, async (client) => {
+export async function publish(ctx: Ctx, options: { whilePublished?: boolean } = {}): Promise<ExamBoardDto> {
+  const papers = await writeTeaching(ctx, async (client) => {
     const d = await load(ctx.term.id, client);
     const found = problems(ctx, d);
     if (found.length) {
@@ -410,8 +410,8 @@ export async function publish(ctx: Ctx): Promise<ExamBoardDto> {
       termId: ctx.term.id, departmentId: ctx.department.id, userId: ctx.userId, name: ctx.actor, unitCount: own.length, groupCount: 0, kind: KIND,
     });
     return own.length;
-  });
-  await audit(ctx, AuditAction.TEACHING_PUBLISHED, { kind: KIND, papers });
+  }, { kind: KIND, whilePublished: options.whilePublished });
+  await audit(ctx, AuditAction.TEACHING_PUBLISHED, { kind: KIND, papers, ...(options.whilePublished ? { via: 'GENERATOR' } : {}) });
   return board(ctx);
 }
 
