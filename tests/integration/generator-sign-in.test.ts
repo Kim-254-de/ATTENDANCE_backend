@@ -49,7 +49,12 @@ const generator = {
     request(app).post('/api/v1/integrations/generator/authenticate').set('X-API-Key', key).send({ identifier, password }),
   identity: (accountId: string) =>
     request(app).get(`/api/v1/integrations/generator/identity?account_id=${accountId}`).set('X-API-Key', 'generator-key'),
+  rename: (body: Record<string, unknown>) =>
+    request(app).patch('/api/v1/integrations/generator/identity').set('X-API-Key', 'generator-key').send(body),
+  password: (body: Record<string, unknown>) =>
+    request(app).post('/api/v1/integrations/generator/password').set('X-API-Key', 'generator-key').send(body),
 };
+const NEW_PASSWORD = fake('Director-', 'New', '-2027');
 
 beforeAll(async () => {
   const pgAdmin = new pg.Client({ connectionString: adminUrl.toString() });
@@ -119,6 +124,29 @@ describe('the timetabling office', () => {
     expect(wrong.status).toBe(401);
     const res = await request(app).post('/api/v1/auth/login').send({ identifier: EMAIL, password: PASSWORD });
     expect([res.status, body(res).error!.code, body(res).error!.details?.url]).toEqual([403, 'SIGN_IN_AT_GENERATOR', 'https://generator.test.local']);
+  });
+
+  it('renames themselves from the Generator, and the name shows in the admin console', async () => {
+    const res = await generator.rename({ account_id: userId, full_name: '  Dr.  Dee   Director ' });
+    expect(body(res).data).toMatchObject({ account: { id: userId, full_name: 'Dr. Dee Director' }, timetabling_office: true });
+    expect(body(await generator.identity(userId)).data).toMatchObject({ account: { full_name: 'Dr. Dee Director' } });
+    const officers = body<Array<{ email: string; fullName: string }>>(await request(app).get('/api/v1/admin/officers').set('Authorization', adminAuth)).data;
+    expect(officers.find((o) => o.email === EMAIL)?.fullName).toBe('Dr. Dee Director');
+    expect((await generator.rename({ account_id: userId, full_name: '<b>' })).status).toBe(400);
+    expect((await generator.rename({ account_id: randomUUID(), full_name: 'Someone Else' })).status).toBe(404);
+  });
+
+  it('changes their password from the Generator only with the current one', async () => {
+    expect(body(await generator.password({ account_id: userId, current_password: 'nope', new_password: NEW_PASSWORD })).data)
+      .toEqual({ changed: false, reason: 'wrong_password' });
+    expect(body(await generator.password({ account_id: userId, current_password: PASSWORD, new_password: PASSWORD })).data)
+      .toEqual({ changed: false, reason: 'same_password' });
+    expect((await generator.password({ account_id: userId, current_password: PASSWORD, new_password: 'short' })).status).toBe(400);
+    expect(body(await generator.password({ account_id: userId, current_password: PASSWORD, new_password: NEW_PASSWORD })).data).toEqual({ changed: true });
+    expect(body(await generator.authenticate(EMAIL, PASSWORD)).data).toEqual({ authenticated: false });
+    expect(body(await generator.authenticate(EMAIL, NEW_PASSWORD)).data).toMatchObject({ authenticated: true });
+    // Put back, so the tests after this one sign in as before.
+    expect(body(await generator.password({ account_id: userId, current_password: NEW_PASSWORD, new_password: PASSWORD })).data).toEqual({ changed: true });
   });
 
   it('loses the Generator when the administrator deactivates the account', async () => {

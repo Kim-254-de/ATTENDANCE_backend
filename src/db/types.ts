@@ -160,6 +160,8 @@ export const AuditAction = {
   /** The QA officer changed the minimum attendance to sit exams (attendance_policy). */
   ATTENDANCE_POLICY_UPDATED: 'ATTENDANCE_POLICY_UPDATED',
   LECTURER_PROFILE_UPDATED: 'LECTURER_PROFILE_UPDATED',
+  /** An officer changed their own name (the timetabling office, from the Generator's profile page). */
+  OFFICER_NAME_CHANGED: 'OFFICER_NAME_CHANGED',
   LOGIN_SUCCEEDED: 'LOGIN_SUCCEEDED',
   LOGIN_FAILED: 'LOGIN_FAILED',
   LOGOUT: 'LOGOUT',

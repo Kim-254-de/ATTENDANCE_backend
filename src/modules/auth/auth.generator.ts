@@ -1,8 +1,10 @@
-import { fakeVerifyPassword, verifyPassword } from '../../common/utils/password.js';
+import { fakeVerifyPassword, hashPassword, verifyPassword } from '../../common/utils/password.js';
 import { env } from '../../config/env.js';
-import { queryOne } from '../../db/database.js';
+import { logger } from '../../config/logger.js';
+import { query, queryOne } from '../../db/database.js';
 import type { AccountStatus } from '../../db/types.js';
 import { auditService } from '../audit/index.js';
+import { notificationService } from '../notification/index.js';
 import { normaliseIdentifier } from './auth.login.service.js';
 import * as repo from './auth.session.repository.js';
 import type { RegistrationContext } from './auth.service.js';
@@ -67,4 +69,71 @@ export async function identity(accountId: string): Promise<GeneratorIdentity | n
   );
   if (!row || row.status !== 'ACTIVE') return null;
   return identityOf({ id: row.id, fullName: row.full_name, email: row.email, role: row.role });
+}
+
+/** The timetabling office's own account: active and still TIMETABLING, else null. */
+async function officeAccount(accountId: string) {
+  return queryOne<{ id: string; full_name: string; email: string; role: string; password_hash: string }>(
+    `SELECT id, full_name, email, role, password_hash FROM users
+      WHERE id = $1 AND deleted_at IS NULL AND status = 'ACTIVE' AND role = 'TIMETABLING'`,
+    [accountId],
+  );
+}
+
+/**
+ * The Director changes their own name on the Generator's profile page
+ * (PATCH /integrations/generator/identity). The name lives here, so it is the
+ * same on the admin console's Officers list. Null once the account is gone,
+ * inactive or no longer the timetabling office's.
+ */
+export async function rename(accountId: string, fullName: string, context: RegistrationContext): Promise<GeneratorIdentity | null> {
+  const user = await officeAccount(accountId);
+  if (!user) return null;
+  if (user.full_name !== fullName) {
+    await query(`UPDATE users SET full_name = $2, updated_at = NOW() WHERE id = $1`, [accountId, fullName]);
+    await auditService.record({
+      userId: accountId,
+      action: 'OFFICER_NAME_CHANGED',
+      outcome: 'SUCCESS',
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+      metadata: { via: 'GENERATOR', before: user.full_name, after: fullName },
+    });
+  }
+  return identityOf({ id: user.id, fullName, email: user.email, role: user.role });
+}
+
+export type GeneratorPasswordChange = { changed: true } | { changed: false; reason: 'wrong_password' | 'same_password' };
+
+/**
+ * The Director changes their password from the Generator
+ * (POST /integrations/generator/password): the current one proves it is them,
+ * as on attendance's own change-password. The Generator signs out its other
+ * sessions; the account has none here. Null once the account is gone.
+ */
+export async function changePassword(
+  accountId: string,
+  currentPassword: string,
+  newPassword: string,
+  context: RegistrationContext,
+): Promise<GeneratorPasswordChange | null> {
+  const user = await officeAccount(accountId);
+  if (!user) return null;
+  const audit = { userId: accountId, ipAddress: context.ipAddress, userAgent: context.userAgent, requestId: context.requestId };
+  if (!(await verifyPassword(currentPassword, user.password_hash))) {
+    await auditService.record({ ...audit, action: 'PASSWORD_CHANGED', outcome: 'FAILURE', reason: 'current password did not match', metadata: { via: 'GENERATOR' } });
+    return { changed: false, reason: 'wrong_password' };
+  }
+  if (await verifyPassword(newPassword, user.password_hash)) return { changed: false, reason: 'same_password' };
+
+  await query(
+    `UPDATE users SET password_hash = $2, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1`,
+    [accountId, await hashPassword(newPassword)],
+  );
+  await auditService.record({ ...audit, action: 'PASSWORD_CHANGED', outcome: 'SUCCESS', metadata: { via: 'GENERATOR' } });
+  void notificationService.sendPasswordChanged({ to: user.email, fullName: user.full_name }).catch((error: unknown) => {
+    logger.error({ err: error, userId: accountId }, 'password change notice failed to send');
+  });
+  return { changed: true };
 }

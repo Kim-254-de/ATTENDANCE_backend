@@ -229,3 +229,11 @@ Use `B-` for items the backend should act on, and `F-` for items the frontend sh
   Example: `{ papers: [{ codes: ['BOTA 473'], title: 'Plant Biochemistry', sitting: 'odel', replacesPaperId: '<uuid>' }] }` -> `{ created: 0, updated: 0, switched: 1, ... }`.
 - **Why it matters:** letters list a unit twice for its regular and ODEL papers, and the second was dropped as a duplicate; a letter re-issued as all ODEL added ODEL papers beside the old regular ones.
 - **Done when:** the review shows "ODEL: second listing of line N" (and when its title differs), the switch with a tick to keep it, and sends `replacesPaperId`.
+
+### F-12 · Low · The timetabling office renames itself and changes its password from the Generator
+- **Raised:** 2026-11-12, backend   **Status:** open (nothing to build in this frontend; for information)
+- **What changed:** two calls for the Timetable Generator (X-API-Key = GENERATOR_API_KEY), behind its new My profile page:
+  `PATCH /integrations/generator/identity` `{ "account_id": "<uuid>", "full_name": "Dr. Dee Director" }` -> the same `{ account, timetabling_office }` as `GET .../identity`; 404 once the account is not the active timetabling office's. Audited as `OFFICER_NAME_CHANGED` (new audit action, metadata `{ via, before, after }`).
+  `POST /integrations/generator/password` `{ "account_id": "<uuid>", "current_password": "…", "new_password": "…" }` -> `{ "changed": true }` or `{ "changed": false, "reason": "wrong_password" | "same_password" }`; 400 when the new one breaks the password rules. Audited as `PASSWORD_CHANGED` with `via: GENERATOR`, and the usual "password changed" email is sent.
+- **Why it matters:** the admin console's Officers list now shows the name the Director chose, and the audit log can show `OFFICER_NAME_CHANGED`.
+- **Done when:** the audit log screen names the new action (if it lists actions by name).
