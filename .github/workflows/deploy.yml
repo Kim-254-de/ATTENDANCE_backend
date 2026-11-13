@@ -1,0 +1,101 @@
+# Deploys main to the university's KENET VMs on every push to it, once the checks pass.
+#
+# 1. check: typecheck and the unit tests (the integration tests need a database and run locally).
+# 2. build: the API image (./Dockerfile; migrations run as it starts) and, when face-service/ changed,
+#    the face service with NumPy 2.3.5 (the newest that starts on KENET's CPUs, which lack SSE4.2/AVX),
+#    tagged with the commit and pushed to ghcr.io.
+# 3. deploy: /opt/nextup/deploy.sh on vm-app (the only command the deploy key may run) pulls each with
+#    this job's short-lived token, restarts it and checks it comes up, else puts the previous image back.
+#
+# Needs the `kenet` environment's KENET_DEPLOY_KEY and KENET_KNOWN_HOSTS (setup-ci.sh in the deploy
+# kit). Run it by hand from the Actions tab to redeploy a commit (the face service too).
+name: Deploy to KENET
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: kenet-deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  SHA: ${{ github.sha }}
+  REGISTRY: ghcr.io/kim-254-de
+  VM_APP: 197.137.65.49
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      face: ${{ steps.changed.outputs.face }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run tests/unit
+      - name: Did the face service change?
+        id: changed
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" != push ] || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo face=true >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$before" "$SHA" -- face-service; then
+            echo face=false >> "$GITHUB_OUTPUT"
+          else
+            echo face=true >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    strategy:
+      matrix:
+        include:
+          - { image: nextup-attendance-api, context: ., numpy: false, face: false }
+          - { image: nextup-face-service, context: face-service, numpy: true, face: true }
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ !matrix.face || needs.check.outputs.face == 'true' }}
+      - name: Build and push ${{ matrix.image }}
+        if: ${{ !matrix.face || needs.check.outputs.face == 'true' }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image="$REGISTRY/${{ matrix.image }}:$SHA"
+          docker build --pull -t base \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=$SHA" \
+            ${{ matrix.context }}
+          if [ "${{ matrix.numpy }}" = true ]; then
+            user=$(docker image inspect -f '{{.Config.User}}' base)
+            printf 'FROM base\nUSER root\nRUN pip install --no-cache-dir --no-deps numpy==2.3.5\nUSER %s\n' "${user:-root}" | docker build -t "$image" -
+            docker run --rm --entrypoint python "$image" -c 'import numpy, cv2; assert numpy.__version__ == "2.3.5", numpy.__version__'
+          else
+            docker tag base "$image"
+          fi
+          docker push "$image"
+
+  deploy:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    environment: kenet
+    permissions: { packages: read }
+    steps:
+      - name: Deploy the face service (when it changed), then the API
+        env:
+          KEY: ${{ secrets.KENET_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.KENET_KNOWN_HOSTS }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FACE: ${{ needs.check.outputs.face }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          deploy() { printf '%s' "$TOKEN" | ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=30 "user@$VM_APP" "deploy $1 $SHA"; }
+          if [ "$FACE" = true ]; then deploy face-service; fi
+          deploy attendance-api
