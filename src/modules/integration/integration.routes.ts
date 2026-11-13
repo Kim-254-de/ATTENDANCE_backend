@@ -10,6 +10,7 @@ import { normaliseUnitCode } from '../../integrations/smarttt/index.js';
 import { validate } from '../../middleware/validate.js';
 import { clientFingerprint } from '../../middleware/request-context.js';
 import * as generatorAuth from '../auth/auth.generator.js';
+import { fullNameSchema, passwordSchema } from '../auth/auth.schema.js';
 import { directoryService } from '../directory/index.js';
 import {
   examService,
@@ -199,5 +200,45 @@ integrationRouter.get(
     const found = await generatorAuth.identity((req.query as { account_id: string }).account_id);
     if (!found) throw AppError.notFound('No such active account.');
     sendSuccess(res, found);
+  }),
+);
+
+/**
+ * The Director renames themselves from the Generator's profile page. The name
+ * is kept here, so it reads the same in the admin console; 404 once the
+ * account is no longer the active timetabling office's.
+ */
+integrationRouter.patch(
+  '/generator/identity',
+  requireKey('GENERATOR_API_KEY'),
+  validate({ body: z.object({ account_id: z.string().uuid(), full_name: fullNameSchema }).strict() }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { account_id, full_name } = req.body as { account_id: string; full_name: string };
+    const found = await generatorAuth.rename(account_id, full_name, { ...clientFingerprint(req), requestId: req.requestId });
+    if (!found) throw AppError.notFound('No such active account.');
+    sendSuccess(res, found);
+  }),
+);
+
+/**
+ * The Director changes their password from the Generator, proving the current
+ * one. `{ changed: false, reason }` for a wrong current password or an
+ * unchanged one; the new one must meet attendance's own password rules.
+ */
+integrationRouter.post(
+  '/generator/password',
+  requireKey('GENERATOR_API_KEY'),
+  validate({
+    body: z.object({
+      account_id: z.string().uuid(),
+      current_password: z.string().min(1).max(1024),
+      new_password: passwordSchema,
+    }).strict(),
+  }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { account_id, current_password, new_password } = req.body as { account_id: string; current_password: string; new_password: string };
+    const result = await generatorAuth.changePassword(account_id, current_password, new_password, { ...clientFingerprint(req), requestId: req.requestId });
+    if (!result) throw AppError.notFound('No such active account.');
+    sendSuccess(res, result);
   }),
 );
